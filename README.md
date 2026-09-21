@@ -14,8 +14,8 @@ WebSocket/registrar sync channel — there is no REST or GraphQL endpoint that
 returns it. So this server does not capture a token and make plain server-side
 requests the way an API-backed MCP would; instead every call routes through
 the [fetchproxy](https://github.com/chrischall/fetchproxy) browser bridge and
-reads the DOM your signed-in `teams.microsoft.com` (or `teams.cloud.microsoft`)
-tab has already rendered.
+reads the DOM your signed-in `teams.cloud.microsoft` tab has already
+rendered. `teams.microsoft.com` (the old host) is not supported.
 
 **That has one real consequence: this server can only read whichever chat or
 channel is currently displayed in your browser tab.** The bridge can fetch
@@ -85,9 +85,22 @@ Everything is optional — this server needs no credentials of its own.
   is currently open: sender, subject (when present), prose time (not
   ISO-8601 — Teams doesn't expose one for these), message id, and text.
   Threaded replies under a post are not included.
+- `teams_get_activity` — the Activity feed (the bell icon in the left nav):
+  mentions, replies, reactions, and the like across every chat and channel,
+  each with its title, message preview, prose time, and location (the
+  team/channel or chat it happened in). Requires the Activity view open.
 - `teams_healthcheck` — verifies the bridge can reach a signed-in tab.
 
-All four data tools are read-only and take no arguments.
+All five data tools are read-only and take no arguments.
+
+**No Calendar tool here.** Teams Web's Calendar renders inside an embedded
+`outlook.office.com` iframe, which the fetchproxy bridge (DOM reads only
+against the top-level tab, no iframe crossing) cannot reach — and isn't the
+right place for it anyway. Use
+[`office-outlook-mcp`](https://github.com/chrischall/office-outlook-mcp)'s
+`outlook_list_events` / `outlook_get_event` / `outlook_list_calendars`
+instead: real Outlook REST API calls via a captured token, with no
+"must have it open" limitation at all.
 
 ## Things worth knowing
 
@@ -109,7 +122,7 @@ All four data tools are read-only and take no arguments.
 - **Multiple open Teams tabs race.** The bridge reads whichever matching tab
   answers first ("first responsive"), not necessarily the one you meant. If
   results look like they're from the wrong chat/channel, close extra
-  `teams.microsoft.com` tabs so only one remains.
+  `teams.cloud.microsoft` tabs so only one remains.
 - **Scope grows quietly.** If you see a `read_dom_list name not in declared
   set` error, the extension's approved scope is behind the server's declared
   one — this shouldn't happen in a released version, but if it does, revoke

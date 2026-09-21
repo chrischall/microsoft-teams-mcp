@@ -7,7 +7,7 @@
  * endpoint that returns it, so the only way to read it is to read the DOM the
  * page has already rendered. That rules out a captured-token-then-plain-fetch
  * design: every read here goes through `read_dom_list` against the user's
- * live, signed-in `teams.microsoft.com` tab.
+ * live, signed-in `teams.cloud.microsoft` tab.
  *
  * Consequence: this MCP can only read whichever chat or channel is
  * CURRENTLY DISPLAYED in that tab. `@fetchproxy/server` has no capability to
@@ -28,12 +28,11 @@ import type { DomListSelectorDecl } from '@fetchproxy/protocol';
 import { PACKAGE_NAME, VERSION } from './version.js';
 
 /**
- * The two hosts Teams Web actually serves from. A tenant's tab may be on
- * either; `readDomListAnyDomain` tries both in order and falls through to
- * the next on a "no tab matching" failure, since only one will ever have a
- * live tab.
+ * The New Teams host this MCP reads from. `teams.microsoft.com` (the old
+ * host) is deliberately not supported — only `teams.cloud.microsoft` tabs
+ * are read.
  */
-export const DOMAINS = ['teams.microsoft.com', 'teams.cloud.microsoft'] as const;
+export const DOMAINS = ['teams.cloud.microsoft'] as const;
 
 /**
  * fetchproxy concentrator port — one for the whole fleet. `TEAMS_WS_PORT`
@@ -136,6 +135,28 @@ export const CHANNEL_POSTS_SELECTOR: DomListSelectorDecl = {
   maxItems: 200,
 };
 
+/**
+ * Top-level rows in the Activity feed (the bell icon in the left nav) —
+ * mentions, replies, reactions, and the like across every chat and channel.
+ * Always rendered once that nav section is open, regardless of which item
+ * is selected — same "sidebar, not detail pane" shape as `CHAT_LIST_SELECTOR`
+ * and `TEAMS_AND_CHANNELS_SELECTOR`. `location` is the team/channel or chat
+ * the activity happened in, prose-joined by Teams itself (e.g. "NS_MS
+ * Product CE > MS DevOps"). `time` is prose (e.g. "1:19 PM"), not ISO 8601 —
+ * Teams renders it that way here, unlike `chatMessages.time`.
+ */
+export const ACTIVITY_FEED_SELECTOR: DomListSelectorDecl = {
+  name: 'activityFeed',
+  itemSelector: '[data-tid="activity-feed-list-item"]',
+  fields: [
+    { name: 'title', selector: '[id^="activity-feed-item-title-"]' },
+    { name: 'preview', selector: '[id^="activity-feed-item-message-preview-"]' },
+    { name: 'time', selector: '[id^="activity-feed-item-timestamp-"]' },
+    { name: 'location', selector: '[id^="activity-feed-item-location-"]' },
+  ],
+  maxItems: 200,
+};
+
 export interface ChatMessageRow {
   sender?: string;
   /** ISO 8601 (the `<time datetime>` attribute). */
@@ -160,6 +181,15 @@ export interface TeamOrChannelRow {
   conversationKey?: string;
   /** `'team'` or `'channel'`. */
   itemType?: string;
+}
+
+export interface ActivityFeedRow {
+  title?: string;
+  preview?: string;
+  /** Prose, e.g. "1:19 PM" — NOT ISO 8601. */
+  time?: string;
+  /** The team/channel or chat the activity happened in, prose-joined by Teams. */
+  location?: string;
 }
 
 export interface ChannelPostRow {
@@ -193,6 +223,7 @@ export class TeamsClient {
           CHAT_LIST_SELECTOR,
           TEAMS_AND_CHANNELS_SELECTOR,
           CHANNEL_POSTS_SELECTOR,
+          ACTIVITY_FEED_SELECTOR,
         ],
         port: getWsPort(),
         // stderr only — stdout is the JSON-RPC channel. Without this the
@@ -219,37 +250,26 @@ export class TeamsClient {
     this.#started = true;
   }
 
-  /**
-   * Try each declared domain in turn, falling through to the next on a
-   * "no tab matching" failure. Only one domain will ever have a live tab —
-   * `readDomList` (unlike `captureRequestHeader`) is a point-in-time DOM
-   * read with no open capture window to race, so sequential try-then-fall-
-   * through is correct here (not `Promise.any`).
-   */
-  async #readDomListAnyDomain(name: string): Promise<Record<string, string>[]> {
+  /** Reads a declared selector off the single supported domain's live tab. */
+  async #readDomList(name: string): Promise<Record<string, string>[]> {
     await this.#ensureStarted();
-    const errors: string[] = [];
-    for (const domain of DOMAINS) {
-      try {
-        return await this.#transport.server.readDomList({ name, domain });
-      } catch (e) {
-        const err = e as Error & { name?: string; hint?: string };
-        errors.push(`${domain}: ${err.message}`);
-        // Only a "no tab on this domain" failure is worth trying the next
-        // domain for. Anything else (scope rejection, bridge down) is the
-        // same for every domain and should surface immediately.
-        if (!/no tab matching/i.test(err.message)) throw e;
+    try {
+      return await this.#transport.server.readDomList({ name, domain: DOMAINS[0] });
+    } catch (e) {
+      const err = e as Error;
+      if (/no tab matching/i.test(err.message)) {
+        throw new Error(
+          `could not reach a signed-in Teams tab on ${DOMAINS[0]} (${err.message}). ` +
+            `Open ${DOMAINS[0]} in a signed-in browser tab and retry.`,
+        );
       }
+      throw e;
     }
-    throw new Error(
-      `could not reach a signed-in Teams tab on any of [${DOMAINS.join(', ')}] (${errors.join('; ')}). ` +
-        'Open teams.microsoft.com in a signed-in browser tab and retry.',
-    );
   }
 
   /** The chat-list sidebar, regardless of which chat is currently open. */
   async listChats(): Promise<ChatListRow[]> {
-    return (await this.#readDomListAnyDomain('chatList')) as ChatListRow[];
+    return (await this.#readDomList('chatList')) as ChatListRow[];
   }
 
   /**
@@ -258,12 +278,12 @@ export class TeamsClient {
    * module doc.
    */
   async getOpenChatMessages(): Promise<ChatMessageRow[]> {
-    return (await this.#readDomListAnyDomain('chatMessages')) as ChatMessageRow[];
+    return (await this.#readDomList('chatMessages')) as ChatMessageRow[];
   }
 
   /** The Teams-and-Channels sidebar, regardless of which channel is open. */
   async listTeamsAndChannels(): Promise<TeamOrChannelRow[]> {
-    return (await this.#readDomListAnyDomain('teamsAndChannels')) as TeamOrChannelRow[];
+    return (await this.#readDomList('teamsAndChannels')) as TeamOrChannelRow[];
   }
 
   /**
@@ -273,7 +293,12 @@ export class TeamsClient {
    * module doc.
    */
   async getOpenChannelPosts(): Promise<ChannelPostRow[]> {
-    return (await this.#readDomListAnyDomain('channelPosts')) as ChannelPostRow[];
+    return (await this.#readDomList('channelPosts')) as ChannelPostRow[];
+  }
+
+  /** The Activity feed (the bell icon in the left nav), regardless of which item is selected. */
+  async getActivity(): Promise<ActivityFeedRow[]> {
+    return (await this.#readDomList('activityFeed')) as ActivityFeedRow[];
   }
 
   async close(): Promise<void> {

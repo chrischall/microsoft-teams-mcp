@@ -36,7 +36,7 @@ egress:
   # Empty on purpose: this is a pure browser-bridge MCP. Every Teams request
   # (the read_dom_list calls in src/client.ts) is made by the user's
   # signed-in tab via the fetchproxy extension, never by this process — there
-  # is no direct mode and no bootstrap that dials teams.microsoft.com
+  # is no direct mode and no bootstrap that dials teams.cloud.microsoft
   # server-side. The only socket the process opens is the loopback
   # concentrator the extension connects TO.
   allow: []

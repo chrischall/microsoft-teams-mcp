@@ -4,6 +4,7 @@ import { VERSION } from './version.js';
 import { TeamsClient } from './client.js';
 import { registerChatTools } from './tools/chat.js';
 import { registerChannelTools } from './tools/channels.js';
+import { registerActivityTools } from './tools/activity.js';
 import { registerHealthcheckTool } from './tools/healthcheck.js';
 
 loadDotenvSafely();
@@ -23,5 +24,5 @@ await runMcp({
   banner:
     '[microsoft-teams-mcp] This project was developed and is maintained by AI. Use at your own discretion.',
   deps: client,
-  tools: [registerChatTools, registerChannelTools, registerHealthcheckTool],
+  tools: [registerChatTools, registerChannelTools, registerActivityTools, registerHealthcheckTool],
 });
