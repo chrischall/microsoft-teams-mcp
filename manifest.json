@@ -52,6 +52,10 @@
       "description": "Read the top-level posts of whichever Teams channel is currently open"
     },
     {
+      "name": "teams_get_activity",
+      "description": "Read the Activity feed — mentions, replies, and reactions across every chat and channel"
+    },
+    {
       "name": "teams_healthcheck",
       "description": "Verify the browser bridge can reach a signed-in Teams tab"
     }
