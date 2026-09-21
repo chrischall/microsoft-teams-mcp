@@ -1,6 +1,6 @@
 /**
  * Teams/channel tools — both read the user's live, signed-in
- * `teams.microsoft.com` tab through the fetchproxy bridge. See `client.ts`'s
+ * `teams.cloud.microsoft` tab through the fetchproxy bridge. See `client.ts`'s
  * module doc for why there is no way to select a specific channel: the
  * bridge can only READ the DOM, never navigate it.
  */

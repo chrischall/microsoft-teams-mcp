@@ -1,5 +1,5 @@
 /**
- * Chat tools — both read the user's live, signed-in `teams.microsoft.com`
+ * Chat tools — both read the user's live, signed-in `teams.cloud.microsoft`
  * tab through the fetchproxy bridge. See `client.ts`'s module doc for why
  * there is no way to select a specific chat: the bridge can only READ the
  * DOM, never navigate it, so `teams_get_open_chat_messages` returns whatever

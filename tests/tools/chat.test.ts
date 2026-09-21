@@ -40,7 +40,7 @@ describe('teams_list_chats', () => {
     expect(result.isError).toBe(true);
     const text = (result.content?.[0] as { text?: string })?.text ?? '';
     expect(text).toMatch(/signed-in Teams tab/i);
-    expect(text).toMatch(/teams.microsoft.com/i);
+    expect(text).toMatch(/teams.cloud.microsoft/i);
     await harness.close();
   });
 });

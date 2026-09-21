@@ -1,12 +1,11 @@
 # fpx dom-list recipes for Teams
 
-Every command needs `-p teams --storage-domain teams.microsoft.com` (or
-`teams.cloud.microsoft`, matching whichever host your signed-in tab is on).
+Every command needs `-p teams --storage-domain teams.cloud.microsoft`.
 
 ## Chat list (sidebar, Chat nav section)
 
 ```sh
-fpx dom-list chatList -p teams --storage-domain teams.microsoft.com \
+fpx dom-list chatList -p teams --storage-domain teams.cloud.microsoft \
   | jq -r '.[] | "\(.time)\t\(.title)\t\(.preview)"'
 ```
 
@@ -19,7 +18,7 @@ in the Chat rail).
 ## Currently open chat's messages
 
 ```sh
-fpx dom-list chatMessages -p teams --storage-domain teams.microsoft.com \
+fpx dom-list chatMessages -p teams --storage-domain teams.cloud.microsoft \
   | jq -r '.[] | "\(.time)\t\(.sender // "(same as above)")\t\(.text)"'
 ```
 
@@ -32,7 +31,7 @@ the browser first, then run this.
 ## Teams and channels (sidebar, Teams nav section — a DIFFERENT view from Chat)
 
 ```sh
-fpx dom-list teamsAndChannels -p teams --storage-domain teams.microsoft.com \
+fpx dom-list teamsAndChannels -p teams --storage-domain teams.cloud.microsoft \
   | jq -r '.[] | select(.itemType == "channel") | "\(.teamName)\t\(.title)"'
 ```
 
@@ -48,7 +47,7 @@ usual reason.
 ## Currently open channel's posts
 
 ```sh
-fpx dom-list channelPosts -p teams --storage-domain teams.microsoft.com \
+fpx dom-list channelPosts -p teams --storage-domain teams.cloud.microsoft \
   | jq -r '.[] | "\(.time)\t\(.sender)\t\(.subject // "")\t\(.text)"'
 ```
 
@@ -59,8 +58,24 @@ replies under a post are not captured, only the top-level posts.
 
 Reads whatever channel is CURRENTLY OPEN — open it in the browser first.
 
+## Activity feed (sidebar, Activity nav section — the bell icon)
+
+```sh
+fpx dom-list activityFeed -p teams --storage-domain teams.cloud.microsoft \
+  | jq -r '.[] | "\(.time)\t\(.title)\t\(.location)"'
+```
+
+Fields: `title` (e.g. "Sanderson, Xi mentioned MS DevOps"), `preview`
+(message text), `time` (prose, e.g. `1:19 PM` — NOT ISO 8601), `location`
+(the team/channel or chat the activity happened in, e.g. "NS_MS Product CE
+> MS DevOps").
+
+Unlike the other three "currently open" reads, this is a sidebar list — it's
+always populated once the Activity view is open, regardless of which item
+is selected (same shape as `chatList`/`teamsAndChannels`).
+
 ## Multiple tabs
 
-If more than one `teams.microsoft.com` tab is open, the bridge picks
+If more than one `teams.cloud.microsoft` tab is open, the bridge picks
 whichever answers first — results can come from a tab you didn't mean.
 Close extras before relying on output.

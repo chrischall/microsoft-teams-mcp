@@ -11,7 +11,7 @@ export function registerHealthcheckTool(server: McpServer, client: TeamsClient):
   registerBridgeHealthcheckTool({
     server,
     prefix: 'teams',
-    hostLabel: 'teams.microsoft.com',
+    hostLabel: 'teams.cloud.microsoft',
     transport: client.transport,
     probePath: 'chat list (read_dom_list against the currently open Teams tab)',
     probeFn: async () => {

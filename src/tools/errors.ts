@@ -5,9 +5,7 @@ export function wrapBridgeError(err: unknown, action: string): McpToolError {
   const message = err instanceof Error ? err.message : String(err);
   if (/no tab matching|could not reach a signed-in/i.test(message)) {
     return new McpToolError(`Could not reach a signed-in Teams tab to ${action}.`, {
-      hint:
-        'Open teams.microsoft.com (or teams.cloud.microsoft) in Chrome, make sure you are ' +
-        'signed in, and retry.',
+      hint: 'Open teams.cloud.microsoft in Chrome, make sure you are signed in, and retry.',
     });
   }
   if (/pair code|not granted|not in declared/i.test(message)) {

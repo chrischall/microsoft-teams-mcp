@@ -77,6 +77,32 @@ describe('TeamsClient.listTeamsAndChannels', () => {
   });
 });
 
+describe('TeamsClient.getActivity', () => {
+  it('reads the activityFeed selector off the first domain that has a tab', async () => {
+    const readDomList = vi.fn().mockResolvedValue([
+      {
+        title: 'Sanderson, Xi mentioned MS DevOps',
+        preview: 'MS DevOps can someone please help with this harness deployment job?',
+        time: '1:19 PM',
+        location: 'NS_MS Product CE > MS DevOps',
+      },
+    ]);
+    const client = new TeamsClient({ transport: mockTransport({ readDomList }) });
+
+    const rows = await client.getActivity();
+
+    expect(rows).toEqual([
+      {
+        title: 'Sanderson, Xi mentioned MS DevOps',
+        preview: 'MS DevOps can someone please help with this harness deployment job?',
+        time: '1:19 PM',
+        location: 'NS_MS Product CE > MS DevOps',
+      },
+    ]);
+    expect(readDomList).toHaveBeenCalledWith({ name: 'activityFeed', domain: DOMAINS[0] });
+  });
+});
+
 describe('TeamsClient.getOpenChannelPosts', () => {
   it('returns rows from the channelPosts selector', async () => {
     const readDomList = vi.fn().mockResolvedValue([
@@ -105,22 +131,8 @@ describe('TeamsClient.getOpenChannelPosts', () => {
   });
 });
 
-describe('TeamsClient domain fallback', () => {
-  it('falls through to the next domain on a "no tab matching" failure', async () => {
-    const readDomList = vi
-      .fn()
-      .mockRejectedValueOnce(new Error(`no tab matching https://${DOMAINS[0]}/`))
-      .mockResolvedValueOnce([{ title: 'Standup' }]);
-    const client = new TeamsClient({ transport: mockTransport({ readDomList }) });
-
-    const rows = await client.listChats();
-
-    expect(rows).toEqual([{ title: 'Standup' }]);
-    expect(readDomList).toHaveBeenNthCalledWith(1, { name: 'chatList', domain: DOMAINS[0] });
-    expect(readDomList).toHaveBeenNthCalledWith(2, { name: 'chatList', domain: DOMAINS[1] });
-  });
-
-  it('does not try the next domain on a non-"no tab" failure (surfaces immediately)', async () => {
+describe('TeamsClient error handling', () => {
+  it('propagates a non-"no tab" failure unchanged', async () => {
     const readDomList = vi.fn().mockRejectedValue(new Error('read_dom_list name not in declared set: chatList'));
     const client = new TeamsClient({ transport: mockTransport({ readDomList }) });
 
@@ -128,12 +140,14 @@ describe('TeamsClient domain fallback', () => {
     expect(readDomList).toHaveBeenCalledTimes(1);
   });
 
-  it('throws an actionable error when no domain has a tab', async () => {
+  it('throws an actionable error when the tab is not reachable', async () => {
     const readDomList = vi.fn().mockRejectedValue(new Error('no tab matching https://x/'));
     const client = new TeamsClient({ transport: mockTransport({ readDomList }) });
 
-    await expect(client.listChats()).rejects.toThrow(/could not reach a signed-in Teams tab/);
-    expect(readDomList).toHaveBeenCalledTimes(DOMAINS.length);
+    await expect(client.listChats()).rejects.toThrow(
+      /could not reach a signed-in Teams tab on teams\.cloud\.microsoft/,
+    );
+    expect(readDomList).toHaveBeenCalledTimes(1);
   });
 });
 
