@@ -126,8 +126,8 @@ npm run test:coverage # CI's gate
 
 This server depends on `read_dom_list`, a fetchproxy capability added
 alongside this repo — it needs `@fetchproxy/protocol`/`@fetchproxy/server`
-versions that include it. Until those are published, development points
-`node_modules/@fetchproxy/*` at a local `fetchproxy` checkout via `npm link`.
+`>= 3.1.0`, the first published versions that include it
+([chrischall/fetchproxy#381](https://github.com/chrischall/fetchproxy/pull/381)).
 
 ## License
 
