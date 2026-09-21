@@ -9,13 +9,15 @@
  * design: every read here goes through `read_dom_list` against the user's
  * live, signed-in `teams.microsoft.com` tab.
  *
- * Consequence: this MCP can only read whichever chat is CURRENTLY DISPLAYED
- * in that tab. `@fetchproxy/server` has no capability to navigate a tab to a
- * different conversation — every declared capability is a fetch or a read,
- * never a page interaction — so there is no way to ask for "chat X's
- * messages" on demand. `listChats()` reads the chat-list sidebar (always
- * visible); `getOpenChatMessages()` reads whatever conversation the user has
- * open. Verified live 2026-09-21 against a real Teams tenant.
+ * Consequence: this MCP can only read whichever chat or channel is
+ * CURRENTLY DISPLAYED in that tab. `@fetchproxy/server` has no capability to
+ * navigate a tab to a different conversation — every declared capability is
+ * a fetch or a read, never a page interaction — so there is no way to ask
+ * for "chat X's messages" or "channel Y's posts" on demand.
+ * `listChats()`/`listTeamsAndChannels()` read their sidebars (always
+ * visible once that nav section is open); `getOpenChatMessages()`/
+ * `getOpenChannelPosts()` read whatever conversation the user has open.
+ * Verified live 2026-09-21 against a real Teams tenant.
  */
 import {
   createFetchproxyTransport,
@@ -86,6 +88,54 @@ export const CHAT_LIST_SELECTOR: DomListSelectorDecl = {
   maxItems: 200,
 };
 
+/**
+ * The Teams-and-Channels sidebar (the left rail under the "Teams" nav icon,
+ * a DIFFERENT view from Chat — always rendered once that view is open,
+ * regardless of which channel is open). Team and channel rows share one
+ * item selector; `title-*`/`time-*` use a compound attribute selector
+ * (`[id^="title-"][id*="-list-item-"]`) rather than a comma-joined pair of
+ * prefixes, because a channel and a team item use different id prefixes
+ * (`title-channel-list-item-*` / `title-team-list-item-*`) and this reads
+ * either without needing two alternatives. `teamName` is the parent team's
+ * display name shown under a channel row (absent on a team row itself).
+ */
+export const TEAMS_AND_CHANNELS_SELECTOR: DomListSelectorDecl = {
+  name: 'teamsAndChannels',
+  itemSelector: '[data-item-type="team"], [data-item-type="channel"]',
+  fields: [
+    { name: 'title', selector: '[id^="title-"][id*="-list-item-"]' },
+    { name: 'teamName', selector: '[id^="preview-channel-list-item-"]' },
+    { name: 'time', selector: '[id^="time-"][id*="-list-item-"]' },
+    { name: 'conversationKey', attribute: 'data-fui-tree-item-value' },
+    { name: 'itemType', attribute: 'data-item-type' },
+  ],
+  maxItems: 300,
+};
+
+/**
+ * Top-level posts in whichever CHANNEL is currently open (same "reads only
+ * what's displayed" constraint as chat messages — see module doc). Channel
+ * posts use a different renderer than chat messages (`channel-pane-message`,
+ * not `.fui-ChatMessage`), and their `<time>` element carries no ISO
+ * `datetime` attribute — only a human-readable `aria-label` — so `time` here
+ * is prose ("Tuesday, August 4, 2026 7:50 AM"), not ISO 8601 like
+ * `ChatMessageRow.time`. `subject` is present only on a post that has a
+ * title; a reply-shaped post has none. Threaded REPLIES under a post are not
+ * captured — only the top-level posts a channel's "Posts" tab lists.
+ */
+export const CHANNEL_POSTS_SELECTOR: DomListSelectorDecl = {
+  name: 'channelPosts',
+  itemSelector: '[data-tid="channel-pane-message"]',
+  fields: [
+    { name: 'sender', selector: '[id^="author-"]' },
+    { name: 'subject', selector: '[id^="subject-line-"]' },
+    { name: 'time', selector: 'time[data-tid="timestamp"]', attribute: 'aria-label' },
+    { name: 'messageId', selector: 'time[data-tid="timestamp"]', attribute: 'id' },
+    { name: 'text', selector: '[id^="content-"]' },
+  ],
+  maxItems: 200,
+};
+
 export interface ChatMessageRow {
   sender?: string;
   /** ISO 8601 (the `<time datetime>` attribute). */
@@ -100,6 +150,25 @@ export interface ChatListRow {
   time?: string;
   conversationKey?: string;
   itemType?: string;
+}
+
+export interface TeamOrChannelRow {
+  title?: string;
+  /** The parent team's display name. Present on a channel row, absent on a team row. */
+  teamName?: string;
+  time?: string;
+  conversationKey?: string;
+  /** `'team'` or `'channel'`. */
+  itemType?: string;
+}
+
+export interface ChannelPostRow {
+  sender?: string;
+  subject?: string;
+  /** Prose, e.g. "Tuesday, August 4, 2026 7:50 AM" — NOT ISO 8601. */
+  time?: string;
+  messageId?: string;
+  text?: string;
 }
 
 export interface TeamsClientOptions {
@@ -119,7 +188,12 @@ export class TeamsClient {
         version: VERSION,
         domains: [...DOMAINS],
         capabilities: ['read_dom_list'],
-        domListSelectors: [CHAT_MESSAGES_SELECTOR, CHAT_LIST_SELECTOR],
+        domListSelectors: [
+          CHAT_MESSAGES_SELECTOR,
+          CHAT_LIST_SELECTOR,
+          TEAMS_AND_CHANNELS_SELECTOR,
+          CHANNEL_POSTS_SELECTOR,
+        ],
         port: getWsPort(),
         // stderr only — stdout is the JSON-RPC channel. Without this the
         // first-ever pairing (or a scope widening) leaves a tool call
@@ -185,6 +259,21 @@ export class TeamsClient {
    */
   async getOpenChatMessages(): Promise<ChatMessageRow[]> {
     return (await this.#readDomListAnyDomain('chatMessages')) as ChatMessageRow[];
+  }
+
+  /** The Teams-and-Channels sidebar, regardless of which channel is open. */
+  async listTeamsAndChannels(): Promise<TeamOrChannelRow[]> {
+    return (await this.#readDomListAnyDomain('teamsAndChannels')) as TeamOrChannelRow[];
+  }
+
+  /**
+   * Top-level posts from whichever channel is CURRENTLY DISPLAYED in the
+   * signed-in tab (the Teams-and-Channels view must be open, not Chat).
+   * There is no way to select a different channel from here — see the
+   * module doc.
+   */
+  async getOpenChannelPosts(): Promise<ChannelPostRow[]> {
+    return (await this.#readDomListAnyDomain('channelPosts')) as ChannelPostRow[];
   }
 
   async close(): Promise<void> {

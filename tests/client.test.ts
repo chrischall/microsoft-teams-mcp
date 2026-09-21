@@ -59,6 +59,52 @@ describe('TeamsClient.getOpenChatMessages', () => {
   });
 });
 
+describe('TeamsClient.listTeamsAndChannels', () => {
+  it('reads the teamsAndChannels selector off the first domain that has a tab', async () => {
+    const readDomList = vi.fn().mockResolvedValue([
+      { title: 'General', teamName: 'TruAudience', time: '9/18', conversationKey: 'k1', itemType: 'channel' },
+      { title: 'TruAudience', time: '', conversationKey: 'k2', itemType: 'team' },
+    ]);
+    const client = new TeamsClient({ transport: mockTransport({ readDomList }) });
+
+    const rows = await client.listTeamsAndChannels();
+
+    expect(rows).toEqual([
+      { title: 'General', teamName: 'TruAudience', time: '9/18', conversationKey: 'k1', itemType: 'channel' },
+      { title: 'TruAudience', time: '', conversationKey: 'k2', itemType: 'team' },
+    ]);
+    expect(readDomList).toHaveBeenCalledWith({ name: 'teamsAndChannels', domain: DOMAINS[0] });
+  });
+});
+
+describe('TeamsClient.getOpenChannelPosts', () => {
+  it('returns rows from the channelPosts selector', async () => {
+    const readDomList = vi.fn().mockResolvedValue([
+      {
+        sender: 'Alice',
+        subject: 'Deploy freeze',
+        time: 'Tuesday, August 4, 2026 7:50 AM',
+        messageId: 'timestamp-1',
+        text: 'hi',
+      },
+    ]);
+    const client = new TeamsClient({ transport: mockTransport({ readDomList }) });
+
+    const rows = await client.getOpenChannelPosts();
+
+    expect(rows).toEqual([
+      {
+        sender: 'Alice',
+        subject: 'Deploy freeze',
+        time: 'Tuesday, August 4, 2026 7:50 AM',
+        messageId: 'timestamp-1',
+        text: 'hi',
+      },
+    ]);
+    expect(readDomList).toHaveBeenCalledWith({ name: 'channelPosts', domain: DOMAINS[0] });
+  });
+});
+
 describe('TeamsClient domain fallback', () => {
   it('falls through to the next domain on a "no tab matching" failure', async () => {
     const readDomList = vi
