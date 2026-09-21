@@ -2,7 +2,7 @@
   "name": "microsoft-teams-mcp",
   "displayName": "Microsoft Teams",
   "version": "0.1.0",
-  "description": "Microsoft Teams for Claude — read your chat list and the currently open chat's messages, using your signed-in browser session",
+  "description": "Microsoft Teams for Claude — read your chats, teams, channels, and their currently open messages, using your signed-in browser session",
   "author": {
     "name": "Chris Hall",
     "email": "chris.c.hall@gmail.com"

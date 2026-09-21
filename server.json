@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.chrischall/microsoft-teams-mcp",
-  "description": "Microsoft Teams for Claude — read your chat list and the currently open chat, via your browser",
+  "description": "Microsoft Teams for Claude — read your chats, teams, channels, and open messages, via your browser",
   "repository": {
     "url": "https://github.com/chrischall/microsoft-teams-mcp",
     "source": "github"

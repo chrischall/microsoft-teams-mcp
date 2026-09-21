@@ -6,7 +6,7 @@
     "email": "chris.c.hall@gmail.com"
   },
   "metadata": {
-    "description": "MCP server for Microsoft Teams — read your chat list and the currently open chat's messages",
+    "description": "MCP server for Microsoft Teams — read your chats, teams, channels, and their currently open messages",
     "version": "0.1.0"
   },
   "plugins": [
@@ -14,7 +14,7 @@
       "name": "microsoft-teams-mcp",
       "displayName": "Microsoft Teams",
       "source": "./",
-      "description": "MCP server for Microsoft Teams — read your chat list and the currently open chat's messages, via your signed-in browser session",
+      "description": "MCP server for Microsoft Teams — read your chats, teams, channels, and their currently open messages, via your signed-in browser session",
       "version": "0.1.0",
       "author": {
         "name": "Chris Hall"
