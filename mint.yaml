@@ -1,0 +1,42 @@
+version: 1
+name: Microsoft Teams
+slug: teams
+summary: >-
+  Microsoft Teams for Claude — read your chat list and the currently open
+  chat's messages, routed through your signed-in browser tab
+#
+# Hosting note (a comment, not user-facing summary text): this is a FULL
+# browser-bridge MCP, not a bootstrap-capture one. Teams' chat/message data
+# lives only in a client-side sync cache fed by a WebSocket/registrar channel
+# — there is no REST or GraphQL endpoint that returns it — so every read here
+# is a `read_dom_list` call against the live signed-in tab, not a token
+# capture followed by a plain fetch. The bridge is on the hot path for every
+# tool call, not just once per token lifetime.
+#
+# A bridged registration needs `runtime: fly-shared`, `bridge: true` and a
+# `bridgePortEnv`, which are REGISTRATION fields this manifest has no schema
+# for — set them over the control API (PUT on the registration id, per
+# mcp-host's BROWSER-BRIDGE.md), naming TEAMS_WS_PORT below as the port
+# variable. `state.dataDir` below is required for `bridge`.
+env:
+  - name: TEAMS_WS_PORT
+    required: false
+    help: >-
+      fetchproxy concentrator port used for the browser bridge. Defaults to
+      37149, the fleet-wide shared port. Name this variable in the
+      registration's bridgePortEnv for a bridged deployment.
+state:
+  dataDir: true
+  reason: >-
+    Holds the fetchproxy identity keypair under ~/.fetchproxy/identity.
+    Without persistence every cold start mints a fresh identity and re-
+    prompts pairing in the user's browser — on a scale-to-zero machine, that
+    means constantly.
+egress:
+  # Empty on purpose: this is a pure browser-bridge MCP. Every Teams request
+  # (the read_dom_list calls in src/client.ts) is made by the user's
+  # signed-in tab via the fetchproxy extension, never by this process — there
+  # is no direct mode and no bootstrap that dials teams.microsoft.com
+  # server-side. The only socket the process opens is the loopback
+  # concentrator the extension connects TO.
+  allow: []

@@ -1,0 +1,28 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.chrischall/microsoft-teams-mcp",
+  "description": "Microsoft Teams for Claude — read your chat list and the currently open chat, via your browser",
+  "repository": {
+    "url": "https://github.com/chrischall/microsoft-teams-mcp",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@chrischall/microsoft-teams-mcp",
+      "version": "0.1.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "TEAMS_WS_PORT",
+          "description": "fetchproxy concentrator port used for the browser bridge. Defaults to 37149, the fleet-wide shared port.",
+          "isRequired": false,
+          "format": "string"
+        }
+      ]
+    }
+  ]
+}

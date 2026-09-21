@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "teams": {
+      "command": "node",
+      "args": ["dist/bundle.js"]
+    }
+  }
+}
