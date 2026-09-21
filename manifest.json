@@ -4,7 +4,7 @@
   "name": "microsoft-teams-mcp",
   "display_name": "Microsoft Teams",
   "version": "0.1.0",
-  "description": "Microsoft Teams for Claude — read your chat list and the currently open chat's messages, via your signed-in browser tab",
+  "description": "Microsoft Teams for Claude — read your chats, teams, channels, and their currently open messages, via your browser",
   "author": {
     "name": "Chris Chall",
     "email": "chris.c.hall@gmail.com",
@@ -42,6 +42,14 @@
     {
       "name": "teams_get_open_chat_messages",
       "description": "Read the message thread of whichever Teams chat is currently open"
+    },
+    {
+      "name": "teams_list_teams_and_channels",
+      "description": "List the Teams the signed-in user belongs to and their channels"
+    },
+    {
+      "name": "teams_get_open_channel_posts",
+      "description": "Read the top-level posts of whichever Teams channel is currently open"
     },
     {
       "name": "teams_healthcheck",

@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import { versionSyncTest, createTestHarness } from '@chrischall/mcp-utils/test';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { registerChatTools } from '../src/tools/chat.js';
+import { registerChannelTools } from '../src/tools/channels.js';
 import { registerHealthcheckTool } from '../src/tools/healthcheck.js';
 import type { TeamsClient } from '../src/client.js';
 
@@ -101,11 +102,14 @@ describe('manifest tool roster', () => {
     const client = {
       listChats: async () => [],
       getOpenChatMessages: async () => [],
+      listTeamsAndChannels: async () => [],
+      getOpenChannelPosts: async () => [],
       transport: { status: () => ({}), runProbe: async () => ({ ok: true, elapsed_ms: 0, bridge: {} }) },
     } as unknown as TeamsClient;
 
     const h = await createTestHarness((server: McpServer) => {
       registerChatTools(server, client);
+      registerChannelTools(server, client);
       registerHealthcheckTool(server, client);
     });
     const registered = (await h.listTools()).map((t) => t.name).sort();

@@ -6,25 +6,9 @@
  * conversation is currently displayed.
  */
 import type { McpServer } from '@modelcontextprotocol/server';
-import { minifiedResult, toolAnnotations, McpToolError } from '@chrischall/mcp-utils';
+import { minifiedResult, toolAnnotations } from '@chrischall/mcp-utils';
 import type { TeamsClient } from '../client.js';
-
-function wrapBridgeError(err: unknown, action: string): McpToolError {
-  const message = err instanceof Error ? err.message : String(err);
-  if (/no tab matching|could not reach a signed-in/i.test(message)) {
-    return new McpToolError(`Could not reach a signed-in Teams tab to ${action}.`, {
-      hint:
-        'Open teams.microsoft.com (or teams.cloud.microsoft) in Chrome, make sure you are ' +
-        'signed in, and retry.',
-    });
-  }
-  if (/pair code|not granted|not in declared/i.test(message)) {
-    return new McpToolError(`The Teams browser bridge is not yet approved: ${message}`, {
-      hint: 'Approve the pairing request in the Transporter extension popup, then retry.',
-    });
-  }
-  return new McpToolError(`Failed to ${action}: ${message}`);
-}
+import { wrapBridgeError } from './errors.js';
 
 export function registerChatTools(server: McpServer, client: TeamsClient): void {
   server.registerTool(
