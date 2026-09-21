@@ -2,8 +2,8 @@ version: 1
 name: Microsoft Teams
 slug: teams
 summary: >-
-  Microsoft Teams for Claude — read your chat list and the currently open
-  chat's messages, routed through your signed-in browser tab
+  Microsoft Teams for Claude — read your chats, teams, channels, and their
+  currently open messages, routed through your signed-in browser tab
 #
 # Hosting note (a comment, not user-facing summary text): this is a FULL
 # browser-bridge MCP, not a bootstrap-capture one. Teams' chat/message data
