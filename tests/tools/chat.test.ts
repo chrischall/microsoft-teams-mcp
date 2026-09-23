@@ -7,6 +7,7 @@ function fakeClient(overrides: Partial<TeamsClient> = {}): TeamsClient {
   return {
     listChats: vi.fn().mockResolvedValue([]),
     getOpenChatMessages: vi.fn().mockResolvedValue([]),
+    getOpenConversation: vi.fn().mockResolvedValue(null),
     ...overrides,
   } as unknown as TeamsClient;
 }
@@ -21,7 +22,7 @@ describe('teams_list_chats', () => {
     const harness = await createTestHarness((server) => registerChatTools(server, client));
 
     const result = await harness.callTool('teams_list_chats');
-    const data = parseToolResult(result);
+    const data = (parseToolResult(result) as { rows: unknown }).rows;
 
     expect(data).toEqual([
       { title: 'Standup', preview: 'hi', time: '9:00 AM', conversationKey: 'k', itemType: 'chat' },
@@ -55,11 +56,68 @@ describe('teams_get_open_chat_messages', () => {
     const harness = await createTestHarness((server) => registerChatTools(server, client));
 
     const result = await harness.callTool('teams_get_open_chat_messages');
-    const data = parseToolResult(result);
+    const data = (parseToolResult(result) as { messages: unknown }).messages;
 
     expect(data).toEqual([
       { sender: 'Alice', time: '2026-09-21T10:00:00.000Z', messageId: 'timestamp-1', text: 'hi' },
     ]);
+    await harness.close();
+  });
+
+  it('says which conversation the messages came from', async () => {
+    const client = fakeClient({
+      getOpenChatMessages: vi.fn().mockResolvedValue([{ sender: 'Bob', text: 'hi' }]),
+      getOpenConversation: vi
+        .fn()
+        .mockResolvedValue({ title: 'Bob Smith', conversationKey: '19:abc@thread.v2', itemType: 'chat' }),
+    });
+    const harness = await createTestHarness((server) => registerChatTools(server, client));
+
+    const data = parseToolResult(await harness.callTool('teams_get_open_chat_messages')) as Record<string, unknown>;
+
+    expect(data.conversation).toEqual({ title: 'Bob Smith', conversationKey: '19:abc@thread.v2', itemType: 'chat' });
+    expect(String(data.conversation_check)).toMatch(/Bob Smith/);
+    expect(String(data.conversation_check)).toMatch(/confirm/i);
+    await harness.close();
+  });
+
+  it('warns when it cannot identify the open conversation', async () => {
+    const client = fakeClient({
+      getOpenChatMessages: vi.fn().mockResolvedValue([{ sender: 'Bob', text: 'hi' }]),
+      getOpenConversation: vi.fn().mockResolvedValue(null),
+    });
+    const harness = await createTestHarness((server) => registerChatTools(server, client));
+
+    const data = parseToolResult(await harness.callTool('teams_get_open_chat_messages')) as Record<string, unknown>;
+
+    expect(data.conversation).toBeNull();
+    expect(String(data.conversation_check)).toMatch(/could not identify/i);
+    expect(data.messages).toEqual([{ sender: 'Bob', text: 'hi' }]);
+    await harness.close();
+  });
+
+  it('still returns the messages when reading the conversation identity fails', async () => {
+    const client = fakeClient({
+      getOpenChatMessages: vi.fn().mockResolvedValue([{ sender: 'Bob', text: 'hi' }]),
+      getOpenConversation: vi.fn().mockRejectedValue(new Error('read_dom_list name not in declared set: openConversation')),
+    });
+    const harness = await createTestHarness((server) => registerChatTools(server, client));
+
+    const result = await harness.callTool('teams_get_open_chat_messages');
+    const data = parseToolResult(result) as Record<string, unknown>;
+
+    expect(result.isError).toBeFalsy();
+    expect(data.conversation).toBeNull();
+    expect(data.messages).toEqual([{ sender: 'Bob', text: 'hi' }]);
+    await harness.close();
+  });
+
+  it('tells the model to confirm the conversation and warns about multiple Teams tabs', async () => {
+    const harness = await createTestHarness((server) => registerChatTools(server, fakeClient()));
+    const tool = (await harness.listTools()).find((t) => t.name === 'teams_get_open_chat_messages');
+
+    expect(tool?.description).toMatch(/confirm/i);
+    expect(tool?.description).toMatch(/more than one .*tab/i);
     await harness.close();
   });
 

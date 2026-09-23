@@ -157,6 +157,52 @@ export const ACTIVITY_FEED_SELECTOR: DomListSelectorDecl = {
   maxItems: 200,
 };
 
+/**
+ * WHICH conversation is open — the sidebar row Teams marks as selected. Read
+ * alongside `chatMessages`/`channelPosts` so the "open" tools can say which
+ * chat or channel their rows came from; without it the model gets bare rows
+ * and can misattribute another conversation's messages to the one the user
+ * asked about. The chat-list and channel-list rows are Fluent UI tree items
+ * (`data-fui-tree-item-value`, the same attribute `CHAT_LIST_SELECTOR` /
+ * `TEAMS_AND_CHANNELS_SELECTOR` read `conversationKey` from), and a Fluent
+ * tree item carries `aria-selected="true"` (or `aria-current`) when it is the
+ * open one. `title` matches both the chat (`title-chat-list-item_*`) and
+ * channel (`title-channel-list-item-*`) title ids. `conversationKey` embeds
+ * the real thread id. Not yet re-verified against a live tenant — the tools
+ * treat an empty read as "could not identify" rather than failing.
+ */
+export const OPEN_CONVERSATION_SELECTOR: DomListSelectorDecl = {
+  name: 'openConversation',
+  itemSelector:
+    '[data-fui-tree-item-value][aria-selected="true"], ' +
+    '[data-fui-tree-item-value][aria-current="true"], ' +
+    '[data-fui-tree-item-value][aria-current="page"]',
+  fields: [
+    { name: 'title', selector: '[id^="title-"][id*="list-item"]' },
+    { name: 'conversationKey', attribute: 'data-fui-tree-item-value' },
+    { name: 'itemType', attribute: 'data-item-type' },
+  ],
+  maxItems: 5,
+};
+
+/** Every selector the client declares to the bridge (the pair-popup scope). */
+export const DOM_LIST_SELECTORS: readonly DomListSelectorDecl[] = [
+  CHAT_MESSAGES_SELECTOR,
+  CHAT_LIST_SELECTOR,
+  TEAMS_AND_CHANNELS_SELECTOR,
+  CHANNEL_POSTS_SELECTOR,
+  ACTIVITY_FEED_SELECTOR,
+  OPEN_CONVERSATION_SELECTOR,
+];
+
+export interface OpenConversationRow {
+  title?: string;
+  /** Teams' compound tree-item value; embeds the thread id. */
+  conversationKey?: string;
+  /** `'chat'`, `'channel'`, … as Teams labels the sidebar row. */
+  itemType?: string;
+}
+
 export interface ChatMessageRow {
   sender?: string;
   /** ISO 8601 (the `<time datetime>` attribute). */
@@ -218,13 +264,7 @@ export class TeamsClient {
         version: VERSION,
         domains: [...DOMAINS],
         capabilities: ['read_dom_list'],
-        domListSelectors: [
-          CHAT_MESSAGES_SELECTOR,
-          CHAT_LIST_SELECTOR,
-          TEAMS_AND_CHANNELS_SELECTOR,
-          CHANNEL_POSTS_SELECTOR,
-          ACTIVITY_FEED_SELECTOR,
-        ],
+        domListSelectors: [...DOM_LIST_SELECTORS],
         port: getWsPort(),
         // stderr only — stdout is the JSON-RPC channel. Without this the
         // first-ever pairing (or a scope widening) leaves a tool call
@@ -294,6 +334,15 @@ export class TeamsClient {
    */
   async getOpenChannelPosts(): Promise<ChannelPostRow[]> {
     return (await this.#readDomList('channelPosts')) as ChannelPostRow[];
+  }
+
+  /**
+   * The sidebar row Teams marks as selected — i.e. which chat or channel is
+   * currently open — or `null` when none can be identified.
+   */
+  async getOpenConversation(): Promise<OpenConversationRow | null> {
+    const rows = (await this.#readDomList('openConversation')) as OpenConversationRow[];
+    return rows[0] ?? null;
   }
 
   /** The Activity feed (the bell icon in the left nav), regardless of which item is selected. */

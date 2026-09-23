@@ -25,7 +25,7 @@ describe('teams_get_activity', () => {
     const harness = await createTestHarness((server) => registerActivityTools(server, client));
 
     const result = await harness.callTool('teams_get_activity');
-    const data = parseToolResult(result);
+    const data = (parseToolResult(result) as { rows: unknown }).rows;
 
     expect(data).toEqual([
       {
