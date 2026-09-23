@@ -21,7 +21,7 @@ describe('teams_list_chats', () => {
     const harness = await createTestHarness((server) => registerChatTools(server, client));
 
     const result = await harness.callTool('teams_list_chats');
-    const data = parseToolResult(result);
+    const data = (parseToolResult(result) as { rows: unknown }).rows;
 
     expect(data).toEqual([
       { title: 'Standup', preview: 'hi', time: '9:00 AM', conversationKey: 'k', itemType: 'chat' },
@@ -55,7 +55,7 @@ describe('teams_get_open_chat_messages', () => {
     const harness = await createTestHarness((server) => registerChatTools(server, client));
 
     const result = await harness.callTool('teams_get_open_chat_messages');
-    const data = parseToolResult(result);
+    const data = (parseToolResult(result) as { rows: unknown }).rows;
 
     expect(data).toEqual([
       { sender: 'Alice', time: '2026-09-21T10:00:00.000Z', messageId: 'timestamp-1', text: 'hi' },

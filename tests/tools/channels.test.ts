@@ -22,7 +22,7 @@ describe('teams_list_teams_and_channels', () => {
     const harness = await createTestHarness((server) => registerChannelTools(server, client));
 
     const result = await harness.callTool('teams_list_teams_and_channels');
-    const data = parseToolResult(result);
+    const data = (parseToolResult(result) as { rows: unknown }).rows;
 
     expect(data).toEqual([
       { title: 'General', teamName: 'TruAudience', time: '9/18', conversationKey: 'k', itemType: 'channel' },
@@ -64,7 +64,7 @@ describe('teams_get_open_channel_posts', () => {
     const harness = await createTestHarness((server) => registerChannelTools(server, client));
 
     const result = await harness.callTool('teams_get_open_channel_posts');
-    const data = parseToolResult(result);
+    const data = (parseToolResult(result) as { rows: unknown }).rows;
 
     expect(data).toEqual([
       {
