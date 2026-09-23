@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.1](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.2.0...v0.2.1) (2026-09-23)
+
+
+### Bug Fixes
+
+* **deps:** require zod ^4.6.5 to match @chrischall/mcp-utils 2.4.0 ([#12](https://github.com/chrischall/microsoft-teams-mcp/issues/12)) ([edc9103](https://github.com/chrischall/microsoft-teams-mcp/commit/edc910397df9dec55710402bc84ea1bd4c40a14e))
+* **deps:** upgrade @chrischall/mcp-utils to 2.4.0 and @fetchproxy/* to 3.2.0 ([#10](https://github.com/chrischall/microsoft-teams-mcp/issues/10)) ([5466e76](https://github.com/chrischall/microsoft-teams-mcp/commit/5466e766190fca651df9709be1502000acb51c06))
+
 ## [0.2.0](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.1.0...v0.2.0) (2026-09-21)
 
 

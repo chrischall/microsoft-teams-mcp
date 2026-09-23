@@ -3,7 +3,7 @@
   "manifest_version": "0.3",
   "name": "microsoft-teams-mcp",
   "display_name": "Microsoft Teams",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Microsoft Teams for Claude — read your chats, teams, channels, and their currently open messages, via your browser",
   "author": {
     "name": "Chris Chall",
