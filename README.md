@@ -77,14 +77,17 @@ Everything is optional — this server needs no credentials of its own.
 - `teams_list_chats` — the Chat sidebar: title, last-message preview,
   last-activity time, and Teams' own conversation id for each chat.
 - `teams_get_open_chat_messages` — the message thread of whichever chat is
-  currently open: sender, ISO-8601 time, message id, and text.
+  currently open: sender, ISO-8601 time, message id, and text, plus a
+  `conversation` field naming WHICH chat that is (the selected sidebar row's
+  title and thread key) so the model can confirm it read the chat you meant.
 - `teams_list_teams_and_channels` — the Teams-and-Channels sidebar (a
   DIFFERENT view from Chat): every team and channel the user belongs to,
   with each channel's parent team name.
 - `teams_get_open_channel_posts` — the top-level posts of whichever channel
   is currently open: sender, subject (when present), prose time (not
   ISO-8601 — Teams doesn't expose one for these), message id, and text.
-  Threaded replies under a post are not included.
+  Threaded replies under a post are not included. Like the chat tool, it
+  names the open channel in a `conversation` field.
 - `teams_get_activity` — the Activity feed (the bell icon in the left nav):
   mentions, replies, reactions, and the like across every chat and channel,
   each with its title, message preview, prose time, and location (the
@@ -104,6 +107,11 @@ instead: real Outlook REST API calls via a captured token, with no
 
 ## Things worth knowing
 
+- **One Teams tab at a time.** If more than one `teams.cloud.microsoft` tab
+  is open, the bridge reads whichever answers first — which may not be the
+  one you're looking at. The "open" tools report the conversation they read
+  (`conversation.title`, or `null` if it couldn't be identified) and their
+  descriptions tell the model to check it before summarizing.
 - **Results are framed as untrusted.** Every data tool returns
   `{ untrusted_content: true, note, ... }` and says in its description that
   the text is written by other Teams users. Message bodies, previews and

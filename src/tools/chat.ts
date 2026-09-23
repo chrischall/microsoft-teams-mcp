@@ -10,6 +10,7 @@ import { toolAnnotations } from '@chrischall/mcp-utils';
 import type { TeamsClient } from '../client.js';
 import { wrapBridgeError } from './errors.js';
 import { untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
+import { OPEN_CONVERSATION_DESCRIPTION, readOpenConversation } from './conversation.js';
 
 export function registerChatTools(server: McpServer, client: TeamsClient): void {
   server.registerTool(
@@ -46,14 +47,16 @@ export function registerChatTools(server: McpServer, client: TeamsClient): void 
         'not navigate it): ask the user to open the chat they mean first, or use ' +
         'teams_list_chats to show them what is available. A quoted-reply message\'s text may ' +
         'include the quoted preview concatenated in.' +
+        OPEN_CONVERSATION_DESCRIPTION +
         UNTRUSTED_DESCRIPTION_SUFFIX,
       annotations: toolAnnotations({ readOnly: true }),
       inputSchema: {},
     },
     async () => {
       try {
-        const rows = await client.getOpenChatMessages();
-        return untrustedResult({ rows });
+        const messages = await client.getOpenChatMessages();
+        const identity = await readOpenConversation(client, 'chat');
+        return untrustedResult({ ...identity, messages });
       } catch (err) {
         throw wrapBridgeError(err, 'read the open chat');
       }

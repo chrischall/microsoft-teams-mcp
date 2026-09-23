@@ -53,10 +53,14 @@ fpx profile declare teams --dom-list-selector \
   'channelPosts=[data-tid="channel-pane-message"]::sender:[id^="author-"],subject:[id^="subject-line-"],time:time[data-tid="timestamp"]@aria-label,messageId:time[data-tid="timestamp"]@id,text:[id^="content-"]&max=200'
 fpx profile declare teams --dom-list-selector \
   'activityFeed=[data-tid="activity-feed-list-item"]::title:[id^="activity-feed-item-title-"],preview:[id^="activity-feed-item-message-preview-"],time:[id^="activity-feed-item-timestamp-"],location:[id^="activity-feed-item-location-"]&max=200'
+fpx profile declare teams --dom-list-selector \
+  'openConversation=[data-fui-tree-item-value][aria-selected="true"], [data-fui-tree-item-value][aria-current="true"], [data-fui-tree-item-value][aria-current="page"]::title:[id^="title-"][id*="list-item"],conversationKey:@data-fui-tree-item-value,itemType:@data-item-type&max=5'
 ```
 
 Each `--dom-list-selector` flag declares a DIFFERENT named selector on the
-same profile — run all five, not just one. Requirements: the
+same profile — run all six, not just one. `openConversation` names
+which chat/channel is open — read it with `chatMessages`/`channelPosts` to
+confirm the rows came from the conversation you meant. Requirements: the
 **Transporter** browser extension installed, with an open
 `teams.cloud.microsoft` tab you're signed into. The first `dom-list` call
 prints a pair code — approve it in the Transporter popup; the grant persists

@@ -9,6 +9,7 @@ import { toolAnnotations } from '@chrischall/mcp-utils';
 import type { TeamsClient } from '../client.js';
 import { wrapBridgeError } from './errors.js';
 import { untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
+import { OPEN_CONVERSATION_DESCRIPTION, readOpenConversation } from './conversation.js';
 
 export function registerChannelTools(server: McpServer, client: TeamsClient): void {
   server.registerTool(
@@ -47,14 +48,16 @@ export function registerChannelTools(server: McpServer, client: TeamsClient): vo
         'to choose a different channel from here: ask the user to open the channel they ' +
         'mean first (the Teams-and-Channels view, not Chat), or use ' +
         'teams_list_teams_and_channels to show them what is available.' +
+        OPEN_CONVERSATION_DESCRIPTION +
         UNTRUSTED_DESCRIPTION_SUFFIX,
       annotations: toolAnnotations({ readOnly: true }),
       inputSchema: {},
     },
     async () => {
       try {
-        const rows = await client.getOpenChannelPosts();
-        return untrustedResult({ rows });
+        const posts = await client.getOpenChannelPosts();
+        const identity = await readOpenConversation(client, 'channel');
+        return untrustedResult({ ...identity, posts });
       } catch (err) {
         throw wrapBridgeError(err, 'read the open channel');
       }

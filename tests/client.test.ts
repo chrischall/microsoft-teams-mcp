@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { TeamsClient, DOMAINS } from '../src/client.js';
+import { TeamsClient, DOMAINS, DOM_LIST_SELECTORS, OPEN_CONVERSATION_SELECTOR } from '../src/client.js';
 import type { FetchproxyTransport } from '@chrischall/mcp-utils/fetchproxy';
 
 function mockTransport(opts: {
@@ -163,5 +163,42 @@ describe('TeamsClient.close', () => {
 
     expect(transport.close).toHaveBeenCalledTimes(1);
     expect(transport.start).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('TeamsClient.getOpenConversation', () => {
+  it('reads the openConversation selector and returns the selected sidebar row', async () => {
+    const readDomList = vi.fn().mockResolvedValue([
+      { title: 'Bob Smith', conversationKey: '19:abc@thread.v2', itemType: 'chat' },
+    ]);
+    const client = new TeamsClient({ transport: mockTransport({ readDomList }) });
+
+    const conversation = await client.getOpenConversation();
+
+    expect(conversation).toEqual({ title: 'Bob Smith', conversationKey: '19:abc@thread.v2', itemType: 'chat' });
+    expect(readDomList).toHaveBeenCalledWith({ name: 'openConversation', domain: DOMAINS[0] });
+  });
+
+  it('returns null when no sidebar row is marked selected', async () => {
+    const readDomList = vi.fn().mockResolvedValue([]);
+    const client = new TeamsClient({ transport: mockTransport({ readDomList }) });
+
+    expect(await client.getOpenConversation()).toBeNull();
+  });
+});
+
+describe('declared DOM-list selectors', () => {
+  it('declares openConversation, reading the selected sidebar item (title + thread key)', () => {
+    const decl = DOM_LIST_SELECTORS.find((s) => s.name === 'openConversation');
+
+    expect(decl).toBe(OPEN_CONVERSATION_SELECTOR);
+    expect(decl?.itemSelector).toMatch(/aria-selected="true"/);
+    expect(decl?.fields.map((f) => f.name)).toEqual(['title', 'conversationKey', 'itemType']);
+  });
+
+  it('declares every selector a client method reads', () => {
+    expect(DOM_LIST_SELECTORS.map((s) => s.name).sort()).toEqual(
+      ['activityFeed', 'channelPosts', 'chatList', 'chatMessages', 'openConversation', 'teamsAndChannels'],
+    );
   });
 });

@@ -7,6 +7,7 @@ function fakeClient(overrides: Partial<TeamsClient> = {}): TeamsClient {
   return {
     listTeamsAndChannels: vi.fn().mockResolvedValue([]),
     getOpenChannelPosts: vi.fn().mockResolvedValue([]),
+    getOpenConversation: vi.fn().mockResolvedValue(null),
     ...overrides,
   } as unknown as TeamsClient;
 }
@@ -64,7 +65,7 @@ describe('teams_get_open_channel_posts', () => {
     const harness = await createTestHarness((server) => registerChannelTools(server, client));
 
     const result = await harness.callTool('teams_get_open_channel_posts');
-    const data = (parseToolResult(result) as { rows: unknown }).rows;
+    const data = (parseToolResult(result) as { posts: unknown }).posts;
 
     expect(data).toEqual([
       {
@@ -75,6 +76,47 @@ describe('teams_get_open_channel_posts', () => {
         text: 'hi',
       },
     ]);
+    await harness.close();
+  });
+
+  it('says which channel the posts came from', async () => {
+    const client = fakeClient({
+      getOpenChannelPosts: vi.fn().mockResolvedValue([{ sender: 'Alice', text: 'hi' }]),
+      getOpenConversation: vi
+        .fn()
+        .mockResolvedValue({ title: 'General', conversationKey: '19:def@thread.tacv2', itemType: 'channel' }),
+    });
+    const harness = await createTestHarness((server) => registerChannelTools(server, client));
+
+    const data = parseToolResult(await harness.callTool('teams_get_open_channel_posts')) as Record<string, unknown>;
+
+    expect(data.conversation).toEqual({ title: 'General', conversationKey: '19:def@thread.tacv2', itemType: 'channel' });
+    expect(String(data.conversation_check)).toMatch(/General/);
+    await harness.close();
+  });
+
+  it('warns when it cannot identify the open channel', async () => {
+    const client = fakeClient({
+      getOpenChannelPosts: vi.fn().mockResolvedValue([]),
+      getOpenConversation: vi.fn().mockRejectedValue(new Error('boom')),
+    });
+    const harness = await createTestHarness((server) => registerChannelTools(server, client));
+
+    const result = await harness.callTool('teams_get_open_channel_posts');
+    const data = parseToolResult(result) as Record<string, unknown>;
+
+    expect(result.isError).toBeFalsy();
+    expect(data.conversation).toBeNull();
+    expect(String(data.conversation_check)).toMatch(/could not identify/i);
+    await harness.close();
+  });
+
+  it('tells the model to confirm the channel and warns about multiple Teams tabs', async () => {
+    const harness = await createTestHarness((server) => registerChannelTools(server, fakeClient()));
+    const tool = (await harness.listTools()).find((t) => t.name === 'teams_get_open_channel_posts');
+
+    expect(tool?.description).toMatch(/confirm/i);
+    expect(tool?.description).toMatch(/more than one .*tab/i);
     await harness.close();
   });
 
