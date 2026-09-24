@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.3](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.2.2...v0.2.3) (2026-09-24)
+
+
+### Bug Fixes
+
+* **deps:** bump dotenv from 18.0.1 to 18.0.2 in the production-dependencies group ([#16](https://github.com/chrischall/microsoft-teams-mcp/issues/16)) ([8453fc1](https://github.com/chrischall/microsoft-teams-mcp/commit/8453fc136291fc5d57c90e9462e534bbb5ef5ae9))
+
 ## [0.2.2](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.2.1...v0.2.2) (2026-09-23)
 
 
