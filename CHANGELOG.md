@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.4](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.2.3...v0.2.4) (2026-09-27)
+
+
+### Bug Fixes
+
+* **deps:** move to [@fetchproxy](https://github.com/fetchproxy) 3.4 for ContextMint Bridge errors, capability subsets and managed pins ([#18](https://github.com/chrischall/microsoft-teams-mcp/issues/18)) ([5157712](https://github.com/chrischall/microsoft-teams-mcp/commit/51577127c4b87c98cff2bbe329a7a5c02e1a840c))
+* **deps:** move to @chrischall/mcp-utils 2.8 and [@fetchproxy](https://github.com/fetchproxy) 3.4.1 for clearer browser-bridge errors ([#20](https://github.com/chrischall/microsoft-teams-mcp/issues/20)) ([299d297](https://github.com/chrischall/microsoft-teams-mcp/commit/299d29740aa7c6711d056d34ee162b732b64b623))
+
 ## [0.2.3](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.2.2...v0.2.3) (2026-09-24)
 
 
