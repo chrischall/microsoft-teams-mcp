@@ -63,7 +63,9 @@ which chat/channel is open — read it with `chatMessages`/`channelPosts` to
 confirm the rows came from the conversation you meant. Requirements: the
 **ContextMint Bridge** browser extension installed (from
 https://github.com/nullnet-app/contextmint-bridge/releases — load the chrome
-zip unpacked in Chrome; in Safari it ships inside the ContextMint app), with an open
+zip unpacked in Chrome; Safari isn't available yet, so use Chrome for now —
+it's the fetchproxy extension renamed, source at
+https://github.com/nullnet-app/contextmint-bridge; verify a zip with its `.sha256`), with an open
 `teams.cloud.microsoft` tab you're signed into. The first `dom-list` call
 prints a pair code — approve it in the ContextMint Bridge popup; the grant persists
 until the declared scope changes again (each `declare` above widens it

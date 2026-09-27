@@ -40,8 +40,16 @@ Requires the **ContextMint Bridge** browser extension and `@fetchproxy/cli`,
 on a matching major version. Install the bridge from
 [its releases page](https://github.com/nullnet-app/contextmint-bridge/releases):
 in Chrome, unzip the chrome zip and load it unpacked
-(`chrome://extensions` → Developer mode → Load unpacked); in Safari, it ships
-inside the ContextMint app.
+(`chrome://extensions` → Developer mode → Load unpacked). Safari isn't
+available yet (it will ship inside the ContextMint app, which has no public
+download), so use Chrome for now.
+
+ContextMint Bridge is the fetchproxy browser extension under its new name,
+from the same maintainer — fetchproxy's own README
+(https://github.com/chrischall/fetchproxy#extension) points to it. Its source
+is public at https://github.com/nullnet-app/contextmint-bridge: build it
+yourself, or check a release zip against the `.sha256` file published beside
+it (`shasum -a 256 -c contextmint-bridge-chrome-<version>.zip.sha256`).
 
 ```sh
 npm i -g @fetchproxy/cli
@@ -101,7 +109,7 @@ Everything is optional — this server needs no credentials of its own.
 All five data tools are read-only and take no arguments.
 
 **No Calendar tool here.** Teams Web's Calendar renders inside an embedded
-`outlook.office.com` iframe, which the fetchproxy bridge (DOM reads only
+`outlook.office.com` iframe, which the ContextMint Bridge (DOM reads only
 against the top-level tab, no iframe crossing) cannot reach — and isn't the
 right place for it anyway. Use
 [`office-outlook-mcp`](https://github.com/chrischall/office-outlook-mcp)'s
