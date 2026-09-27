@@ -133,7 +133,7 @@ describe('teams_get_open_chat_messages', () => {
 
     expect(result.isError).toBe(true);
     const text = (result.content?.[0] as { text?: string })?.text ?? '';
-    expect(text).toMatch(/Transporter/i);
+    expect(text).toMatch(/ContextMint Bridge/i);
     await harness.close();
   });
 

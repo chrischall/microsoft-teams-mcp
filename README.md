@@ -36,15 +36,19 @@ calls.
 npm i -g @chrischall/microsoft-teams-mcp
 ```
 
-Requires the **Transporter** Chrome extension and `@fetchproxy/cli`, on a
-matching major version:
+Requires the **ContextMint Bridge** browser extension and `@fetchproxy/cli`,
+on a matching major version. Install the bridge from
+[its releases page](https://github.com/nullnet-app/contextmint-bridge/releases):
+in Chrome, unzip the chrome zip and load it unpacked
+(`chrome://extensions` → Developer mode → Load unpacked); in Safari, it ships
+inside the ContextMint app.
 
 ```sh
 npm i -g @fetchproxy/cli
 ```
 
-The first call prints a 6-digit pair code to approve in the Transporter
-popup; the grant persists.
+The first call prints a 6-digit pair code to approve in the ContextMint
+Bridge popup; the grant persists.
 
 ### Install in opencode
 
@@ -140,7 +144,7 @@ instead: real Outlook REST API calls via a captured token, with no
 - **Scope grows quietly.** If you see a `read_dom_list name not in declared
   set` error, the extension's approved scope is behind the server's declared
   one — this shouldn't happen in a released version, but if it does, revoke
-  and re-pair `teams-mcp` in the Transporter popup.
+  and re-pair `teams-mcp` in the ContextMint Bridge popup.
 
 ## Development
 

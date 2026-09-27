@@ -268,11 +268,11 @@ export class TeamsClient {
         port: getWsPort(),
         // stderr only — stdout is the JSON-RPC channel. Without this the
         // first-ever pairing (or a scope widening) leaves a tool call
-        // hanging with no way for the user to know a Transporter approval
+        // hanging with no way for the user to know a ContextMint Bridge approval
         // is what it's waiting on.
         onPairCode: (code) => {
           console.error(
-            `[microsoft-teams-mcp] fetchproxy pair code: ${code} — approve in the Transporter extension popup`,
+            `[microsoft-teams-mcp] fetchproxy pair code: ${code} — approve in the ContextMint Bridge extension popup`,
           );
         },
       });
