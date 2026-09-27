@@ -18,8 +18,8 @@ Teams Web has no fetchable API for chat/message/channel content — it's
 synced over a private WebSocket channel into a client-side cache, and the
 web app renders straight from that cache. There is nothing to `curl` or POST
 a GraphQL query to. The only way to read it is to read what the page has
-already rendered, which is what `fpx dom-list` does: it asks the Transporter
-extension to run a declared `querySelectorAll` + per-item field extraction
+already rendered, which is what `fpx dom-list` does: it asks the ContextMint
+Bridge extension to run a declared `querySelectorAll` + per-item field extraction
 against your signed-in `teams.cloud.microsoft` tab and hands back structured
 rows. `teams.microsoft.com` (the old host) is not supported.
 
@@ -61,9 +61,11 @@ Each `--dom-list-selector` flag declares a DIFFERENT named selector on the
 same profile — run all six, not just one. `openConversation` names
 which chat/channel is open — read it with `chatMessages`/`channelPosts` to
 confirm the rows came from the conversation you meant. Requirements: the
-**Transporter** browser extension installed, with an open
+**ContextMint Bridge** browser extension installed (from
+https://github.com/nullnet-app/contextmint-bridge/releases — load the chrome
+zip unpacked in Chrome; in Safari it ships inside the ContextMint app), with an open
 `teams.cloud.microsoft` tab you're signed into. The first `dom-list` call
-prints a pair code — approve it in the Transporter popup; the grant persists
+prints a pair code — approve it in the ContextMint Bridge popup; the grant persists
 until the declared scope changes again (each `declare` above widens it
 once).
 
@@ -87,7 +89,7 @@ Ready-to-run recipes (jq filters for all five selectors) are in
   run the command again and approve the printed pair code, or check
   `fpx health -p teams`.
 - Error text containing `not in declared set` — the profile's declared scope
-  changed since you last paired. Revoke `fpx-teams` in the Transporter popup
+  changed since you last paired. Revoke `fpx-teams` in the ContextMint Bridge popup
   and re-run; you'll be asked to approve the new scope.
 
 ## Notes
