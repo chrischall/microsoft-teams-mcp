@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.5](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.2.4...v0.2.5) (2026-10-03)
+
+
+### Bug Fixes
+
+* **deps:** adopt @chrischall/mcp-utils 2.12.0 untrusted-content framing ([#27](https://github.com/chrischall/microsoft-teams-mcp/issues/27)) ([19133c4](https://github.com/chrischall/microsoft-teams-mcp/commit/19133c4c2580d09f1ec05afb504eef0f4f538841))
+* **deps:** bump @chrischall/mcp-utils to 2.13.0 ([#28](https://github.com/chrischall/microsoft-teams-mcp/issues/28)) ([2ba35d7](https://github.com/chrischall/microsoft-teams-mcp/commit/2ba35d7e50407ca98719115e79f725e4f97cd152))
+* **deps:** bump dotenv from 18.0.2 to 18.0.3 in the production-dependencies group ([#23](https://github.com/chrischall/microsoft-teams-mcp/issues/23)) ([b382d2d](https://github.com/chrischall/microsoft-teams-mcp/commit/b382d2d61954b651d118d29d33455044d59badbb))
+* keep credentials and report edge_blocked on CDN/WAF blocks (mcp-utils 2.10.0) ([#26](https://github.com/chrischall/microsoft-teams-mcp/issues/26)) ([0918b21](https://github.com/chrischall/microsoft-teams-mcp/commit/0918b21480b9bd9779e19f542d81f854f7e0c349))
+* report CDN/WAF blocks as edge_blocked, not a rejected credential (mcp-utils 2.9.0) ([#25](https://github.com/chrischall/microsoft-teams-mcp/issues/25)) ([29b9f39](https://github.com/chrischall/microsoft-teams-mcp/commit/29b9f39636821c6281f79e06c4ed014b5611b76c))
+
 ## [0.2.4](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.2.3...v0.2.4) (2026-09-27)
 
 
