@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.6](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.2.5...v0.2.6) (2026-10-05)
+
+
+### Bug Fixes
+
+* **deps:** require @chrischall/mcp-utils 2.14.0 and MCP SDK 2.3.0 ([#29](https://github.com/chrischall/microsoft-teams-mcp/issues/29)) ([9738492](https://github.com/chrischall/microsoft-teams-mcp/commit/973849247e0d40ea35c7e143aa89ef34563c41ed))
+
 ## [0.2.5](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.2.4...v0.2.5) (2026-10-03)
 
 
