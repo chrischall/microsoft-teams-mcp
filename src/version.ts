@@ -11,4 +11,4 @@
  */
 export const PACKAGE_NAME = 'microsoft-teams-mcp';
 
-export const VERSION = '0.2.6'; // x-release-please-version
+export const VERSION = '0.2.7'; // x-release-please-version

@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.7](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.2.6...v0.2.7) (2026-10-07)
+
+
+### Bug Fixes
+
+* **deps:** bump the production-dependencies group with 3 updates ([#33](https://github.com/chrischall/microsoft-teams-mcp/issues/33)) ([f87936f](https://github.com/chrischall/microsoft-teams-mcp/commit/f87936fb326cb441d16ebd6c2ac481b3f299fd9d))
+* **deps:** pick up mcp-utils 2.15.0 elicitation opt-out and fetchproxy 3.6.0 room-frame fix ([#35](https://github.com/chrischall/microsoft-teams-mcp/issues/35)) ([d99f34f](https://github.com/chrischall/microsoft-teams-mcp/commit/d99f34fabc98d925aff40f8ff4bc6ec7a851739c))
+
 ## [0.2.6](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.2.5...v0.2.6) (2026-10-05)
 
 
