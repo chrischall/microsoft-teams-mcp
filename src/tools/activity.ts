@@ -23,7 +23,7 @@ export function registerActivityTools(server: McpServer, client: TeamsClient): v
         'or chat it happened in). Requires the user\'s browser to have the Activity view ' +
         'open — if it returns nothing, ask them to click the bell icon in the left nav.' +
         UNTRUSTED_DESCRIPTION_SUFFIX,
-      annotations: toolAnnotations({ readOnly: true }),
+      annotations: toolAnnotations({ readOnly: true, openWorld: true }),
       inputSchema: { limit: limitArg(200, 'activity rows') },
     },
     async ({ limit }) => {

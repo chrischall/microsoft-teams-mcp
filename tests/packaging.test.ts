@@ -2,13 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { versionSyncTest, createTestHarness } from '@chrischall/mcp-utils/test';
-import type { McpServer } from '@modelcontextprotocol/server';
-import { registerChatTools } from '../src/tools/chat.js';
-import { registerChannelTools } from '../src/tools/channels.js';
-import { registerActivityTools } from '../src/tools/activity.js';
-import { registerHealthcheckTool } from '../src/tools/healthcheck.js';
-import type { TeamsClient } from '../src/client.js';
+import { versionSyncTest } from '@chrischall/mcp-utils/test';
+import { servedTools } from './served-tools.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const read = (p: string) => JSON.parse(readFileSync(join(root, p), 'utf8'));
@@ -103,31 +98,42 @@ describe('publish scaffold', () => {
   });
 });
 
+/**
+ * The env keys the server honours. `TEAMS_WS_PORT` is this server's own
+ * (.env.example / README); `FETCHPROXY_WS_HOST` and `FETCHPROXY_IDENTITY_DIR`
+ * are read by the bundled `@fetchproxy/server` because this server never
+ * passes `host` / `identityDir`. It always passes `port`, so
+ * `FETCHPROXY_WS_PORT` is NOT honoured and is not declared.
+ */
+const ENV = ['FETCHPROXY_IDENTITY_DIR', 'FETCHPROXY_WS_HOST', 'TEAMS_WS_PORT'];
+
 describe('manifest tool roster', () => {
   it('matches the registered tools in BOTH directions', async () => {
-    const client = {
-      listChats: async () => [],
-      getOpenChatMessages: async () => [],
-      listTeamsAndChannels: async () => [],
-      getOpenChannelPosts: async () => [],
-      getActivity: async () => [],
-      transport: { status: () => ({}), runProbe: async () => ({ ok: true, elapsed_ms: 0, bridge: {} }) },
-    } as unknown as TeamsClient;
-
-    const h = await createTestHarness((server: McpServer) => {
-      registerChatTools(server, client);
-      registerChannelTools(server, client);
-      registerActivityTools(server, client);
-      registerHealthcheckTool(server, client);
-    });
-    const registered = (await h.listTools()).map((t) => t.name).sort();
-    await h.close();
-
+    const registered = (await servedTools()).map((t) => t.name).sort();
     const declared = read('manifest.json').tools.map((t: { name: string }) => t.name).sort();
     expect(declared).toEqual(registered);
 
     for (const t of read('manifest.json').tools) {
       expect(t.description, `${t.name} needs a description`).toBeTruthy();
     }
+  });
+});
+
+describe('install surfaces pass every honoured env key', () => {
+  it('manifest.json passes each one from an optional user_config entry', () => {
+    const m = read('manifest.json');
+    const env = (m.server.mcp_config.env ?? {}) as Record<string, string>;
+    expect(Object.keys(env).sort()).toEqual(ENV);
+    for (const [key, value] of Object.entries(env)) {
+      const ref = /^\$\{user_config\.([^}]+)\}$/.exec(value)?.[1];
+      expect(ref, key).toBeDefined();
+      expect(m.user_config?.[ref!]?.required, key).toBe(false);
+    }
+  });
+
+  it('server.json declares each one as optional', () => {
+    const vars = read('server.json').packages[0].environmentVariables as { name: string; isRequired: boolean }[];
+    expect(vars.map((v) => v.name).sort()).toEqual(ENV);
+    expect(vars.every((v) => v.isRequired === false)).toBe(true);
   });
 });

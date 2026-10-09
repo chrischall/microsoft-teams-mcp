@@ -24,7 +24,7 @@ export function registerChannelTools(server: McpServer, client: TeamsClient): vo
         'team. Requires the user\'s browser to have the Teams-and-Channels view open (not ' +
         'Chat) — if it returns nothing, ask them to click "Teams" in the left nav.' +
         UNTRUSTED_DESCRIPTION_SUFFIX,
-      annotations: toolAnnotations({ readOnly: true }),
+      annotations: toolAnnotations({ readOnly: true, openWorld: true }),
       inputSchema: { limit: limitArg(300, 'team and channel rows') },
     },
     async ({ limit }) => {
@@ -60,7 +60,7 @@ export function registerChannelTools(server: McpServer, client: TeamsClient): vo
         'teams_list_teams_and_channels to show them what is available.' +
         OPEN_CONVERSATION_DESCRIPTION +
         UNTRUSTED_DESCRIPTION_SUFFIX,
-      annotations: toolAnnotations({ readOnly: true }),
+      annotations: toolAnnotations({ readOnly: true, openWorld: true }),
       inputSchema: { limit: limitArg(200, 'posts') },
     },
     async ({ limit }) => {
