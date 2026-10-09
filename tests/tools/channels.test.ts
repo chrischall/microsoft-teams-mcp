@@ -148,7 +148,7 @@ describe('teams_get_open_channel_posts', () => {
 
   it('tells the model to confirm the channel and warns about multiple Teams tabs', async () => {
     const harness = await createTestHarness((server) => registerChannelTools(server, fakeClient()));
-    const tool = (await harness.listTools()).find((t) => t.name === 'teams_get_open_channel_posts');
+    const tool = (await harness.client.listTools()).tools.find((t) => t.name === 'teams_get_open_channel_posts');
 
     expect(tool?.description).toMatch(/confirm/i);
     expect(tool?.description).toMatch(/more than one .*tab/i);
@@ -171,12 +171,44 @@ describe('teams_get_open_channel_posts', () => {
     await harness.close();
   });
 
-  it('takes no arguments', async () => {
+  it('takes only optional trimming arguments', async () => {
     const client = fakeClient();
     const harness = await createTestHarness((server) => registerChannelTools(server, client));
 
-    const tools = await harness.listTools();
-    expect(tools.find((t) => t.name === 'teams_get_open_channel_posts')).toBeDefined();
+    const tool = (await harness.client.listTools()).tools.find((t) => t.name === 'teams_get_open_channel_posts');
+    const schema = tool?.inputSchema as { properties?: Record<string, unknown>; required?: string[] };
+
+    expect(Object.keys(schema.properties ?? {}).sort()).toEqual(['limit']);
+    expect(schema.required ?? []).toEqual([]);
+    await harness.close();
+  });
+});
+
+describe('channel tools trimming', () => {
+  it('returns the newest posts up to limit', async () => {
+    const posts = Array.from({ length: 4 }, (_, i) => ({ sender: 'A', text: `post ${i}` }));
+    const client = fakeClient({ getOpenChannelPosts: vi.fn().mockResolvedValue(posts) });
+    const harness = await createTestHarness((server) => registerChannelTools(server, client));
+
+    const data = parseToolResult(
+      await harness.callTool('teams_get_open_channel_posts', { limit: 2 }),
+    ) as Record<string, unknown>;
+
+    expect((data.posts as { text: string }[]).map((p) => p.text)).toEqual(['post 2', 'post 3']);
+    expect(data.truncated).toMatchObject({ total: 4, returned: 2 });
+    await harness.close();
+  });
+
+  it('returns the first rows of the teams-and-channels sidebar up to limit', async () => {
+    const rows = Array.from({ length: 4 }, (_, i) => ({ title: `row ${i}`, itemType: 'channel' }));
+    const client = fakeClient({ listTeamsAndChannels: vi.fn().mockResolvedValue(rows) });
+    const harness = await createTestHarness((server) => registerChannelTools(server, client));
+
+    const data = parseToolResult(
+      await harness.callTool('teams_list_teams_and_channels', { limit: 3 }),
+    ) as Record<string, unknown>;
+
+    expect((data.rows as { title: string }[]).map((r) => r.title)).toEqual(['row 0', 'row 1', 'row 2']);
     await harness.close();
   });
 });

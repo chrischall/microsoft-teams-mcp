@@ -74,14 +74,29 @@ describe('teams_get_activity', () => {
     await harness.close();
   });
 
-  it('takes no arguments', async () => {
+  it('returns the first (most recent) rows up to limit', async () => {
+    const rows = Array.from({ length: 60 }, (_, i) => ({ title: `item ${i}` }));
+    const client = fakeClient({ getActivity: vi.fn().mockResolvedValue(rows) });
+    const harness = await createTestHarness((server) => registerActivityTools(server, client));
+
+    const all = parseToolResult(await harness.callTool('teams_get_activity')) as Record<string, unknown>;
+    const one = parseToolResult(await harness.callTool('teams_get_activity', { limit: 1 })) as Record<string, unknown>;
+
+    expect(all.rows).toHaveLength(50);
+    expect(all.truncated).toMatchObject({ total: 60, returned: 50 });
+    expect(one.rows).toEqual([{ title: 'item 0' }]);
+    await harness.close();
+  });
+
+  it('takes only optional trimming arguments', async () => {
     const client = fakeClient();
     const harness = await createTestHarness((server) => registerActivityTools(server, client));
 
-    const tools = await harness.listTools();
-    const tool = tools.find((t) => t.name === 'teams_get_activity');
+    const tool = (await harness.client.listTools()).tools.find((t) => t.name === 'teams_get_activity');
+    const schema = tool?.inputSchema as { properties?: Record<string, unknown>; required?: string[] };
 
-    expect(tool).toBeDefined();
+    expect(Object.keys(schema.properties ?? {}).sort()).toEqual(['limit']);
+    expect(schema.required ?? []).toEqual([]);
     await harness.close();
   });
 

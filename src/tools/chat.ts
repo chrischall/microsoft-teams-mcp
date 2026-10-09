@@ -11,6 +11,7 @@ import type { TeamsClient } from '../client.js';
 import { wrapBridgeError } from './errors.js';
 import { untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
 import { OPEN_CONVERSATION_DESCRIPTION, readOpenConversation } from './conversation.js';
+import { filterSince, limitArg, sinceArg, trimRows } from './limit.js';
 
 export function registerChatTools(server: McpServer, client: TeamsClient): void {
   server.registerTool(
@@ -24,14 +25,14 @@ export function registerChatTools(server: McpServer, client: TeamsClient): void 
         'navigate capability). Reads the currently-rendered list from the user\'s live browser tab.' +
         UNTRUSTED_DESCRIPTION_SUFFIX,
       annotations: toolAnnotations({ readOnly: true }),
-      inputSchema: {},
+      inputSchema: { limit: limitArg(200, 'chats') },
     },
-    async () => {
+    async ({ limit }) => {
       try {
         const rows = await client.listChats();
         return untrustedResult(
           rows.length > 0
-            ? { rows }
+            ? trimRows(rows, limit, 'start', 200)
             : {
                 rows,
                 empty_hint:
@@ -59,13 +60,14 @@ export function registerChatTools(server: McpServer, client: TeamsClient): void 
         OPEN_CONVERSATION_DESCRIPTION +
         UNTRUSTED_DESCRIPTION_SUFFIX,
       annotations: toolAnnotations({ readOnly: true }),
-      inputSchema: {},
+      inputSchema: { limit: limitArg(200, 'messages'), since: sinceArg },
     },
-    async () => {
+    async ({ limit, since }) => {
       try {
-        const messages = await client.getOpenChatMessages();
+        const all = await client.getOpenChatMessages();
         const identity = await readOpenConversation(client, 'chat');
-        return untrustedResult({ ...identity, messages });
+        const { rows: messages, truncated } = trimRows(filterSince(all, since), limit, 'end', 200);
+        return untrustedResult({ ...identity, messages, ...(truncated ? { truncated } : {}) });
       } catch (err) {
         throw wrapBridgeError(err, 'read the open chat');
       }

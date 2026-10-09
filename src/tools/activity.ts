@@ -9,6 +9,7 @@ import { toolAnnotations } from '@chrischall/mcp-utils';
 import type { TeamsClient } from '../client.js';
 import { wrapBridgeError } from './errors.js';
 import { untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
+import { limitArg, trimRows } from './limit.js';
 
 export function registerActivityTools(server: McpServer, client: TeamsClient): void {
   server.registerTool(
@@ -23,14 +24,14 @@ export function registerActivityTools(server: McpServer, client: TeamsClient): v
         'open — if it returns nothing, ask them to click the bell icon in the left nav.' +
         UNTRUSTED_DESCRIPTION_SUFFIX,
       annotations: toolAnnotations({ readOnly: true }),
-      inputSchema: {},
+      inputSchema: { limit: limitArg(200, 'activity rows') },
     },
-    async () => {
+    async ({ limit }) => {
       try {
         const rows = await client.getActivity();
         return untrustedResult(
           rows.length > 0
-            ? { rows }
+            ? trimRows(rows, limit, 'start', 200)
             : {
                 rows,
                 empty_hint:
