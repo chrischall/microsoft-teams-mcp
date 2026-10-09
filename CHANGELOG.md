@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.3.0](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.2.7...v0.3.0) (2026-10-09)
+
+
+### Features
+
+* add limit/since to read tools and resolve low-severity audit findings ([#36](https://github.com/chrischall/microsoft-teams-mcp/issues/36)) ([4f12fea](https://github.com/chrischall/microsoft-teams-mcp/commit/4f12fea2c7777f2cffadbe95d813b1f36691c862))
+
+
+### Bug Fixes
+
+* annotate tools truthfully and sync manifests with the served tools ([#40](https://github.com/chrischall/microsoft-teams-mcp/issues/40)) ([cf3021d](https://github.com/chrischall/microsoft-teams-mcp/commit/cf3021d641144c81c5c4f42165c7d0192438be3f))
+* **deps:** bump source-map-js from 1.2.1 to 1.2.2 in the security group across 1 directory ([#39](https://github.com/chrischall/microsoft-teams-mcp/issues/39)) ([3e2914b](https://github.com/chrischall/microsoft-teams-mcp/commit/3e2914b2b88d5d48bb29da95ec76cbc75b8bca17))
+* **deps:** update @chrischall/mcp-utils to 3.0.0 ([#38](https://github.com/chrischall/microsoft-teams-mcp/issues/38)) ([5a2b38b](https://github.com/chrischall/microsoft-teams-mcp/commit/5a2b38b8caec2ac280c385da1fcd1030461e2a87))
+* point the plugin at its MCP config with the mcpServers key Claude Code reads ([#41](https://github.com/chrischall/microsoft-teams-mcp/issues/41)) ([b0686cb](https://github.com/chrischall/microsoft-teams-mcp/commit/b0686cbe95b35118a6717d5e3b532e76e0c6830b))
+
 ## [0.2.7](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.2.6...v0.2.7) (2026-10-07)
 
 
