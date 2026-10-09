@@ -11,6 +11,27 @@ function fakeClient(overrides: Partial<TeamsClient> = {}): TeamsClient {
 }
 
 describe('teams_get_activity', () => {
+  it('says the Activity view may not be open when nothing is rendered', async () => {
+    const client = fakeClient({ getActivity: vi.fn().mockResolvedValue([]) });
+    const harness = await createTestHarness((server) => registerActivityTools(server, client));
+
+    const data = parseToolResult(await harness.callTool('teams_get_activity')) as Record<string, unknown>;
+
+    expect(data.rows).toEqual([]);
+    expect(String(data.empty_hint)).toMatch(/Activity view/);
+    await harness.close();
+  });
+
+  it('adds no empty_hint when rows were read', async () => {
+    const client = fakeClient({ getActivity: vi.fn().mockResolvedValue([{ title: 'mention' }]) });
+    const harness = await createTestHarness((server) => registerActivityTools(server, client));
+
+    const data = parseToolResult(await harness.callTool('teams_get_activity')) as Record<string, unknown>;
+
+    expect(data).not.toHaveProperty('empty_hint');
+    await harness.close();
+  });
+
   it('returns the activity feed from the client', async () => {
     const client = fakeClient({
       getActivity: vi.fn().mockResolvedValue([

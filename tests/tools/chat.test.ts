@@ -13,6 +13,27 @@ function fakeClient(overrides: Partial<TeamsClient> = {}): TeamsClient {
 }
 
 describe('teams_list_chats', () => {
+  it('says the Chat view may not be open when nothing is rendered', async () => {
+    const client = fakeClient({ listChats: vi.fn().mockResolvedValue([]) });
+    const harness = await createTestHarness((server) => registerChatTools(server, client));
+
+    const data = parseToolResult(await harness.callTool('teams_list_chats')) as Record<string, unknown>;
+
+    expect(data.rows).toEqual([]);
+    expect(String(data.empty_hint)).toMatch(/Chat view/);
+    await harness.close();
+  });
+
+  it('adds no empty_hint when rows were read', async () => {
+    const client = fakeClient({ listChats: vi.fn().mockResolvedValue([{ title: 'Standup' }]) });
+    const harness = await createTestHarness((server) => registerChatTools(server, client));
+
+    const data = parseToolResult(await harness.callTool('teams_list_chats')) as Record<string, unknown>;
+
+    expect(data).not.toHaveProperty('empty_hint');
+    await harness.close();
+  });
+
   it('returns the chats from the client', async () => {
     const client = fakeClient({
       listChats: vi.fn().mockResolvedValue([

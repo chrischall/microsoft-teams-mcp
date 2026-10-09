@@ -29,7 +29,16 @@ export function registerChatTools(server: McpServer, client: TeamsClient): void 
     async () => {
       try {
         const rows = await client.listChats();
-        return untrustedResult({ rows });
+        return untrustedResult(
+          rows.length > 0
+            ? { rows }
+            : {
+                rows,
+                empty_hint:
+                  'No chat list is rendered. The Teams tab is probably not on the Chat view — ' +
+                  'ask the user to click Chat in the left nav, then retry.',
+              },
+        );
       } catch (err) {
         throw wrapBridgeError(err, 'list chats');
       }

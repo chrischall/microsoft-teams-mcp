@@ -13,6 +13,27 @@ function fakeClient(overrides: Partial<TeamsClient> = {}): TeamsClient {
 }
 
 describe('teams_list_teams_and_channels', () => {
+  it('says the Teams view may not be open when nothing is rendered', async () => {
+    const client = fakeClient({ listTeamsAndChannels: vi.fn().mockResolvedValue([]) });
+    const harness = await createTestHarness((server) => registerChannelTools(server, client));
+
+    const data = parseToolResult(await harness.callTool('teams_list_teams_and_channels')) as Record<string, unknown>;
+
+    expect(data.rows).toEqual([]);
+    expect(String(data.empty_hint)).toMatch(/Teams view/);
+    await harness.close();
+  });
+
+  it('adds no empty_hint when rows were read', async () => {
+    const client = fakeClient({ listTeamsAndChannels: vi.fn().mockResolvedValue([{ title: 'General', itemType: 'channel' }]) });
+    const harness = await createTestHarness((server) => registerChannelTools(server, client));
+
+    const data = parseToolResult(await harness.callTool('teams_list_teams_and_channels')) as Record<string, unknown>;
+
+    expect(data).not.toHaveProperty('empty_hint');
+    await harness.close();
+  });
+
   it('returns the teams and channels from the client', async () => {
     const client = fakeClient({
       listTeamsAndChannels: vi.fn().mockResolvedValue([

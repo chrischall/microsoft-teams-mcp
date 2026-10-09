@@ -28,7 +28,16 @@ export function registerActivityTools(server: McpServer, client: TeamsClient): v
     async () => {
       try {
         const rows = await client.getActivity();
-        return untrustedResult({ rows });
+        return untrustedResult(
+          rows.length > 0
+            ? { rows }
+            : {
+                rows,
+                empty_hint:
+                  'No Activity feed is rendered. The Teams tab is probably not on the Activity view — ' +
+                  'ask the user to click the bell icon (Activity) in the left nav, then retry.',
+              },
+        );
       } catch (err) {
         throw wrapBridgeError(err, 'read the Activity feed');
       }

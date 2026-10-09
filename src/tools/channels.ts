@@ -29,7 +29,16 @@ export function registerChannelTools(server: McpServer, client: TeamsClient): vo
     async () => {
       try {
         const rows = await client.listTeamsAndChannels();
-        return untrustedResult({ rows });
+        return untrustedResult(
+          rows.length > 0
+            ? { rows }
+            : {
+                rows,
+                empty_hint:
+                  'No teams or channels are rendered. The Teams tab is probably not on the Teams view — ' +
+                  'ask the user to click Teams in the left nav, then retry.',
+              },
+        );
       } catch (err) {
         throw wrapBridgeError(err, 'list teams and channels');
       }
