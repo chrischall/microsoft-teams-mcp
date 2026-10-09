@@ -199,24 +199,26 @@ describe('TeamsClient.close', () => {
   });
 });
 
-describe('TeamsClient.getOpenConversation', () => {
-  it('reads the openConversation selector and returns the selected sidebar row', async () => {
+describe('TeamsClient.getSelectedConversations', () => {
+  it('reads the openConversation selector and returns every selected sidebar row', async () => {
     const readDomList = vi.fn().mockResolvedValue([
+      { title: 'General', conversationKey: '19:def@thread.tacv2', itemType: 'channel' },
       { title: 'Bob Smith', conversationKey: '19:abc@thread.v2', itemType: 'chat' },
     ]);
     const client = new TeamsClient({ transport: mockTransport({ readDomList }) });
 
-    const conversation = await client.getOpenConversation();
-
-    expect(conversation).toEqual({ title: 'Bob Smith', conversationKey: '19:abc@thread.v2', itemType: 'chat' });
+    expect(await client.getSelectedConversations()).toEqual([
+      { title: 'General', conversationKey: '19:def@thread.tacv2', itemType: 'channel' },
+      { title: 'Bob Smith', conversationKey: '19:abc@thread.v2', itemType: 'chat' },
+    ]);
     expect(readDomList).toHaveBeenCalledWith({ name: 'openConversation', domain: DOMAINS[0] });
   });
 
-  it('returns null when no sidebar row is marked selected', async () => {
+  it('returns no rows when no sidebar row is marked selected', async () => {
     const readDomList = vi.fn().mockResolvedValue([]);
     const client = new TeamsClient({ transport: mockTransport({ readDomList }) });
 
-    expect(await client.getOpenConversation()).toBeNull();
+    expect(await client.getSelectedConversations()).toEqual([]);
   });
 });
 

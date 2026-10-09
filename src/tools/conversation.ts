@@ -23,6 +23,11 @@ export interface ConversationIdentity {
 /**
  * Best-effort: the identity read must never cost the user the messages
  * themselves, so a failed read degrades to `null` plus a warning.
+ *
+ * Only a selected row whose `itemType` matches `kind` counts: the selector
+ * spans both sidebars, so a channel row left selected while a chat is open
+ * must not be reported as "the chat". If no row matches, more than one does,
+ * or the row carries no `itemType`, the conversation is unidentified.
  */
 export async function readOpenConversation(
   client: TeamsClient,
@@ -30,7 +35,8 @@ export async function readOpenConversation(
 ): Promise<ConversationIdentity> {
   let conversation: OpenConversationRow | null = null;
   try {
-    conversation = await client.getOpenConversation();
+    const matches = (await client.getSelectedConversations()).filter((row) => row.itemType === kind);
+    conversation = matches.length === 1 ? matches[0] : null;
   } catch {
     conversation = null;
   }

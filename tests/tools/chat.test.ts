@@ -7,7 +7,7 @@ function fakeClient(overrides: Partial<TeamsClient> = {}): TeamsClient {
   return {
     listChats: vi.fn().mockResolvedValue([]),
     getOpenChatMessages: vi.fn().mockResolvedValue([]),
-    getOpenConversation: vi.fn().mockResolvedValue(null),
+    getSelectedConversations: vi.fn().mockResolvedValue([]),
     ...overrides,
   } as unknown as TeamsClient;
 }
@@ -67,9 +67,7 @@ describe('teams_get_open_chat_messages', () => {
   it('says which conversation the messages came from', async () => {
     const client = fakeClient({
       getOpenChatMessages: vi.fn().mockResolvedValue([{ sender: 'Bob', text: 'hi' }]),
-      getOpenConversation: vi
-        .fn()
-        .mockResolvedValue({ title: 'Bob Smith', conversationKey: '19:abc@thread.v2', itemType: 'chat' }),
+      getSelectedConversations: vi.fn().mockResolvedValue([{ title: 'Bob Smith', conversationKey: '19:abc@thread.v2', itemType: 'chat' }]),
     });
     const harness = await createTestHarness((server) => registerChatTools(server, client));
 
@@ -84,7 +82,7 @@ describe('teams_get_open_chat_messages', () => {
   it('warns when it cannot identify the open conversation', async () => {
     const client = fakeClient({
       getOpenChatMessages: vi.fn().mockResolvedValue([{ sender: 'Bob', text: 'hi' }]),
-      getOpenConversation: vi.fn().mockResolvedValue(null),
+      getSelectedConversations: vi.fn().mockResolvedValue([]),
     });
     const harness = await createTestHarness((server) => registerChatTools(server, client));
 
@@ -96,10 +94,72 @@ describe('teams_get_open_chat_messages', () => {
     await harness.close();
   });
 
+  it('does not report a selected channel row as the open chat', async () => {
+    const client = fakeClient({
+      getOpenChatMessages: vi.fn().mockResolvedValue([{ sender: 'Bob', text: 'hi' }]),
+      getSelectedConversations: vi
+        .fn()
+        .mockResolvedValue([{ title: 'General', conversationKey: '19:def@thread.tacv2', itemType: 'channel' }]),
+    });
+    const harness = await createTestHarness((server) => registerChatTools(server, client));
+
+    const data = parseToolResult(await harness.callTool('teams_get_open_chat_messages')) as Record<string, unknown>;
+
+    expect(data.conversation).toBeNull();
+    expect(String(data.conversation_check)).toMatch(/could not identify/i);
+    expect(String(data.conversation_check)).not.toMatch(/General/);
+    await harness.close();
+  });
+
+  it('picks the chat row when a channel row is also marked selected', async () => {
+    const client = fakeClient({
+      getSelectedConversations: vi.fn().mockResolvedValue([
+        { title: 'General', conversationKey: '19:def@thread.tacv2', itemType: 'channel' },
+        { title: 'Bob Smith', conversationKey: '19:abc@thread.v2', itemType: 'chat' },
+      ]),
+    });
+    const harness = await createTestHarness((server) => registerChatTools(server, client));
+
+    const data = parseToolResult(await harness.callTool('teams_get_open_chat_messages')) as Record<string, unknown>;
+
+    expect(data.conversation).toEqual({ title: 'Bob Smith', conversationKey: '19:abc@thread.v2', itemType: 'chat' });
+    expect(String(data.conversation_check)).toMatch(/Bob Smith/);
+    await harness.close();
+  });
+
+  it('cannot identify the chat when several chat rows are marked selected', async () => {
+    const client = fakeClient({
+      getSelectedConversations: vi.fn().mockResolvedValue([
+        { title: 'Alice', conversationKey: '19:a@thread.v2', itemType: 'chat' },
+        { title: 'Bob Smith', conversationKey: '19:abc@thread.v2', itemType: 'chat' },
+      ]),
+    });
+    const harness = await createTestHarness((server) => registerChatTools(server, client));
+
+    const data = parseToolResult(await harness.callTool('teams_get_open_chat_messages')) as Record<string, unknown>;
+
+    expect(data.conversation).toBeNull();
+    expect(String(data.conversation_check)).toMatch(/could not identify/i);
+    await harness.close();
+  });
+
+  it('cannot identify the chat when the selected row carries no itemType', async () => {
+    const client = fakeClient({
+      getSelectedConversations: vi.fn().mockResolvedValue([{ title: 'Bob Smith', conversationKey: '19:abc@thread.v2' }]),
+    });
+    const harness = await createTestHarness((server) => registerChatTools(server, client));
+
+    const data = parseToolResult(await harness.callTool('teams_get_open_chat_messages')) as Record<string, unknown>;
+
+    expect(data.conversation).toBeNull();
+    expect(String(data.conversation_check)).toMatch(/could not identify/i);
+    await harness.close();
+  });
+
   it('still returns the messages when reading the conversation identity fails', async () => {
     const client = fakeClient({
       getOpenChatMessages: vi.fn().mockResolvedValue([{ sender: 'Bob', text: 'hi' }]),
-      getOpenConversation: vi.fn().mockRejectedValue(new Error('read_dom_list name not in declared set: openConversation')),
+      getSelectedConversations: vi.fn().mockRejectedValue(new Error('read_dom_list name not in declared set: openConversation')),
     });
     const harness = await createTestHarness((server) => registerChatTools(server, client));
 

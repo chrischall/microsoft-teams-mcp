@@ -345,12 +345,14 @@ export class TeamsClient {
   }
 
   /**
-   * The sidebar row Teams marks as selected — i.e. which chat or channel is
-   * currently open — or `null` when none can be identified.
+   * Every sidebar row Teams marks as selected (up to 5). Usually one, but the
+   * selector spans BOTH the Chat and the Teams-and-Channels sidebars, so a
+   * channel row can stay selected while a chat is open (and vice versa) —
+   * callers must pick by `itemType` (see `tools/conversation.ts`), never
+   * just take the first row.
    */
-  async getOpenConversation(): Promise<OpenConversationRow | null> {
-    const rows = (await this.#readDomList('openConversation')) as OpenConversationRow[];
-    return rows[0] ?? null;
+  async getSelectedConversations(): Promise<OpenConversationRow[]> {
+    return (await this.#readDomList('openConversation')) as OpenConversationRow[];
   }
 
   /** The Activity feed (the bell icon in the left nav), regardless of which item is selected. */

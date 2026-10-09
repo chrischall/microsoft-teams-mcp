@@ -7,7 +7,7 @@ function fakeClient(overrides: Partial<TeamsClient> = {}): TeamsClient {
   return {
     listTeamsAndChannels: vi.fn().mockResolvedValue([]),
     getOpenChannelPosts: vi.fn().mockResolvedValue([]),
-    getOpenConversation: vi.fn().mockResolvedValue(null),
+    getSelectedConversations: vi.fn().mockResolvedValue([]),
     ...overrides,
   } as unknown as TeamsClient;
 }
@@ -82,9 +82,7 @@ describe('teams_get_open_channel_posts', () => {
   it('says which channel the posts came from', async () => {
     const client = fakeClient({
       getOpenChannelPosts: vi.fn().mockResolvedValue([{ sender: 'Alice', text: 'hi' }]),
-      getOpenConversation: vi
-        .fn()
-        .mockResolvedValue({ title: 'General', conversationKey: '19:def@thread.tacv2', itemType: 'channel' }),
+      getSelectedConversations: vi.fn().mockResolvedValue([{ title: 'General', conversationKey: '19:def@thread.tacv2', itemType: 'channel' }]),
     });
     const harness = await createTestHarness((server) => registerChannelTools(server, client));
 
@@ -95,10 +93,26 @@ describe('teams_get_open_channel_posts', () => {
     await harness.close();
   });
 
+  it('does not report a selected chat row as the open channel', async () => {
+    const client = fakeClient({
+      getOpenChannelPosts: vi.fn().mockResolvedValue([{ sender: 'Alice', text: 'hi' }]),
+      getSelectedConversations: vi
+        .fn()
+        .mockResolvedValue([{ title: 'Bob Smith', conversationKey: '19:abc@thread.v2', itemType: 'chat' }]),
+    });
+    const harness = await createTestHarness((server) => registerChannelTools(server, client));
+
+    const data = parseToolResult(await harness.callTool('teams_get_open_channel_posts')) as Record<string, unknown>;
+
+    expect(data.conversation).toBeNull();
+    expect(String(data.conversation_check)).toMatch(/could not identify/i);
+    await harness.close();
+  });
+
   it('warns when it cannot identify the open channel', async () => {
     const client = fakeClient({
       getOpenChannelPosts: vi.fn().mockResolvedValue([]),
-      getOpenConversation: vi.fn().mockRejectedValue(new Error('boom')),
+      getSelectedConversations: vi.fn().mockRejectedValue(new Error('boom')),
     });
     const harness = await createTestHarness((server) => registerChannelTools(server, client));
 
