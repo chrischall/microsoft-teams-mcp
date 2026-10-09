@@ -41,6 +41,39 @@ describe('TeamsClient.listChats', () => {
 
     expect(transport.start).toHaveBeenCalledTimes(1);
   });
+
+  it('starts the transport once when the first calls arrive in parallel', async () => {
+    const readDomList = vi.fn().mockResolvedValue([]);
+    const transport = mockTransport({ readDomList });
+    let release!: () => void;
+    (transport.start as ReturnType<typeof vi.fn>).mockImplementation(
+      () => new Promise<void>((resolve) => { release = resolve; }),
+    );
+    const client = new TeamsClient({ transport });
+
+    const calls = Promise.all([client.listChats(), client.getOpenChatMessages(), client.getActivity()]);
+    await Promise.resolve();
+    release();
+    await calls;
+
+    expect(transport.start).toHaveBeenCalledTimes(1);
+    expect(readDomList).toHaveBeenCalledTimes(3);
+  });
+
+  it('retries the start on the next call after a failed start', async () => {
+    const readDomList = vi.fn().mockResolvedValue([]);
+    const transport = mockTransport({ readDomList });
+    (transport.start as ReturnType<typeof vi.fn>)
+      .mockRejectedValueOnce(new Error('identity load failed'))
+      .mockResolvedValue(undefined);
+    const client = new TeamsClient({ transport });
+
+    await expect(client.listChats()).rejects.toThrow(/identity load failed/);
+    await client.listChats();
+
+    expect(transport.start).toHaveBeenCalledTimes(2);
+    expect(readDomList).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('TeamsClient.getOpenChatMessages', () => {
