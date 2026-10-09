@@ -92,6 +92,11 @@ describe('publish scaffold', () => {
     expect(unknown).toEqual([]);
   });
 
+  it('names the same author in the .mcpb manifest as in the plugin manifest', () => {
+    expect(read('manifest.json').author.name).toBe('Chris Hall');
+    expect(read('manifest.json').author.name).toBe(read('.claude-plugin/plugin.json').author.name);
+  });
+
   it('does not ship mint.yaml inside the .mcpb bundle', () => {
     const ignore = readFileSync(join(root, '.mcpbignore'), 'utf8');
     expect(ignore).toMatch(/^\*\.ya?ml\s*$/m);
