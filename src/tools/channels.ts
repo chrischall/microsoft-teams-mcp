@@ -10,6 +10,7 @@ import type { TeamsClient } from '../client.js';
 import { wrapBridgeError } from './errors.js';
 import { untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
 import { OPEN_CONVERSATION_DESCRIPTION, readOpenConversation } from './conversation.js';
+import { limitArg, trimRows } from './limit.js';
 
 export function registerChannelTools(server: McpServer, client: TeamsClient): void {
   server.registerTool(
@@ -24,12 +25,21 @@ export function registerChannelTools(server: McpServer, client: TeamsClient): vo
         'Chat) — if it returns nothing, ask them to click "Teams" in the left nav.' +
         UNTRUSTED_DESCRIPTION_SUFFIX,
       annotations: toolAnnotations({ readOnly: true }),
-      inputSchema: {},
+      inputSchema: { limit: limitArg(300, 'team and channel rows') },
     },
-    async () => {
+    async ({ limit }) => {
       try {
         const rows = await client.listTeamsAndChannels();
-        return untrustedResult({ rows });
+        return untrustedResult(
+          rows.length > 0
+            ? trimRows(rows, limit, 'start', 300)
+            : {
+                rows,
+                empty_hint:
+                  'No teams or channels are rendered. The Teams tab is probably not on the Teams view — ' +
+                  'ask the user to click Teams in the left nav, then retry.',
+              },
+        );
       } catch (err) {
         throw wrapBridgeError(err, 'list teams and channels');
       }
@@ -51,13 +61,14 @@ export function registerChannelTools(server: McpServer, client: TeamsClient): vo
         OPEN_CONVERSATION_DESCRIPTION +
         UNTRUSTED_DESCRIPTION_SUFFIX,
       annotations: toolAnnotations({ readOnly: true }),
-      inputSchema: {},
+      inputSchema: { limit: limitArg(200, 'posts') },
     },
-    async () => {
+    async ({ limit }) => {
       try {
-        const posts = await client.getOpenChannelPosts();
+        const all = await client.getOpenChannelPosts();
         const identity = await readOpenConversation(client, 'channel');
-        return untrustedResult({ ...identity, posts });
+        const { rows: posts, truncated } = trimRows(all, limit, 'end', 200);
+        return untrustedResult({ ...identity, posts, ...(truncated ? { truncated } : {}) });
       } catch (err) {
         throw wrapBridgeError(err, 'read the open channel');
       }

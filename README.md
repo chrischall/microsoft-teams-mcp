@@ -106,7 +106,13 @@ Everything is optional — this server needs no credentials of its own.
   team/channel or chat it happened in). Requires the Activity view open.
 - `teams_healthcheck` — verifies the bridge can reach a signed-in tab.
 
-All five data tools are read-only and take no arguments.
+All five data tools are read-only. Each takes an optional `limit` (default
+50; max 200, or 300 for `teams_list_teams_and_channels`) and keeps the newest
+rows, adding a `truncated` field with the total when it left some out.
+`teams_get_open_chat_messages` also takes `since` (an ISO 8601 date-time) to
+drop older messages. When a list tool reads nothing, its result carries an
+`empty_hint` naming the Teams view to open, and `teams_healthcheck` reports
+`chat_view_not_open` rather than a healthy bridge if the Chat view isn't open.
 
 **No Calendar tool here.** Teams Web's Calendar renders inside an embedded
 `outlook.office.com` iframe, which the ContextMint Bridge (DOM reads only

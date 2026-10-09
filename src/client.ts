@@ -254,7 +254,13 @@ export interface TeamsClientOptions {
 
 export class TeamsClient {
   readonly #transport: FetchproxyTransport;
-  #started = false;
+  /**
+   * The in-flight (or settled) start, memoized so parallel first calls share
+   * ONE `transport.start()` — two concurrent starts would each create and
+   * persist a fresh fetchproxy identity keypair, leaving the paired key and
+   * the on-disk key out of step. Cleared on failure so the next call retries.
+   */
+  #starting: Promise<void> | undefined;
 
   constructor(opts: TeamsClientOptions = {}) {
     this.#transport =
@@ -284,10 +290,12 @@ export class TeamsClient {
    * lazily, so a server that never gets a tool call never touches the
    * bridge at all.
    */
-  async #ensureStarted(): Promise<void> {
-    if (this.#started) return;
-    await this.#transport.start();
-    this.#started = true;
+  #ensureStarted(): Promise<void> {
+    this.#starting ??= this.#transport.start().catch((e: unknown) => {
+      this.#starting = undefined;
+      throw e;
+    });
+    return this.#starting;
   }
 
   /** Reads a declared selector off the single supported domain's live tab. */
@@ -337,12 +345,14 @@ export class TeamsClient {
   }
 
   /**
-   * The sidebar row Teams marks as selected — i.e. which chat or channel is
-   * currently open — or `null` when none can be identified.
+   * Every sidebar row Teams marks as selected (up to 5). Usually one, but the
+   * selector spans BOTH the Chat and the Teams-and-Channels sidebars, so a
+   * channel row can stay selected while a chat is open (and vice versa) —
+   * callers must pick by `itemType` (see `tools/conversation.ts`), never
+   * just take the first row.
    */
-  async getOpenConversation(): Promise<OpenConversationRow | null> {
-    const rows = (await this.#readDomList('openConversation')) as OpenConversationRow[];
-    return rows[0] ?? null;
+  async getSelectedConversations(): Promise<OpenConversationRow[]> {
+    return (await this.#readDomList('openConversation')) as OpenConversationRow[];
   }
 
   /** The Activity feed (the bell icon in the left nav), regardless of which item is selected. */
@@ -352,7 +362,7 @@ export class TeamsClient {
 
   async close(): Promise<void> {
     await this.#transport.close();
-    this.#started = false;
+    this.#starting = undefined;
   }
 
   /** Non-secret bridge status for the healthcheck tool. */
