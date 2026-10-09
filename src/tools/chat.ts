@@ -24,7 +24,7 @@ export function registerChatTools(server: McpServer, client: TeamsClient): void 
         'conversationKey (Teams\' internal thread id — not usable to open the chat, there is no ' +
         'navigate capability). Reads the currently-rendered list from the user\'s live browser tab.' +
         UNTRUSTED_DESCRIPTION_SUFFIX,
-      annotations: toolAnnotations({ readOnly: true }),
+      annotations: toolAnnotations({ readOnly: true, openWorld: true }),
       inputSchema: { limit: limitArg(200, 'chats') },
     },
     async ({ limit }) => {
@@ -59,7 +59,7 @@ export function registerChatTools(server: McpServer, client: TeamsClient): void 
         'include the quoted preview concatenated in.' +
         OPEN_CONVERSATION_DESCRIPTION +
         UNTRUSTED_DESCRIPTION_SUFFIX,
-      annotations: toolAnnotations({ readOnly: true }),
+      annotations: toolAnnotations({ readOnly: true, openWorld: true }),
       inputSchema: { limit: limitArg(200, 'messages'), since: sinceArg },
     },
     async ({ limit, since }) => {
