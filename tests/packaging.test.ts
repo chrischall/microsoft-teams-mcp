@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { versionSyncTest } from '@chrischall/mcp-utils/test';
@@ -53,12 +53,29 @@ describe('publish scaffold', () => {
     expect(pkg.publishConfig?.access).toBe('public');
   });
 
+  /**
+   * Claude Code reads a plugin's MCP config from `mcpServers` (an unknown key
+   * such as `mcp` is silently ignored) and resolves the path against the
+   * PLUGIN ROOT -- the folder holding .claude-plugin/ -- not .claude-plugin/.
+   * The root .mcp.json always loads too, with a relative path meant for
+   * project-scoped launches; the plugin config must reuse its server name so
+   * it replaces that entry in a plugin install.
+   */
   it('points the plugin at a config that resolves under a plugin install', () => {
-    const pluginMcp = read('.claude-plugin/plugin.json').mcp as string;
-    const cfg = read(join('.claude-plugin', pluginMcp.replace(/^\.\//, '')));
-    const server = cfg.mcpServers.teams;
-    expect(server.args.join(' ')).toContain('${CLAUDE_PLUGIN_ROOT}');
-    expect(server.args.join(' ')).toContain('dist/bundle.js');
+    const plugin = read('.claude-plugin/plugin.json');
+    expect(plugin).not.toHaveProperty('mcp');
+    expect(typeof plugin.mcpServers).toBe('string');
+
+    const rel = (plugin.mcpServers as string).replace(/^\.\//, '');
+    expect(existsSync(join(root, rel)), `${rel} must exist under the plugin root`).toBe(true);
+
+    const cfg = read(rel);
+    const names = Object.keys(cfg.mcpServers);
+    expect(names).toEqual(Object.keys(read('.mcp.json').mcpServers));
+    for (const name of names) {
+      const args = cfg.mcpServers[name].args.join(' ');
+      expect(args).toContain('${CLAUDE_PLUGIN_ROOT}/dist/bundle.js');
+    }
   });
 
   it('ships the files an install and a registration need', () => {
