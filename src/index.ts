@@ -7,6 +7,7 @@ import type { TeamsDeps } from './deps.js';
 import { registerChatTools } from './tools/chat.js';
 import { registerChannelTools } from './tools/channels.js';
 import { registerConversationTools } from './tools/conversation.js';
+import { registerUnreadTools } from './tools/unread.js';
 import { registerActivityTools } from './tools/activity.js';
 import { registerHealthcheckTool } from './tools/healthcheck.js';
 
@@ -35,6 +36,7 @@ await runMcp({
     registerChatTools,
     registerChannelTools,
     registerConversationTools,
+    registerUnreadTools,
     registerActivityTools,
     registerHealthcheckTool,
   ],
