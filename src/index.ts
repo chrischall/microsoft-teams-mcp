@@ -6,6 +6,7 @@ import { ChatServiceClient } from './chatsvc.js';
 import type { TeamsDeps } from './deps.js';
 import { registerChatTools } from './tools/chat.js';
 import { registerChannelTools } from './tools/channels.js';
+import { registerConversationTools } from './tools/conversation.js';
 import { registerActivityTools } from './tools/activity.js';
 import { registerHealthcheckTool } from './tools/healthcheck.js';
 
@@ -30,5 +31,11 @@ await runMcp({
   banner:
     '[microsoft-teams-mcp] This project was developed and is maintained by AI. Use at your own discretion.',
   deps,
-  tools: [registerChatTools, registerChannelTools, registerActivityTools, registerHealthcheckTool],
+  tools: [
+    registerChatTools,
+    registerChannelTools,
+    registerConversationTools,
+    registerActivityTools,
+    registerHealthcheckTool,
+  ],
 });
