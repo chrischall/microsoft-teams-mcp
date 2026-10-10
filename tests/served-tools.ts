@@ -9,6 +9,8 @@ import { registerChannelTools } from '../src/tools/channels.js';
 import { registerConversationTools } from '../src/tools/conversation.js';
 import { registerUnreadTools } from '../src/tools/unread.js';
 import { registerAttachmentTools } from '../src/tools/attachment.js';
+import { registerSendTools } from '../src/tools/send.js';
+import { registerReactTools } from '../src/tools/react.js';
 import { registerActivityTools } from '../src/tools/activity.js';
 import { registerHealthcheckTool } from '../src/tools/healthcheck.js';
 
@@ -27,6 +29,8 @@ export async function servedTools() {
     registerConversationTools(server, deps);
     registerUnreadTools(server, deps);
     registerAttachmentTools(server, deps);
+    registerSendTools(server, deps);
+    registerReactTools(server, deps);
     registerActivityTools(server, deps);
     registerHealthcheckTool(server, deps);
   });

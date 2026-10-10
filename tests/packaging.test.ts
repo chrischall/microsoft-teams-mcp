@@ -166,6 +166,36 @@ describe('manifest tool roster', () => {
   });
 });
 
+/**
+ * teams_send_message and teams_react post as the user, visibly to everyone in
+ * the conversation, so every surface that describes them must say they ask
+ * first — and nothing may still claim the server only reads.
+ */
+describe('write tools are documented as confirm-gated', () => {
+  const readme = readFileSync(join(root, 'README.md'), 'utf8');
+  const skill = readFileSync(join(root, 'skills/teams-fpx/SKILL.md'), 'utf8');
+
+  it('says in each write tool\'s manifest description that it asks to confirm first', () => {
+    const tools = read('manifest.json').tools as { name: string; description: string }[];
+    for (const name of ['teams_send_message', 'teams_react']) {
+      expect(tools.find((t) => t.name === name)?.description, name).toMatch(/confirm/i);
+    }
+  });
+
+  it('README describes both writes, the confirmation flow and the self-chat to test in', () => {
+    for (const s of ['teams_send_message', 'teams_react', 'confirmToken', 'MCP_CONFIRM_MODE', '48:notes']) {
+      expect(readme, s).toContain(s);
+    }
+    expect(readme).not.toMatch(/all tools are read-only/i);
+  });
+
+  it('the skill points writes at the confirm-gated tools and demands approval for a shell send', () => {
+    expect(skill).toContain('teams_send_message');
+    expect(skill).toContain('teams_react');
+    expect(skill).toMatch(/explicit approval/i);
+  });
+});
+
 describe('install surfaces pass every honoured env key', () => {
   it('manifest.json passes each one from an optional user_config entry', () => {
     const m = read('manifest.json');

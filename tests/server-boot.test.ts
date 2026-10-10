@@ -81,7 +81,9 @@ describe('built server boots', () => {
         'teams_healthcheck',
         'teams_list_chats',
         'teams_list_teams_and_channels',
+        'teams_react',
         'teams_read_conversation',
+        'teams_send_message',
       ]);
     },
     60_000,

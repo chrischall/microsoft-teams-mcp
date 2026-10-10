@@ -9,6 +9,8 @@ import { registerChannelTools } from './tools/channels.js';
 import { registerConversationTools } from './tools/conversation.js';
 import { registerUnreadTools } from './tools/unread.js';
 import { registerAttachmentTools } from './tools/attachment.js';
+import { registerSendTools } from './tools/send.js';
+import { registerReactTools } from './tools/react.js';
 import { registerActivityTools } from './tools/activity.js';
 import { registerHealthcheckTool } from './tools/healthcheck.js';
 
@@ -39,6 +41,8 @@ await runMcp({
     registerConversationTools,
     registerUnreadTools,
     registerAttachmentTools,
+    registerSendTools,
+    registerReactTools,
     registerActivityTools,
     registerHealthcheckTool,
   ],

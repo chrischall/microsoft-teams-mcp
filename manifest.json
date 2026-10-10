@@ -4,7 +4,7 @@
   "name": "microsoft-teams-mcp",
   "display_name": "Microsoft Teams",
   "version": "0.3.0",
-  "description": "Microsoft Teams for Claude — read any chat or channel, your unread messages, and their attachments, via your signed-in browser",
+  "description": "Microsoft Teams for Claude — read any chat or channel, your unread messages, and their attachments, and send messages and reactions (each confirmed first), via your signed-in browser",
   "author": {
     "name": "Chris Hall",
     "email": "chris.c.hall@gmail.com",
@@ -129,6 +129,14 @@
     {
       "name": "teams_get_attachment",
       "description": "Fetch a message's inline image, or a shared file's metadata and open link"
+    },
+    {
+      "name": "teams_send_message",
+      "description": "Post a message (with quote-replies, @mentions and emoji) to any chat or channel — asks you to confirm first"
+    },
+    {
+      "name": "teams_react",
+      "description": "Add or remove your reaction on any message — asks you to confirm first"
     },
     {
       "name": "teams_get_activity",

@@ -1,8 +1,9 @@
 # microsoft-teams-mcp
 
 MCP server for **Microsoft Teams** — list every chat and channel you are in,
-read any of them by id or name, pull everything you have not read yet, and
-fetch inline images, using your signed-in browser session.
+read any of them by id or name, pull everything you have not read yet,
+fetch inline images, and — each one confirmed by you first — post messages
+and reactions, using your signed-in browser session.
 
 > This project was developed and is maintained by AI (Claude Code). Use at your
 > own discretion.
@@ -31,7 +32,9 @@ so it reads the DOM your tab has rendered through the bridge — which can read
 but never navigate a tab, so it needs the Activity view (the bell icon) open.
 
 Nothing here marks anything read. Reading a chat through this server leaves
-your Teams unread badges exactly as they were.
+your Teams unread badges exactly as they were. The two writes —
+`teams_send_message` and `teams_react` — go through the same chat-service
+API and post nothing until you confirm (see [Writes](#writes)).
 
 ## Install
 
@@ -128,7 +131,59 @@ Everything is optional — by default the token is captured from your browser.
   came from and when it expires — never the token — plus the bridge status
   the capture and the Activity feed rely on.
 
-All tools are read-only, and none of them marks anything read.
+**Write** (both ask you to confirm first — see [Writes](#writes)):
+
+- `teams_send_message` — post as you to any chat or channel, by id or name.
+  `text` is plain text: it is escaped, newlines are kept, and `:key:`
+  shortcodes (`:smile:`, `:1f389_partypopper:`) become Teams emoji.
+  `reply_to` posts into a channel post's thread (in a chat it quote-replies
+  that message); `quote` quote-replies a message anywhere; `mentions`
+  @-mentions people by MRI or by a display name matched among the
+  conversation's recent senders (an ambiguous name is refused with the
+  candidates). The result says whether the post was found again by reading
+  the conversation back (`verified`).
+- `teams_react` — add or (with `remove: true`) withdraw your reaction on a
+  message: an emoji or name (`thumbsup`/👍, `heart`/❤️, `laugh`/😆,
+  `surprised`/😮, `sad`/😢, `angry`/😡, `checkmark`/✅) or any raw Teams
+  reaction key (`fire`, `1f389_partypopper`). The message is read back to
+  verify the change. It writes only that message's reaction — never your
+  recent-reactions list or any other preference.
+
+Every other tool is read-only, and none of them marks anything read.
+
+## Writes
+
+Both writes are visible to everyone in the conversation, so each asks you
+first. A client that can show a confirmation prompt (Claude Code) shows one.
+On a client that cannot, the first call posts nothing and returns a
+`confirmation-required` preview — the conversation, the exact text, any
+mentions, the quoted message or the reaction — plus a `confirmToken`; only a
+repeat call with that token posts. The token is single-use, expires, and is
+bound to the exact arguments: change anything between the two calls and it
+is refused with a fresh preview.
+
+| variable | default | |
+| --- | --- | --- |
+| `MCP_CONFIRM_MODE` | `ask-user` | What a write does on a client that cannot show a confirmation prompt (claude.ai, Claude Desktop). `ask-user`: two steps, and the model must get your approval in chat before calling again with the token. `auto`: the same two steps, but the model may use the token after reviewing the preview itself. `refuse`: writes are refused on such clients. An unrecognised value is treated as `refuse`. |
+| `MCP_CONFIRM_ELICITATION` | `on` | `off` never shows a confirmation prompt, so every client gets the `MCP_CONFIRM_MODE` behaviour. Set it for a client that says it can show prompts but never does. |
+| `MCP_CONFIRM_TTL_SECONDS` | `600` | How long a token stays valid. |
+| `MCP_CONFIRM_SECRET` | random per process | Signing key; set it only if tokens must survive a server restart. |
+
+On a client without prompts the token is something the model passes back
+itself, so keep `MCP_CONFIRM_MODE=ask-user` and approve each preview in chat
+as the real guard on what gets posted.
+
+**Try it in your own notes first.** The conversation `48:notes` is your Teams
+self-chat ("notes to self"): both writes accept it, nobody else sees it, and
+it is the safe place to see what a message or reaction will look like. Every
+other `48:` system conversation (calendar and the like) is refused.
+
+**A send that times out is not retried.** If Teams does not answer a post (a
+timeout or a dropped connection after the request went out), the result is
+`status: "unknown"` — the message may already be there, so read the
+conversation before sending again. Threaded channel replies, @mentions,
+removing a reaction and the ✅ reaction's key follow Teams' documented or
+inferred shapes but have not been verified against a live tenant yet.
 
 **No Calendar tool here.** Teams Web's Calendar is Outlook's data, rendered
 inside an embedded `outlook.office.com` iframe — not the chat service's. Use
