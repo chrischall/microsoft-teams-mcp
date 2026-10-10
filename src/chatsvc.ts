@@ -7,8 +7,9 @@
  * path.
  *
  * Reads are `listConversations`, `getMessages`, `getMessage` and
- * `fetchImage`; the one write is `sendMessage`, which only the confirm-gated
- * `teams_send_message` calls. Nothing here writes the read marker
+ * `fetchImage`; the writes are `sendMessage`, `setReaction` and
+ * `removeReaction`, which only the confirm-gated `teams_send_message` and
+ * `teams_react` call. Nothing here writes the read marker
  * (`consumptionhorizon`), so reading a chat through this MCP never clears the
  * user's unread badges.
  *
@@ -389,6 +390,38 @@ export class ChatServiceClient {
   }
 
   /**
+   * React to a message: `PUT …/messages/{id}/properties?name=emotions` with
+   * `{ emotions: { key, value: <epoch ms> } }` (captured live). Only the
+   * message's `emotions` property is written — never the user's
+   * `recentReactions` preference, which Teams updates as a UI nicety.
+   *
+   * Idempotent (the same key twice is still one reaction), so a timeout or a
+   * dropped connection is an ordinary error: retrying is safe.
+   */
+  async setReaction(conversationId: string, messageId: string, key: string, at: number = Date.now()): Promise<void> {
+    await this.#writeEmotions('PUT', conversationId, messageId, { key, value: at });
+  }
+
+  /** Withdraw the user's reaction: `DELETE` on the same property (unverified live — see the plan). */
+  async removeReaction(conversationId: string, messageId: string, key: string): Promise<void> {
+    await this.#writeEmotions('DELETE', conversationId, messageId, { key });
+  }
+
+  async #writeEmotions(
+    method: 'PUT' | 'DELETE',
+    conversationId: string,
+    messageId: string,
+    emotions: { key: string; value?: number },
+  ): Promise<void> {
+    this.#requireConfigured();
+    const url =
+      `${this.#baseUrl}/users/ME/conversations/${encodeURIComponent(conversationId)}` +
+      `/messages/${encodeURIComponent(messageId)}/properties?name=emotions`;
+    const { status } = await this.#send(url, 'text', undefined, { method, body: { emotions }, idempotent: true });
+    this.#checkStatus(status);
+  }
+
+  /**
    * Download an inline image (`<img src>` in a message body).
    *
    * The URL comes out of message content — i.e. it is attacker-influenced —
@@ -487,7 +520,8 @@ export class ChatServiceClient {
     url: string,
     read: 'text' | 'bytes',
     maxBytes?: number,
-    write?: { method: 'POST'; body: unknown },
+    /** `idempotent` writes are safe to repeat, so a lost answer is a plain error, not an unknown outcome. */
+    write?: { method: 'POST' | 'PUT' | 'DELETE'; body: unknown; idempotent?: boolean },
   ): Promise<{ status: number; headers: Headers; body: string | Uint8Array }> {
     let body: string | Uint8Array = '';
     const method = write?.method ?? 'GET';
@@ -511,7 +545,7 @@ export class ChatServiceClient {
       try {
         r = await fetchBounded(url, init, opts);
       } catch (e) {
-        throw write ? outcomeUnknown(method, e) : e;
+        throw write && !write.idempotent ? outcomeUnknown(method, e) : e;
       }
       body = r.body as string | Uint8Array;
       return r.res;

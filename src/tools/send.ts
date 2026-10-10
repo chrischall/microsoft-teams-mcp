@@ -46,7 +46,7 @@ const TOOL = 'teams_send_message';
  * messages, and the safe place to try this tool out. Every other `48:*` id
  * (calendar, notifications, …) is refused.
  */
-const SELF_CHAT = '48:notes';
+export const SELF_CHAT = '48:notes';
 
 /** Recent messages scanned for mention candidates and for the read-back. */
 const RECENT_MESSAGES = 200;
@@ -58,7 +58,7 @@ const MAX_CANDIDATES = 10;
 /** An MRI such as `8:orgid:<oid>` (a person) or `28:<id>` (a bot). */
 const MRI = /^\d+:\S+$/;
 
-interface Target {
+export interface Target {
   id: string;
   title: string;
   kind: string;
@@ -75,11 +75,20 @@ const mentionArg = z.object({
     .describe('Who to mention: an MRI (8:orgid:…), or a display name matched among recent senders in this conversation.'),
 });
 
-/** The conversation to post to: `48:notes`, else an id or name as `teams_read_conversation` resolves it. */
-async function resolveTarget(chatsvc: ChatServiceClient, conversation: string, me: string): Promise<Target> {
+/**
+ * The conversation a write goes to: `48:notes`, else an id or name as
+ * `teams_read_conversation` resolves it. `verb` words the refusals ("post to",
+ * "react in").
+ */
+export async function resolveTarget(
+  chatsvc: ChatServiceClient,
+  conversation: string,
+  me: string,
+  verb = 'post to',
+): Promise<Target> {
   if (conversation === SELF_CHAT) return { id: SELF_CHAT, title: 'Notes (self-chat)', kind: 'self' };
   if (conversation.startsWith('48:')) {
-    throw new McpToolError(`Refusing to post to the Teams system conversation ${conversation}.`, {
+    throw new McpToolError(`Refusing to ${verb} the Teams system conversation ${conversation}.`, {
       hint: `Only ${SELF_CHAT} (the self-chat) takes messages among 48: ids; pass a chat or channel instead.`,
     });
   }
@@ -87,7 +96,7 @@ async function resolveTarget(chatsvc: ChatServiceClient, conversation: string, m
   const s = resolveConversation(
     raw.map((c) => conversationSummary(c, me, raw)),
     conversation,
-    'post to',
+    verb,
   );
   return { id: s.id, title: s.title, kind: s.kind };
 }

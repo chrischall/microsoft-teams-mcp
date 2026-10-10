@@ -479,3 +479,41 @@ describe('sendMessage', () => {
     await expect(p).rejects.not.toBeInstanceOf(WriteOutcomeUnknownError);
   });
 });
+
+describe('setReaction / removeReaction', () => {
+  const CONV = '19:a@thread.v2';
+  const PROPS_URL = `${BASE}/users/ME/conversations/${encodeURIComponent(CONV)}/messages/1760000000000/properties?name=emotions`;
+
+  it('PUTs the emotions property with the key and the reaction time', async () => {
+    const fetchImpl: FetchMock = vi.fn(async () => new Response('', { status: 200 }));
+    await client(fetchImpl).setReaction(CONV, '1760000000000', 'like', 1_760_000_123_456);
+    expect(urlOf(fetchImpl, 0)).toBe(PROPS_URL);
+    const init = fetchImpl.mock.calls[0]?.[1];
+    expect(init?.method).toBe('PUT');
+    expect(JSON.parse(String(init?.body))).toEqual({ emotions: { key: 'like', value: 1_760_000_123_456 } });
+    expect(headersOf(fetchImpl, 0).get('content-type')).toBe('application/json');
+  });
+
+  it('DELETEs the same property with just the key to remove', async () => {
+    const fetchImpl: FetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+    await client(fetchImpl).removeReaction(CONV, '1760000000000', 'heart');
+    expect(urlOf(fetchImpl, 0)).toBe(PROPS_URL);
+    const init = fetchImpl.mock.calls[0]?.[1];
+    expect(init?.method).toBe('DELETE');
+    expect(JSON.parse(String(init?.body))).toEqual({ emotions: { key: 'heart' } });
+  });
+
+  it('maps an HTTP failure to an McpToolError with its status', async () => {
+    const fetchImpl: FetchMock = vi.fn(async () => jsonResponse({}, 404));
+    await expect(client(fetchImpl).setReaction(CONV, '1', 'like')).rejects.toMatchObject({ status: 404 });
+  });
+
+  it('reports a timeout as a plain error, not an unknown outcome — setting a reaction twice is harmless', async () => {
+    const fetchImpl: FetchMock = vi.fn(async () => {
+      throw new RequestTimeoutError('Teams', 60_000);
+    });
+    const p = client(fetchImpl).setReaction(CONV, '1', 'like');
+    await expect(p).rejects.toBeInstanceOf(RequestTimeoutError);
+    await expect(p).rejects.not.toBeInstanceOf(WriteOutcomeUnknownError);
+  });
+});
