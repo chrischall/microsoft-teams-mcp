@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.chrischall/microsoft-teams-mcp",
-  "description": "Microsoft Teams for Claude — read your chats, teams, channels, and open messages, via your browser",
+  "description": "Microsoft Teams for Claude — read any chat or channel, unread messages, and attachments",
   "repository": {
     "url": "https://github.com/chrischall/microsoft-teams-mcp",
     "source": "github"
@@ -33,6 +33,55 @@
         {
           "name": "FETCHPROXY_IDENTITY_DIR",
           "description": "Where to store the long-term fetchproxy identity keypair (default ~/.fetchproxy/identity/; an absolute path only, anything else is ignored). Exists for a host that runs a separate child per caller, so they can share one identity.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "TEAMS_ACCESS_TOKEN",
+          "description": "A pre-obtained Teams chat-service bearer token (the JWT itself). Leave blank to capture one from your signed-in Teams browser tab via the ContextMint Bridge extension.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
+        },
+        {
+          "name": "TEAMS_DISABLE_FETCHPROXY",
+          "description": "Set to true to never capture a token from the browser; then TEAMS_ACCESS_TOKEN is required. Leave blank.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "TEAMS_CHATSVC_REGION",
+          "description": "The Teams chat-service region in the API path. Defaults to amer. Leave blank unless your tenant lives elsewhere.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "TEAMS_CHATSVC_BASE",
+          "description": "Full override for the chat-service API base (default https://teams.cloud.microsoft/api/chatsvc/<region>/v1). Leave blank.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "TEAMS_CAPTURE_TIMEOUT",
+          "description": "Seconds to wait for the Teams tab to issue a chat-service request when capturing a token. Defaults to 30.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "TEAMS_TOKEN_CACHE",
+          "description": "Set to false to keep the captured token in memory only. Defaults to on: it is cached so a restart within its ~23h lifetime needs no browser.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "TEAMS_TOKEN_FILE",
+          "description": "Where the captured token is cached. Defaults to ~/.microsoft-teams-mcp/token.json.",
           "isRequired": false,
           "format": "string",
           "isSecret": false

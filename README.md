@@ -1,34 +1,37 @@
 # microsoft-teams-mcp
 
-MCP server for **Microsoft Teams** — list your chats, teams and channels, and
-read whichever chat or channel is currently open, routed through your
-signed-in browser tab.
+MCP server for **Microsoft Teams** — list every chat and channel you are in,
+read any of them by id or name, pull everything you have not read yet, and
+fetch inline images, using your signed-in browser session.
 
 > This project was developed and is maintained by AI (Claude Code). Use at your
 > own discretion.
 
-## How it works — and its one real limitation
+## How it works
 
-Teams Web's chat and message data lives only in a client-side cache fed by a
-WebSocket/registrar sync channel — there is no REST or GraphQL endpoint that
-returns it. So this server does not capture a token and make plain server-side
-requests the way an API-backed MCP would; instead every call routes through
-the [fetchproxy](https://github.com/chrischall/fetchproxy) browser bridge and
-reads the DOM your signed-in `teams.cloud.microsoft` tab has already
-rendered. `teams.microsoft.com` (the old host) is not supported.
+Chats and channels are read through Teams' own **chat-service REST API**
+(`https://teams.cloud.microsoft/api/chatsvc/<region>/v1`). The server needs a
+bearer token for it, and the only place one exists is your signed-in
+`teams.cloud.microsoft` tab: through the
+[fetchproxy](https://github.com/chrischall/fetchproxy) browser bridge it
+captures the `Authorization` header off a request the Teams web app makes to
+its chat service — **once**. From then on every call is a plain server-side
+request; the token is cached in `~/.microsoft-teams-mcp/token.json` for its
+~23h lifetime (so a restart needs no browser), and a 401 re-captures once and
+replays. `teams.microsoft.com` (the old host) is not supported.
 
-**That has one real consequence: this server can only read whichever chat or
-channel is currently displayed in your browser tab.** The bridge can fetch
-and read — it cannot navigate a tab to a different conversation.
-`teams_list_chats` and `teams_list_teams_and_channels` always work (their
-sidebars are always rendered once that nav section is open);
-`teams_get_open_chat_messages` and `teams_get_open_channel_posts` read
-whatever conversation you have open. To read a different chat or channel,
-open it in the browser first.
+So **chats and channels no longer need to be open in the browser** — any of
+them can be read by id or name, and listing covers every chat, not just the
+ones the sidebar shows. To capture a token, an idle tab is not enough: click
+into any chat so Teams calls its chat service.
 
-The bridge is on the request path for **every** call here, not just once to
-mint a token — unlike an API-backed MCP, there is nothing to cache between
-calls.
+**The one thing that still reads the page is the Activity feed**
+(`teams_get_activity`). No chat-service equivalent of it has been verified,
+so it reads the DOM your tab has rendered through the bridge — which can read
+but never navigate a tab, so it needs the Activity view (the bell icon) open.
+
+Nothing here marks anything read. Reading a chat through this server leaves
+your Teams unread badges exactly as they were.
 
 ## Install
 
@@ -78,89 +81,84 @@ opencode reads MCP servers from `opencode.json` (project) or
 
 ### Configuration
 
-Everything is optional — this server needs no credentials of its own.
+Everything is optional — by default the token is captured from your browser.
 
 | variable | purpose |
 | --- | --- |
+| `TEAMS_ACCESS_TOKEN` | A chat-service bearer token (the JWT itself) to use instead of capturing one. Never re-captured from the browser: when Teams rejects it, replace it. |
+| `TEAMS_DISABLE_FETCHPROXY` | `true` to never capture from the browser (then `TEAMS_ACCESS_TOKEN` is required). |
+| `TEAMS_CHATSVC_REGION` | Chat-service region in the API path. Defaults to `amer`. |
+| `TEAMS_CHATSVC_BASE` | Full override for the API base (default `https://teams.cloud.microsoft/api/chatsvc/<region>/v1`). |
+| `TEAMS_CAPTURE_TIMEOUT` | Seconds to wait for the Teams tab to issue a chat-service request. Defaults to `30`. |
+| `TEAMS_TOKEN_CACHE` | `false` to keep the captured token in memory only. Defaults to on. |
+| `TEAMS_TOKEN_FILE` | Where the captured token is cached. Defaults to `~/.microsoft-teams-mcp/token.json`. |
 | `TEAMS_WS_PORT` | fetchproxy concentrator port. Defaults to `37149`, the fleet-wide shared port. |
 | `FETCHPROXY_WS_HOST` | Bind interface for the bridge (default `127.0.0.1`; a literal IP only, anything else is ignored). Keep on loopback — it exists for ONE topology: a hosted child in its own network namespace. |
 | `FETCHPROXY_IDENTITY_DIR` | Where to store the long-term fetchproxy identity keypair (default `~/.fetchproxy/identity/`; an absolute path only, anything else is ignored). Exists for a host that runs a separate child per caller, so they can share one identity. |
 
 ## Tools
 
-- `teams_list_chats` — the Chat sidebar: title, last-message preview,
-  last-activity time, and Teams' own conversation id for each chat.
-- `teams_get_open_chat_messages` — the message thread of whichever chat is
-  currently open: sender, ISO-8601 time, message id, and text, plus a
-  `conversation` field naming WHICH chat that is (the selected sidebar row's
-  title and thread key) so the model can confirm it read the chat you meant.
-- `teams_list_teams_and_channels` — the Teams-and-Channels sidebar (a
-  DIFFERENT view from Chat): every team and channel the user belongs to,
-  with each channel's parent team name.
-- `teams_get_open_channel_posts` — the top-level posts of whichever channel
-  is currently open: sender, subject (when present), prose time (not
-  ISO-8601 — Teams doesn't expose one for these), message id, and text.
-  Threaded replies under a post are not included. Like the chat tool, it
-  names the open channel in a `conversation` field.
+- `teams_list_chats` — every chat you are in (1:1, group and meeting chats,
+  not just the visible sidebar), most recent activity first: id, kind,
+  title, unread flag, ISO-8601 last-activity time, last-message preview and
+  sender. `unread_only`, `query` (title) and `limit` (default 50, max 500).
+- `teams_list_teams_and_channels` — every channel you are in, by team then
+  title, with the same fields. `unread_only`, `query` (channel or team name)
+  and `limit` (default 50, max 500).
+- `teams_read_conversation` — read any chat or channel by id or name,
+  oldest first: sender, ISO-8601 time, text, subject, edited/deleted flags
+  and attachments. A channel comes back as threads (root post + replies).
+  `unread_only`, `since` (ISO 8601) and `limit` (default 50, max 500, newest
+  kept). An ambiguous name lists the candidates and asks for the id.
+- `teams_get_unread` — every unread message across your chats and channels,
+  grouped by conversation, most recent first. Filter by `kinds` (`chat`,
+  `channel`, `meeting`, `oneOnOne`) or `query`; `per_conversation_limit`
+  (default 50) and `max_conversations` (default 20 — the rest are named in
+  `more_unread_conversations`).
+- `teams_get_attachment` — one attachment of a message: an inline image is
+  returned as the image itself; a shared file as its name, type and open
+  link only (files live in SharePoint and this server cannot download their
+  contents yet — the result says so).
 - `teams_get_activity` — the Activity feed (the bell icon in the left nav):
   mentions, replies, reactions, and the like across every chat and channel,
-  each with its title, message preview, prose time, and location (the
-  team/channel or chat it happened in). Requires the Activity view open.
-- `teams_healthcheck` — verifies the bridge can reach a signed-in tab.
+  each with its title, message preview, prose time, and location. Reads the
+  page, so it requires the Activity view open.
+- `teams_healthcheck` — probes the chat service (one conversations listing,
+  which also captures a token on a cold start) and reports where the token
+  came from and when it expires — never the token — plus the bridge status
+  the capture and the Activity feed rely on.
 
-All five data tools are read-only. Each takes an optional `limit` (default
-50; max 200, or 300 for `teams_list_teams_and_channels`) and keeps the newest
-rows, adding a `truncated` field with the total when it left some out.
-`teams_get_open_chat_messages` also takes `since` (an ISO 8601 date-time) to
-drop older messages. When a list tool reads nothing, its result carries an
-`empty_hint` naming the Teams view to open, and `teams_healthcheck` reports
-`chat_view_not_open` rather than a healthy bridge if the Chat view isn't open.
+All tools are read-only, and none of them marks anything read.
 
-**No Calendar tool here.** Teams Web's Calendar renders inside an embedded
-`outlook.office.com` iframe, which the ContextMint Bridge (DOM reads only
-against the top-level tab, no iframe crossing) cannot reach — and isn't the
-right place for it anyway. Use
+**No Calendar tool here.** Teams Web's Calendar is Outlook's data, rendered
+inside an embedded `outlook.office.com` iframe — not the chat service's. Use
 [`office-outlook-mcp`](https://github.com/chrischall/office-outlook-mcp)'s
 `outlook_list_events` / `outlook_get_event` / `outlook_list_calendars`
-instead: real Outlook REST API calls via a captured token, with no
-"must have it open" limitation at all.
+instead.
 
 ## Things worth knowing
 
-- **One Teams tab at a time.** If more than one `teams.cloud.microsoft` tab
-  is open, the bridge reads whichever answers first — which may not be the
-  one you're looking at. The "open" tools report the conversation they read
-  (`conversation.title`, or `null` if it couldn't be identified) and their
-  descriptions tell the model to check it before summarizing.
 - **Results are framed as untrusted.** Every data tool returns
   `{ untrusted_content: true, note, ... }` and says in its description that
   the text is written by other Teams users. Message bodies, previews and
   subjects are data to report, never instructions to follow — this matters
   because the server usually runs beside write-capable MCPs (mail, messaging)
   that an injected instruction could otherwise reach.
-- **No chat or channel selection.** See "How it works" above — there is no
-  id parameter on either "open" tool because there is no way to act on one.
-  Ask the person to open the chat/channel they mean, or use the matching
-  list tool to show them what's available.
-- **Chat and Teams-and-Channels are different nav sections.** Reading
-  channels needs the Teams-and-Channels view open in the browser (the
-  "Teams" icon in the left rail, not "Chat") — if a channel tool returns
-  nothing, that's usually why.
-- **Grouped messages still resolve a sender.** Teams visually hides the
-  sender name on consecutive messages from the same person, but the name
-  stays in the DOM, so `sender` is populated on every row regardless.
-- **Quoted content concatenates.** A chat message that quotes an earlier one,
-  or a channel post whose body includes a reply preview, has that quoted
-  text run together with the real content inside `text` — a limitation of
-  bulk text extraction, not a bug.
-- **Multiple open Teams tabs race.** The bridge reads whichever matching tab
-  answers first ("first responsive"), not necessarily the one you meant. If
-  results look like they're from the wrong chat/channel, close extra
-  `teams.cloud.microsoft` tabs so only one remains.
-- **Scope grows quietly.** If you see a `read_dom_list name not in declared
-  set` error, the extension's approved scope is behind the server's declared
-  one — this shouldn't happen in a released version, but if it does, revoke
-  and re-pair `teams-mcp` in the ContextMint Bridge popup.
+- **Unread means what Teams means.** A message is unread when it arrived
+  after the conversation's read marker (`consumptionhorizon`) and was not
+  sent by you. This server only reads that marker; it never moves it.
+- **The token only goes to Teams.** It is sent to the chat-service base and,
+  for inline images, only to https hosts under `.asm.skype.com` (Teams' own
+  image store) — an image link in a message pointing anywhere else is
+  refused.
+- **Shared files are links, not contents.** They live in SharePoint, which
+  does not accept the chat-service token.
+- **One Teams tab at a time for the Activity feed.** If more than one
+  `teams.cloud.microsoft` tab is open, the bridge reads whichever answers
+  first — close extras if `teams_get_activity` looks wrong.
+- **Scope grows quietly.** If you see a `not in declared set` error, the
+  extension's approved scope is behind the server's declared one — revoke
+  and re-pair `microsoft-teams-mcp` in the ContextMint Bridge popup.
 
 ## Development
 
@@ -171,7 +169,7 @@ npm test              # typecheck + suite
 npm run test:coverage # CI's gate
 ```
 
-This server depends on `read_dom_list`, a fetchproxy capability added
+The Activity feed depends on `read_dom_list`, a fetchproxy capability added
 alongside this repo — it needs `@fetchproxy/protocol`/`@fetchproxy/server`
 `>= 3.1.0`, the first published versions that include it
 ([chrischall/fetchproxy#381](https://github.com/chrischall/fetchproxy/pull/381)).

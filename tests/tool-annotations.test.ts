@@ -14,7 +14,7 @@ import { servedTools } from './served-tools.js';
  */
 describe('every tool declares what it does', () => {
   it('covers the full served surface (guards against a registrar being dropped)', async () => {
-    expect(await servedTools()).toHaveLength(4);
+    expect(await servedTools()).toHaveLength(7);
   });
 
   it('sets an explicit boolean readOnlyHint and openWorldHint on all of them', async () => {

@@ -6,6 +6,9 @@ import type { TeamsClient } from '../src/client.js';
 import type { ChatServiceClient } from '../src/chatsvc.js';
 import { registerChatTools } from '../src/tools/chat.js';
 import { registerChannelTools } from '../src/tools/channels.js';
+import { registerConversationTools } from '../src/tools/conversation.js';
+import { registerUnreadTools } from '../src/tools/unread.js';
+import { registerAttachmentTools } from '../src/tools/attachment.js';
 import { registerActivityTools } from '../src/tools/activity.js';
 import { registerHealthcheckTool } from '../src/tools/healthcheck.js';
 
@@ -21,6 +24,9 @@ export async function servedTools() {
   const h = await createTestHarness((server: McpServer) => {
     registerChatTools(server, deps);
     registerChannelTools(server, deps);
+    registerConversationTools(server, deps);
+    registerUnreadTools(server, deps);
+    registerAttachmentTools(server, deps);
     registerActivityTools(server, deps);
     registerHealthcheckTool(server, deps);
   });

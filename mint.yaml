@@ -2,22 +2,26 @@ version: 1
 name: Microsoft Teams
 slug: teams
 summary: >-
-  Microsoft Teams for Claude — read your chats, teams, channels, and their
-  currently open messages, routed through your signed-in browser tab
+  Microsoft Teams for Claude — read any chat or channel, your unread
+  messages, and their attachments, via your signed-in browser session
 #
-# Hosting note (a comment, not user-facing summary text): this is a FULL
-# browser-bridge MCP, not a bootstrap-capture one. Teams' chat/message data
-# lives only in a client-side sync cache fed by a WebSocket/registrar channel
-# — there is no REST or GraphQL endpoint that returns it — so every read here
-# is a `read_dom_list` call against the live signed-in tab, not a token
-# capture followed by a plain fetch. The bridge is on the hot path for every
-# tool call, not just once per token lifetime.
+# Hosting note (a comment, not user-facing summary text): chats and channels
+# are read through Teams' chat-service REST API with plain server-side fetches
+# to teams.cloud.microsoft, but the bearer token they need can only come from
+# a signed-in Teams tab (captured through the fetchproxy BROWSER BRIDGE; it
+# lasts ~23h), and the Activity feed is still a `read_dom_list` call against
+# that tab. So a hosted registration that is expected to keep working needs
+# the bridge.
 #
 # A bridged registration needs `runtime: fly-shared`, `bridge: true` and a
 # `bridgePortEnv`, which are REGISTRATION fields this manifest has no schema
 # for — set them over the control API (PUT on the registration id, per
 # mcp-host's BROWSER-BRIDGE.md), naming TEAMS_WS_PORT below as the port
 # variable. `state.dataDir` below is required for `bridge`.
+#
+# Credentials here are PER PERSON — this reads someone's work chats — so a
+# real deployment wants identity.perUserChild with TEAMS_ACCESS_TOKEN as an
+# auth field, never one operator's token shared via --secret-env.
 env:
   - name: TEAMS_WS_PORT
     required: false
@@ -25,18 +29,56 @@ env:
       fetchproxy concentrator port used for the browser bridge. Defaults to
       37149, the fleet-wide shared port. Name this variable in the
       registration's bridgePortEnv for a bridged deployment.
+  - name: TEAMS_ACCESS_TOKEN
+    secret: true
+    required: false
+    help: >-
+      Pre-obtained Teams chat-service bearer token. Overrides browser capture.
+      Power users / CI only; tokens last about 23 hours. The Activity feed
+      still needs the bridge.
+  - name: TEAMS_DISABLE_FETCHPROXY
+    required: false
+    help: >-
+      Set to 'true' to disable browser token capture, requiring
+      TEAMS_ACCESS_TOKEN.
+  - name: TEAMS_CHATSVC_REGION
+    required: false
+    help: >-
+      Chat-service region in the API path. Defaults to amer.
+  - name: TEAMS_CHATSVC_BASE
+    required: false
+    help: >-
+      Override the chat-service base URL. Defaults to
+      https://teams.cloud.microsoft/api/chatsvc/<region>/v1.
+  - name: TEAMS_CAPTURE_TIMEOUT
+    required: false
+    help: >-
+      Seconds to wait for the Teams tab to make a chat-service request we can
+      read a token from. Defaults to 30.
+  - name: TEAMS_TOKEN_CACHE
+    required: false
+    help: >-
+      Set to 'false' to stop caching the captured token between runs. Defaults
+      to true.
+  - name: TEAMS_TOKEN_FILE
+    required: false
+    help: >-
+      Path to the cached token file. Defaults to
+      ~/.microsoft-teams-mcp/token.json.
 state:
   dataDir: true
   reason: >-
-    Holds the fetchproxy identity keypair under ~/.fetchproxy/identity.
-    Without persistence every cold start mints a fresh identity and re-
-    prompts pairing in the user's browser — on a scale-to-zero machine, that
-    means constantly.
+    Caches the captured bearer token at ~/.microsoft-teams-mcp/token.json
+    (0600) and holds the fetchproxy identity keypair under
+    ~/.fetchproxy/identity. Without persistence every cold start re-captures
+    from the browser and mints a fresh identity — re-prompting pairing in the
+    user's browser, which on a scale-to-zero machine means constantly.
 egress:
-  # Empty on purpose: this is a pure browser-bridge MCP. Every Teams request
-  # (the read_dom_list calls in src/client.ts) is made by the user's
-  # signed-in tab via ContextMint Bridge, never by this process — there
-  # is no direct mode and no bootstrap that dials teams.cloud.microsoft
-  # server-side. The only socket the process opens is the loopback
-  # concentrator the extension connects TO.
-  allow: []
+  # teams.cloud.microsoft serves the chat-service API (src/chatsvc.ts). Inline
+  # images download from Teams' image store on a regional *.asm.skype.com host
+  # (us-api.asm.skype.com and the like) — the client sends its token nowhere
+  # else. The Activity feed's read_dom_list calls are made by the user's tab,
+  # not this process.
+  allow:
+    - teams.cloud.microsoft
+    - '*.asm.skype.com'

@@ -116,13 +116,43 @@ describe('publish scaffold', () => {
 });
 
 /**
- * The env keys the server honours. `TEAMS_WS_PORT` is this server's own
- * (.env.example / README); `FETCHPROXY_WS_HOST` and `FETCHPROXY_IDENTITY_DIR`
- * are read by the bundled `@fetchproxy/server` because this server never
- * passes `host` / `identityDir`. It always passes `port`, so
- * `FETCHPROXY_WS_PORT` is NOT honoured and is not declared.
+ * The env keys the server honours. The `TEAMS_*` keys are this server's own
+ * (.env.example / README): the bridge port, and the chat-service token's
+ * source, cache, capture deadline and API base. `FETCHPROXY_WS_HOST` and
+ * `FETCHPROXY_IDENTITY_DIR` are read by the bundled `@fetchproxy/server`
+ * because this server never passes `host` / `identityDir`. It always passes
+ * `port`, so `FETCHPROXY_WS_PORT` is NOT honoured and is not declared.
  */
-const ENV = ['FETCHPROXY_IDENTITY_DIR', 'FETCHPROXY_WS_HOST', 'TEAMS_WS_PORT'];
+const ENV = [
+  'FETCHPROXY_IDENTITY_DIR',
+  'FETCHPROXY_WS_HOST',
+  'TEAMS_ACCESS_TOKEN',
+  'TEAMS_CAPTURE_TIMEOUT',
+  'TEAMS_CHATSVC_BASE',
+  'TEAMS_CHATSVC_REGION',
+  'TEAMS_DISABLE_FETCHPROXY',
+  'TEAMS_TOKEN_CACHE',
+  'TEAMS_TOKEN_FILE',
+  'TEAMS_WS_PORT',
+];
+
+/**
+ * Chats and channels are read through the chat-service API now, by id or
+ * name, so no install surface may still promise only "the open" conversation.
+ */
+describe('install surface descriptions', () => {
+  it('no longer describe reads as limited to the currently open conversation', () => {
+    const texts = [
+      read('manifest.json').description,
+      read('server.json').description,
+      read('.claude-plugin/plugin.json').description,
+      read('.claude-plugin/marketplace.json').metadata.description,
+      read('.claude-plugin/marketplace.json').plugins[0].description,
+      ...read('manifest.json').tools.map((t: { description: string }) => t.description),
+    ];
+    for (const t of texts) expect(t).not.toMatch(/open (messages|chat|channel)|currently open/i);
+  });
+});
 
 describe('manifest tool roster', () => {
   it('matches the registered tools in BOTH directions', async () => {
@@ -152,5 +182,17 @@ describe('install surfaces pass every honoured env key', () => {
     const vars = read('server.json').packages[0].environmentVariables as { name: string; isRequired: boolean }[];
     expect(vars.map((v) => v.name).sort()).toEqual(ENV);
     expect(vars.every((v) => v.isRequired === false)).toBe(true);
+  });
+
+  it('marks the access token secret on both surfaces, and nothing else', () => {
+    const vars = read('server.json').packages[0].environmentVariables as { name: string; isSecret: boolean }[];
+    expect(vars.filter((v) => v.isSecret).map((v) => v.name)).toEqual(['TEAMS_ACCESS_TOKEN']);
+
+    const m = read('manifest.json');
+    const ref = /^\$\{user_config\.([^}]+)\}$/.exec(m.server.mcp_config.env.TEAMS_ACCESS_TOKEN)![1];
+    const sensitive = Object.entries(m.user_config as Record<string, { sensitive?: boolean }>)
+      .filter(([, c]) => c.sensitive === true)
+      .map(([k]) => k);
+    expect(sensitive).toEqual([ref]);
   });
 });
