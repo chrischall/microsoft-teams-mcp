@@ -103,13 +103,34 @@ Everything is optional — by default the token is captured from your browser.
 
 - `teams_list_chats` — every chat you are in (1:1, group and meeting chats,
   not just the visible sidebar, plus your `48:notes` self-chat as kind
-  `self` when Teams lists it), most recent activity first: id, kind,
+  `self` when Teams lists it), favorites and pinned chats first, then most
+  recent activity first: id, kind,
   title, unread hint, ISO-8601 last-activity time, last-message preview and
   sender. `unread_only` (exact — see below), `since_days` (with
-  `unread_only`; default 14), `query` (title) and `limit` (default 50, max
-  500).
+  `unread_only`; default 14), `query` (title, or a participant's name) and
+  `limit` (default 50, max 500). A group chat with no topic is titled after
+  who is in it — `Group chat: <up to three recent senders other than you,
+  most recent first>` plus `+N` for more, with every recent sender in
+  `participants` — rather than after whoever posted last, so chats that
+  share a last sender stay distinguishable. The chat service has no member
+  list, so this reads up to 30 recent messages (one small page) of each such
+  chat returned (four at a time, cached until a new message arrives); if that
+  read fails, the chat keeps its last-sender title. A 1:1 is titled by the
+  other person (its id names them) and carries them as its one
+  `participants` entry — read from their recent messages when you sent the
+  last one, `(1:1 chat)` if they wrote nothing recently. `query` matches such
+  chats by their participants, never by the made-up `Group chat:` or
+  `(1:1 chat)` titles, so `group` or `chat` does not hit every untitled chat.
+  Conversations the chat service marks favorite or pinned carry
+  `favorite: true` / `pinned: true` and lead the plain listing (favorites,
+  then pinned); `unread_only` keeps most-recent-first order but carries the
+  flags. Note the new Teams **Favorites section for chats** is kept by a
+  different Teams service this MCP does not read, so a chat you put there is
+  not flagged (verified live 2026-10-10) — the flags mostly reflect favorited
+  channels and pinned conversations.
 - `teams_list_teams_and_channels` — every channel you are in, by team then
-  title, with the same fields. Channels you have hidden in Teams are listed
+  title, with the same fields — favorite and pinned channels first, flagged
+  as in `teams_list_chats`. Channels you have hidden in Teams are listed
   after the rest with `hidden: true`, and left out of `unread_only` unless
   `include_hidden` is set. `unread_only`, `include_hidden`, `since_days`
   (with `unread_only`; default 14), `query` (channel or team name) and
@@ -118,17 +139,23 @@ Everything is optional — by default the token is captured from your browser.
   oldest first: sender, ISO-8601 time, text, subject, edited/deleted flags
   and attachments. A channel comes back as threads (root post + replies).
   `unread_only`, `since` (ISO 8601) and `limit` (default 50, max 500, newest
-  kept). An ambiguous name lists the candidates and asks for the id.
+  kept). An ambiguous name lists the candidates and asks for the id; an
+  untitled group chat can be named by one of its participants, and a 1:1 by
+  the other person (this, and the same naming in `teams_send_message` /
+  `teams_react`, titles every untitled chat first).
   `48:notes` — or the name `notes` / `self` — is your notes self-chat.
 - `teams_get_unread` — every unread message across your chats and channels,
   grouped by conversation, most recent first. Filter by `kinds` (`chat`,
-  `channel`, `meeting`, `oneOnOne`) or `query`; `per_conversation_limit`
+  `channel`, `meeting`, `oneOnOne`) or `query` (title, channel or team
+  name, or an untitled chat's participant name); `per_conversation_limit`
   (default 50) and `max_conversations` (default 20 returned with their
   messages — the rest are named, with their `unread_count`, in
   `more_unread_conversations`). Hidden channels are left out unless
   `include_hidden`. Only conversations with unread messages from the last
   `since_days` (default 14, max 3650) are returned; older ones are counted
-  in `older_unread_skipped`.
+  in `older_unread_skipped`. An untitled group chat or 1:1 is titled after
+  its participants, as in `teams_list_chats` — in `conversations`, in
+  `more_unread_conversations` and in `errors`.
 - `teams_get_attachment` — one attachment of a message: an inline image is
   returned as the image itself; a shared file as its name, type and open
   link only (files live in SharePoint and this server cannot download their

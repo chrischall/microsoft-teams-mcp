@@ -282,6 +282,29 @@ describe('teams_send_message — conversation', () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it('previews an untitled group chat named by a participant under its participant title, sending nothing', async () => {
+    const UNTITLED = ['19:untitled0001@thread.v2', '19:untitled0002@thread.v2'];
+    const convs = UNTITLED.map((id) => rawConv(id, { at: T0 + 4 * MIN, sender: 'Bea Example' }));
+    const byId: Record<string, RawMessage[]> = {
+      [UNTITLED[0]]: [{ ...rawMsg(T0 + MIN, { conv: UNTITLED[0] }), from: FROM(THIRD), imdisplayname: 'Sam One' }, rawMsg(T0 + 4 * MIN, { sender: 'Bea Example' })],
+      [UNTITLED[1]]: [{ ...rawMsg(T0 + MIN, { conv: UNTITLED[1] }), from: FROM(FOURTH), imdisplayname: 'Sam Two' }, rawMsg(T0 + 4 * MIN, { sender: 'Bea Example' })],
+    };
+    const sendMessage = vi.fn();
+    const chatsvc = fakeChatsvc(convs, {
+      meDisplayName: vi.fn().mockResolvedValue('Me Myself'),
+      sendMessage,
+      getMessages: vi.fn(async (id: string, o: Parameters<ChatServiceClient['getMessages']>[1]) => messagesFrom(byId[id] ?? [])(id, o)),
+    });
+    const h = await harnessFor(chatsvc);
+    try {
+      const first = parseToolResult<PhaseOne>(await h.callTool('teams_send_message', { conversation: 'sam two', text: 'hi' }));
+      expect(fenced(first.preview?.conversation)).toEqual({ id: UNTITLED[1], title: 'Group chat: Bea Example; Sam Two', kind: 'group' });
+      expect(sendMessage).not.toHaveBeenCalled();
+    } finally {
+      await h.close();
+    }
+  });
+
   it('sends to 48:notes, the self-chat', async () => {
     const { chatsvc, sendMessage } = fakeWith();
     const { data } = await sendConfirmed(chatsvc, { conversation: '48:notes', text: 'note to self' });

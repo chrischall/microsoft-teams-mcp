@@ -19,7 +19,7 @@ export const SELF_CHAT = '48:notes';
 const SELF_CHAT_TITLE = 'Notes (self-chat)';
 
 /** Names that resolve to {@link SELF_CHAT} outright, ahead of any substring match. */
-const SELF_CHAT_ALIASES = new Set(['notes', 'self']);
+export const SELF_CHAT_ALIASES = new Set(['notes', 'self']);
 
 export interface ConversationSummary {
   id: string;
@@ -44,10 +44,21 @@ export interface ConversationSummary {
    * `NotInterested`). Teams shows it nowhere, unread or not.
    */
   hidden?: true;
+  /** Marked a favorite in Teams (`properties.favorite`); absent otherwise. */
+  favorite?: true;
+  /** Pinned in Teams (`properties.ispinned`); absent otherwise. */
+  pinned?: true;
   /** ISO time of the last message; absent for a conversation with none. */
   lastActivity?: string;
   lastMessagePreview?: string;
   lastSender?: string;
+  /**
+   * An untitled group chat's distinct recent senders other than the user,
+   * most recent first — its title names the first three (see
+   * `tools/titles.ts`) — or an untitled 1:1's other person. Absent until the
+   * listing or a read of its messages found someone.
+   */
+  participants?: string[];
 }
 
 export interface FileAttachment {
@@ -109,6 +120,15 @@ const PREVIEW_CHARS = 200;
 
 /** The preview of a last message that is a system event (a call, a member added, …). */
 const SYSTEM_EVENT_PREVIEW = '(system event)';
+
+/** An untopiced group chat's title when no one but the user is known to have written in it. */
+export const UNTITLED_GROUP_TITLE = '(untitled group chat)';
+
+/** An untopiced 1:1's title when the other person's name is not known. */
+export const UNTITLED_ONE_ON_ONE_TITLE = '(1:1 chat)';
+
+/** What an untopiced group chat's participant title starts with (see `tools/titles.ts`). */
+export const GROUP_TITLE_PREFIX = 'Group chat: ';
 
 /** A channel's team name when the team's own thread is listed but names nothing. */
 const UNNAMED_TEAM = '(team)';
@@ -251,6 +271,34 @@ export function isUnreadCandidate(c: RawConversation, meMri: string): boolean {
   return !(lastIsMine && lastArrival >= newest);
 }
 
+/**
+ * The other person's MRI in a 1:1: its id is `19:<oid>_<oid>@unq.gbl.spaces`,
+ * the two people's AAD object ids, so the one that is not the user's is
+ * theirs (`8:orgid:<oid>`). `undefined` when the id is not shaped so or does
+ * not name the user — then the listing cannot say who the other person is.
+ */
+export function oneOnOnePeerMri(id: string, meMri: string): string | undefined {
+  const m = /^19:([^_@]+)_([^_@]+)@unq\.gbl\.spaces$/.exec(id);
+  const prefix = '8:orgid:';
+  if (m === null || !meMri.startsWith(prefix)) return undefined;
+  const mine = meMri.slice(prefix.length).toLowerCase();
+  const [a, b] = [m[1], m[2]];
+  if (a.toLowerCase() === mine && b.toLowerCase() !== mine) return `${prefix}${b}`;
+  if (b.toLowerCase() === mine && a.toLowerCase() !== mine) return `${prefix}${a}`;
+  return undefined;
+}
+
+/** True when the sender's MRI is `mri`, ignoring case (oids are GUIDs). */
+export function isFromMri(from: string | undefined, mri: string): boolean {
+  return senderMri(from)?.toLowerCase() === mri.toLowerCase();
+}
+
+/** A `properties` flag Teams sends as `"true"` / `"True"` (or, defensively, a boolean). */
+function flag(c: RawConversation, name: string): boolean {
+  const v: unknown = c.properties?.[name];
+  return v === true || (typeof v === 'string' && v.trim().toLowerCase() === 'true');
+}
+
 /** A channel the user has hidden in Teams. */
 function isHiddenChannel(c: RawConversation): boolean {
   return c.memberProperties?.interest === 'NotInterested';
@@ -271,10 +319,21 @@ export function conversationSummary(
   const ownTeam = kind === 'channel' && isTeamThread(c);
 
   let title = kind === 'self' ? SELF_CHAT_TITLE : ownTeam ? 'General' : nonEmpty(tp.topic);
-  if (title === undefined) {
-    // An untopiced chat is named after the other person — learnable only when
-    // they sent the last message.
-    title = kind === 'channel' ? 'General' : (!lastFromMe ? lastSender : undefined) ?? '(untitled chat)';
+  let participants: string[] | undefined;
+  if (title === undefined && kind === 'oneOnOne') {
+    // A 1:1 is named after the other person, whom its id names. The listing
+    // knows their name only when they sent the last message; otherwise
+    // `tools/titles.ts` finds it in their recent messages.
+    const peer = oneOnOnePeerMri(c.id, meMri);
+    const fromPeer = peer !== undefined ? last !== undefined && isFromMri(last.from, peer) : !lastFromMe;
+    const name = fromPeer ? lastSender : undefined;
+    title = name ?? UNTITLED_ONE_ON_ONE_TITLE;
+    if (name !== undefined) participants = [name];
+  } else if (title === undefined) {
+    // An untopiced group chat's last sender is only a stand-in: `tools/titles.ts`
+    // names it after its recent participants instead.
+    const untitled = kind === 'group' ? UNTITLED_GROUP_TITLE : '(untitled chat)';
+    title = kind === 'channel' ? 'General' : (!lastFromMe ? lastSender : undefined) ?? untitled;
   }
 
   let team: string | undefined;
@@ -296,9 +355,12 @@ export function conversationSummary(
     unread,
     unread_confirmed: false,
     ...(hidden ? { hidden: true as const } : {}),
+    ...(flag(c, 'favorite') ? { favorite: true as const } : {}),
+    ...(flag(c, 'ispinned') ? { pinned: true as const } : {}),
     ...(lastActivity !== undefined ? { lastActivity } : {}),
     ...(preview ? { lastMessagePreview: truncate(preview, PREVIEW_CHARS) } : {}),
     ...(lastSender !== undefined ? { lastSender } : {}),
+    ...(participants !== undefined ? { participants } : {}),
   };
 }
 
@@ -521,9 +583,12 @@ export function summariseAll(raw: readonly RawConversation[], meMri: string): Co
 /**
  * Resolve a user's `conversation` argument: an exact id wins outright, then
  * `notes` / `self` name the self-chat, else a case-insensitive substring of
- * the title or team name.
+ * the title, team name, or one of an untitled group chat's participants. A
+ * title this server made up — "Group chat: …" or "(untitled group chat)" — is
+ * not itself matched, so "group" or "chat" does not hit every untitled group
+ * chat: such a chat matches by its participants instead.
  */
-export function matchConversations<T extends Pick<ConversationSummary, 'id' | 'title' | 'team'>>(
+export function matchConversations<T extends Pick<ConversationSummary, 'id' | 'title' | 'team' | 'participants'>>(
   summaries: readonly T[],
   query: string,
 ): T[] {
@@ -535,5 +600,16 @@ export function matchConversations<T extends Pick<ConversationSummary, 'id' | 't
     const self = summaries.find((s) => s.id === SELF_CHAT);
     if (self) return [self];
   }
-  return summaries.filter((s) => s.title.toLowerCase().includes(q) || (s.team?.toLowerCase().includes(q) ?? false));
+  return summaries.filter(
+    (s) =>
+      (hasRealTitle(s) && s.title.toLowerCase().includes(q)) ||
+      (s.team?.toLowerCase().includes(q) ?? false) ||
+      (s.participants?.some((p) => p.toLowerCase().includes(q)) ?? false),
+  );
+}
+
+/** False for a title made from participants, or an untitled-group / untitled-1:1 stand-in. */
+function hasRealTitle(s: Pick<ConversationSummary, 'title' | 'participants'>): boolean {
+  if (s.title === UNTITLED_GROUP_TITLE || s.title === UNTITLED_ONE_ON_ONE_TITLE) return false;
+  return !(s.participants !== undefined && s.title.startsWith(GROUP_TITLE_PREFIX));
 }

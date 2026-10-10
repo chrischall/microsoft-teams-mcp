@@ -1,9 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createTestHarness, parseToolResult } from '@chrischall/mcp-utils/test';
 import { McpToolError } from '@chrischall/mcp-utils';
-import { registerConversationTools } from '../../src/tools/conversation.js';
+import { registerConversationTools, resolveListed } from '../../src/tools/conversation.js';
 import type { ChatServiceClient, GetMessagesOptions } from '../../src/chatsvc.js';
-import { fakeChatsvc, messagesFrom, rawConv, rawMsg } from './fake-chatsvc.js';
+import { fakeChatsvc, ME, messagesFrom, rawConv, rawMsg } from './fake-chatsvc.js';
 
 const T0 = 1_760_000_000_000;
 const MIN = 60_000;
@@ -115,6 +115,48 @@ describe('teams_read_conversation', () => {
     expect(text).not.toContain('19:dup10@thread.v2');
     expect(text).toMatch(/14/);
   });
+
+  it('resolves an untitled group chat by a participant name, though every one has the same last sender', async () => {
+    const FROM = (mri: string) => `https://teams.cloud.microsoft/api/chatsvc/amer/v1/users/ME/contacts/${mri}`;
+    const groups = ['19:untitled0001@thread.v2', '19:untitled0002@thread.v2', '19:untitled0003@thread.v2'];
+    const convs = groups.map((id, i) => rawConv(id, { at: T0 + i * MIN, sender: 'King, Greg' }));
+    const others = ['Alpha, Ann', 'Bravo, Bob', 'Charlie, Cy'];
+    const byId = Object.fromEntries(
+      groups.map((id, i) => [
+        id,
+        [
+          { ...rawMsg(T0 - MIN, { sender: others[i], conv: id }), from: FROM(`8:orgid:other${i}`) },
+          rawMsg(T0 + i * MIN, { sender: 'King, Greg', conv: id }),
+        ],
+      ]),
+    );
+    const getMessages = vi.fn(async (id: string, opts: GetMessagesOptions) => messagesFrom(byId[id] ?? [])(id, opts));
+    const chatsvc = fakeChatsvc(convs, { getMessages });
+
+    const ambiguous = await call(chatsvc, { conversation: 'king' });
+    expect(ambiguous.result.isError).toBe(true);
+    expect(errorText(ambiguous.result)).toContain('Group chat: King, Greg; Bravo, Bob');
+
+    const { data } = await call(chatsvc, { conversation: 'bravo' });
+    expect(data?.conversation).toMatchObject({
+      id: groups[1],
+      title: 'Group chat: King, Greg; Bravo, Bob',
+      participants: ['King, Greg', 'Bravo, Bob'],
+    });
+  });
+
+  it.each(['notes', 'Self', ' self ', '48:notes'])(
+    'resolves the self-chat alias %j without reading any untitled group chat',
+    async (conversation) => {
+      const convs = [rawConv('19:untitled0001@thread.v2', { sender: 'King, Greg' }), rawConv('19:untitled0002@thread.v2')];
+      const getMessages = vi.fn(async (id: string, opts: GetMessagesOptions) => messagesFrom([])(id, opts));
+      const chatsvc = fakeChatsvc(convs, { getMessages });
+
+      const summary = await resolveListed(chatsvc, convs, ME, conversation, 'read');
+      expect(summary).toMatchObject({ id: '48:notes', kind: 'self' });
+      expect(getMessages).not.toHaveBeenCalled();
+    },
+  );
 
   it('errors when nothing matches, pointing at the listing tools', async () => {
     const { result } = await call(chatsvcWith(), { conversation: 'no such chat' });

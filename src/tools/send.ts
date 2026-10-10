@@ -35,8 +35,8 @@ import {
   type MentionTarget,
   type QuotedMessage,
 } from '../compose.js';
-import { htmlToText, isUserMessage, normaliseMessage, SELF_CHAT, senderMri, summariseAll } from '../model.js';
-import { resolveConversation } from './conversation.js';
+import { htmlToText, isUserMessage, normaliseMessage, SELF_CHAT, senderMri } from '../model.js';
+import { resolveListed } from './conversation.js';
 import { wrapApiError } from './errors.js';
 import {
   THIRD_PARTY_NAMES_NOTE,
@@ -102,7 +102,7 @@ export async function resolveTarget(
     });
   }
   const raw = await chatsvc.listConversations();
-  const s = resolveConversation(summariseAll(raw, me), conversation, verb);
+  const s = await resolveListed(chatsvc, raw, me, conversation, verb);
   return { id: s.id, title: s.title, kind: s.kind };
 }
 
@@ -257,7 +257,7 @@ export function registerSendTools(server: McpServer, { chatsvc }: Pick<TeamsDeps
           .min(1)
           .describe(
             `The conversation id (or "${SELF_CHAT}" — also by the name "notes" or "self" — for the self-chat), ` +
-              'or a case-insensitive substring of the chat title, channel name or team name.',
+              "or a case-insensitive substring of the chat title, channel name, team name or an untitled chat's participant names.",
           ),
         text: z.string().min(1).describe('The message, as plain text. Newlines are kept; :key: shortcodes become emoji.'),
         reply_to: z

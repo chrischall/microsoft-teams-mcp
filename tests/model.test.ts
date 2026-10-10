@@ -10,6 +10,7 @@ import {
   isUserMessage,
   matchConversations,
   newestActivityMs,
+  oneOnOnePeerMri,
   normaliseMessage,
   readHorizon,
   senderMri,
@@ -336,10 +337,16 @@ describe('conversationSummary', () => {
     expect(s.unread).toBe(false);
   });
 
-  it('titles a chat whose last message is mine "(untitled chat)" and never unread', () => {
+  it('titles an untopiced group chat whose last message is mine "(untitled group chat)"', () => {
+    const c: RawConversation = { ...conv(GROUP_READ), lastMessage: { ...conv(ONE_ON_ONE).lastMessage! } };
+    expect(conversationSummary(c, ME, CONVS).title).toBe('(untitled group chat)');
+  });
+
+  it('titles a 1:1 whose last message is mine "(1:1 chat)" (until titles.ts names the other person) and never unread', () => {
     const s = conversationSummary(conv(ONE_ON_ONE), ME, CONVS);
     expect(s.kind).toBe('oneOnOne');
-    expect(s.title).toBe('(untitled chat)');
+    expect(s.title).toBe('(1:1 chat)');
+    expect(s).not.toHaveProperty('participants');
     expect(s.unread).toBe(false);
     expect(s.lastSender).toBe('Test User');
   });
@@ -586,5 +593,116 @@ describe('matchConversations', () => {
     it('treats "notes" as an ordinary substring when no self-chat is listed', () => {
       expect(matchConversations([...summaries, notesChat], 'notes').map((s) => s.id)).toEqual(['19:notes0001@thread.v2']);
     });
+  });
+
+  it('matches a participant name of an untitled group chat', () => {
+    const rows = [
+      { id: 'a', title: 'Group chat: Ann; Bob +1', participants: ['Ann', 'Bob'] },
+      { id: 'b', title: 'Group chat: Cy', participants: ['Cy'] },
+      { id: 'c', title: 'Title only' },
+    ];
+    expect(matchConversations(rows, 'bob').map((s) => s.id)).toEqual(['a']);
+    expect(matchConversations(rows, 'cy').map((s) => s.id)).toEqual(['b']);
+    // A participant is matched even when the title spells the name differently.
+    expect(matchConversations([{ id: 'd', title: 'Group chat (renamed)', participants: ['Dee Example'] }], 'dee').map((s) => s.id)).toEqual(['d']);
+  });
+
+  it('never matches the "Group chat:" prefix or "(untitled group chat)" — only participants and real titles', () => {
+    const rows = [
+      { id: 'a', title: 'Group chat: Ann; Bob', participants: ['Ann', 'Bob'] },
+      { id: 'b', title: '(untitled group chat)' },
+      { id: 'c', title: 'Book group' },
+      { id: 'd', title: 'Group chat: Chatty, Cy', participants: ['Chatty, Cy'] },
+    ];
+    expect(matchConversations(rows, 'group').map((s) => s.id)).toEqual(['c']);
+    expect(matchConversations(rows, 'chat').map((s) => s.id)).toEqual(['d']);
+    expect(matchConversations(rows, 'group chat').map((s) => s.id)).toEqual([]);
+    expect(matchConversations(rows, 'untitled').map((s) => s.id)).toEqual([]);
+  });
+});
+
+describe('oneOnOnePeerMri', () => {
+  const PEER = '8:orgid:00000000-0000-0000-0000-0000000000b2';
+
+  it('is the oid in a 1:1 id that is not mine, as an MRI, whichever side mine is on', () => {
+    expect(oneOnOnePeerMri(ONE_ON_ONE, ME)).toBe(PEER);
+    const flipped = '19:00000000-0000-0000-0000-0000000000b2_00000000-0000-0000-0000-0000000000a1@unq.gbl.spaces';
+    expect(oneOnOnePeerMri(flipped, ME)).toBe(PEER);
+  });
+
+  it('compares oids case-insensitively', () => {
+    const upper = '19:00000000-0000-0000-0000-0000000000A1_00000000-0000-0000-0000-0000000000B2@unq.gbl.spaces';
+    expect(oneOnOnePeerMri(upper, ME)).toBe('8:orgid:00000000-0000-0000-0000-0000000000B2');
+  });
+
+  it('is undefined when the id is not a 1:1 of mine', () => {
+    expect(oneOnOnePeerMri('19:aaaa_bbbb@unq.gbl.spaces', ME)).toBeUndefined();
+    expect(oneOnOnePeerMri('19:group0001@thread.v2', ME)).toBeUndefined();
+    expect(oneOnOnePeerMri(ONE_ON_ONE, '8:teamsvisitor:x')).toBeUndefined();
+  });
+});
+
+describe('1:1 titles', () => {
+  const PEER = '8:orgid:00000000-0000-0000-0000-0000000000b2';
+  const FROM = (mri: string) => `https://teams.cloud.microsoft/api/chatsvc/amer/v1/users/ME/contacts/${mri}`;
+  const withLast = (from: string, name: string, messagetype = 'Text'): RawConversation => ({
+    ...conv(ONE_ON_ONE),
+    lastMessage: { ...conv(ONE_ON_ONE).lastMessage!, from: FROM(from), imdisplayname: name, messagetype },
+  });
+
+  it('names a 1:1 after the other person when they sent the last message, with them as its participant', () => {
+    expect(conversationSummary(withLast(PEER, 'Rivera, Sam'), ME, CONVS)).toMatchObject({
+      title: 'Rivera, Sam',
+      participants: ['Rivera, Sam'],
+    });
+  });
+
+  it('does not take a system event\'s name for the other person', () => {
+    const s = conversationSummary(withLast(PEER, 'Rivera, Sam', 'Event/Call'), ME, CONVS);
+    expect(s.title).toBe('(1:1 chat)');
+    expect(s).not.toHaveProperty('participants');
+  });
+
+  it('does not take a third party\'s name when the id says who the other person is', () => {
+    const s = conversationSummary(withLast('8:orgid:someone-else', 'Bot, Example'), ME, CONVS);
+    expect(s.title).toBe('(1:1 chat)');
+  });
+
+  it('never matches "(1:1 chat)" as a title, only a participant', () => {
+    const rows = [
+      { id: 'a', title: '(1:1 chat)' },
+      { id: 'b', title: 'Rivera, Sam', participants: ['Rivera, Sam'] },
+    ];
+    expect(matchConversations(rows, 'chat').map((s) => s.id)).toEqual([]);
+    expect(matchConversations(rows, '1:1').map((s) => s.id)).toEqual([]);
+    expect(matchConversations(rows, 'rivera').map((s) => s.id)).toEqual(['b']);
+  });
+});
+
+describe('favorite and pinned', () => {
+  const withProps = (props: Record<string, string>): RawConversation => ({
+    ...conv(GROUP),
+    properties: { ...conv(GROUP).properties, ...props },
+  });
+
+  it.each(['true', 'True', 'TRUE'])('marks a conversation whose properties.favorite is %j favorite: true', (v) => {
+    expect(conversationSummary(withProps({ favorite: v }), ME, CONVS)).toMatchObject({ favorite: true });
+  });
+
+  it.each(['true', 'True'])('marks one whose properties.ispinned is %j pinned: true', (v) => {
+    expect(conversationSummary(withProps({ ispinned: v }), ME, CONVS)).toMatchObject({ pinned: true });
+  });
+
+  it('carries neither flag when false or absent', () => {
+    for (const props of [{ favorite: 'false', ispinned: 'False' }, {}] as Record<string, string>[]) {
+      const s = conversationSummary(withProps(props), ME, CONVS);
+      expect(s).not.toHaveProperty('favorite');
+      expect(s).not.toHaveProperty('pinned');
+    }
+  });
+
+  it('reads a boolean true too', () => {
+    const c = { ...conv(GROUP), properties: { favorite: true } } as unknown as RawConversation;
+    expect(conversationSummary(c, ME, CONVS)).toMatchObject({ favorite: true });
   });
 });

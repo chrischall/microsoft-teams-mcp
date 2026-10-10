@@ -9,6 +9,7 @@ import { z } from 'zod';
 import type { ChatServiceClient } from '../chatsvc.js';
 import { confirmedSummary, confirmUnreadCandidates, olderUnreadReport, sinceCutoff, sinceDaysArg } from './confirm.js';
 import { wrapApiError } from './errors.js';
+import { enrichTitles } from './titles.js';
 import {
   conversationSummary,
   matchConversations,
@@ -75,6 +76,29 @@ export function queryArg(what: string) {
     .describe(`Case-insensitive substring of the ${what}, or an exact conversation id.`);
 }
 
+/** Description text on how an untitled group chat or 1:1 is titled. */
+export const GROUP_TITLE_DESCRIPTION =
+  'A group chat with no topic is titled "Group chat: " and up to three of its recent senders other ' +
+  'than the user, most recent first ("; " between names, "+N" for more), and carries every such ' +
+  'recent sender as participants; it is "(untitled group chat)" when no one else wrote recently. ' +
+  'A 1:1 is titled by the other person, who is its one participant; it is "(1:1 chat)" when they ' +
+  'wrote nothing recently.'
+
+/**
+ * Favorites, then pinned conversations, ahead of the rest — the plain list
+ * tools' first sort key, as in the Teams sidebar. 0 between two of a kind, so
+ * a stable sort keeps each tool's own order within them.
+ */
+export function favoritesFirst(a: Pick<ConversationSummary, 'favorite' | 'pinned'>, b: Pick<ConversationSummary, 'favorite' | 'pinned'>): number {
+  const rank = (s: Pick<ConversationSummary, 'favorite' | 'pinned'>) => (s.favorite ? 0 : s.pinned ? 1 : 2);
+  return rank(a) - rank(b);
+}
+
+/** Description text on the favorite / pinned flags and order. */
+export const FAVORITES_DESCRIPTION =
+  'Conversations the user marked a favorite or pinned in Teams carry favorite: true / pinned: true ' +
+  'and, without unread_only, are listed first (favorites, then pinned); unread_only keeps its usual order.';
+
 export type ListedRow = ConversationSummary & { unread_count?: number; unread_count_exact?: false };
 
 export interface Listing {
@@ -89,24 +113,53 @@ export interface Listing {
 }
 
 /**
+ * A listing plus `retitle`, which titles the untitled group chats and 1:1s among the
+ * rows a tool is about to return — and among the conversations in `errors` —
+ * by their participants (`titles.ts`). Kept apart from the rows so a tool
+ * reads only the chats it returns.
+ */
+export type ListingWithRetitle = Listing & {
+  retitle: (rows: ListedRow[]) => Promise<{ rows: ListedRow[]; errors?: Listing['errors'] }>;
+};
+
+/**
  * Every conversation of the given kinds, as summaries. Unsorted: each tool
  * orders its own result. A team's name comes from its own thread, so the
  * summaries are built against the FULL listing before any filtering. With
  * `unread_only`, only candidates a read confirms are kept.
  */
-export async function listSummaries(chatsvc: ChatServiceClient, filter: ListFilter): Promise<Listing> {
+export async function listSummaries(chatsvc: ChatServiceClient, filter: ListFilter): Promise<ListingWithRetitle> {
   const [raw, me] = await Promise.all([chatsvc.listConversations(), chatsvc.meMri()]);
   let rows = raw.map((c) => conversationSummary(c, me, raw)).filter((s) => filter.kinds.includes(s.kind));
   if (filter.unread_only) rows = rows.filter((s) => isUnreadCandidateFor(s, filter.include_hidden));
-  if (filter.query !== undefined) rows = matchConversations(rows, filter.query);
-  if (!filter.unread_only) return { rows };
+  // A query can name a group chat or 1:1 by a participant, so every untitled one is titled first.
+  if (filter.query !== undefined) rows = matchConversations(await enrichTitles(chatsvc, raw, me, rows), filter.query);
+  if (!filter.unread_only) return { rows, retitle: async (kept) => ({ rows: await enrichTitles(chatsvc, raw, me, kept) }) };
 
   const outcome = await confirmUnreadCandidates(chatsvc, raw, me, rows, {
     limit: CONFIRM_LIMIT,
     maxRaw: CONFIRM_MAX_RAW,
     since: sinceCutoff(filter.since_days),
   });
+  const errors = (titled: readonly ConversationSummary[]): Listing['errors'] =>
+    outcome.failed.length > 0
+      ? outcome.failed.map((f, i) => ({
+          conversation: { id: f.summary.id, title: titled[i].title },
+          error: wrapApiError(f.error, 'confirm this conversation is unread').message,
+        }))
+      : undefined;
+  const failedSummaries = outcome.failed.map((f) => f.summary);
+  const retitle: ListingWithRetitle['retitle'] = async (kept) => {
+    const [rows, failed] = await Promise.all([
+      enrichTitles(chatsvc, raw, me, kept),
+      enrichTitles(chatsvc, raw, me, failedSummaries),
+    ]);
+    const errs = errors(failed);
+    return { rows, ...(errs ? { errors: errs } : {}) };
+  };
+  const errs = errors(failedSummaries);
   return {
+    retitle,
     rows: outcome.confirmed.map(({ summary, read }) => ({
       ...confirmedSummary(summary, true),
       unread_count: read.messages.length,
@@ -114,13 +167,6 @@ export async function listSummaries(chatsvc: ChatServiceClient, filter: ListFilt
     })),
     skipped_unreachable: outcome.skippedUnreachable,
     ...olderUnreadReport(outcome.olderSkipped, filter.since_days),
-    ...(outcome.failed.length > 0
-      ? {
-          errors: outcome.failed.map((f) => ({
-            conversation: { id: f.summary.id, title: f.summary.title },
-            error: wrapApiError(f.error, 'confirm this conversation is unread').message,
-          })),
-        }
-      : {}),
+    ...(errs ? { errors: errs } : {}),
   };
 }

@@ -275,6 +275,15 @@ describe('getMessages', () => {
     ]);
   });
 
+  it('requests a smaller page when pageSize is given', async () => {
+    const fetchImpl = pagedFetch();
+    await client(fetchImpl).getMessages(CONV, { max: 30, pageSize: 30 });
+    expect(urlOf(fetchImpl, 0)).toBe(
+      `${BASE}/users/ME/conversations/${encodeURIComponent(CONV)}/messages` +
+        '?view=msnp24Equivalent|supportsMessageProperties&pageSize=30&startTime=1',
+    );
+  });
+
   it('stops at the first message stopAt accepts, excluding it, without fetching further', async () => {
     const fetchImpl = pagedFetch();
     const msgs = await client(fetchImpl).getMessages(CONV, {

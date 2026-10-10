@@ -11,7 +11,16 @@ import type { ConversationSummary } from '../model.js';
 import { wrapApiError } from './errors.js';
 import { untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
 import { limitArg, trimRows } from './limit.js';
-import { includeHiddenArg, listSinceDaysArg, listSummaries, queryArg, UNREAD_HINT_DESCRIPTION, unreadOnlyArg } from './listing.js';
+import {
+  FAVORITES_DESCRIPTION,
+  favoritesFirst,
+  includeHiddenArg,
+  listSinceDaysArg,
+  listSummaries,
+  queryArg,
+  UNREAD_HINT_DESCRIPTION,
+  unreadOnlyArg,
+} from './listing.js';
 
 /** Up to 10 pages of 200 come back; this bounds one result, not the listing. */
 const MAX_CHANNELS = 500;
@@ -49,7 +58,8 @@ export function registerChannelTools(server: McpServer, { chatsvc }: Pick<TeamsD
         'keeps only channels whose newest unread post is from the last 14 days (since_days widens ' +
         'it); older ones are counted in older_unread_skipped, not listed. ' +
         UNREAD_HINT_DESCRIPTION +
-        ' Listing never marks anything read. query matches the channel title or team name.' +
+        ' Listing never marks anything read. query matches the channel title or team name. ' +
+        FAVORITES_DESCRIPTION +
         UNTRUSTED_DESCRIPTION_SUFFIX,
       annotations: toolAnnotations({ readOnly: true, openWorld: true }),
       inputSchema: {
@@ -57,12 +67,13 @@ export function registerChannelTools(server: McpServer, { chatsvc }: Pick<TeamsD
         since_days: listSinceDaysArg,
         include_hidden: includeHiddenArg,
         query: queryArg('channel title or team name'),
-        limit: limitArg(MAX_CHANNELS, 'channels', 'first by team and title kept'),
+        limit: limitArg(MAX_CHANNELS, 'channels', 'favorites and pinned first, then by team and title, kept'),
       },
     },
     async ({ unread_only, include_hidden, since_days, query, limit }) => {
       try {
-        const { rows, ...unreadInfo } = await listSummaries(chatsvc, {
+        // Channels are never untitled group chats, so there is nothing to retitle.
+        const { rows, retitle: _retitle, ...unreadInfo } = await listSummaries(chatsvc, {
           kinds: ['channel'],
           unread_only,
           include_hidden,
@@ -70,6 +81,7 @@ export function registerChannelTools(server: McpServer, { chatsvc }: Pick<TeamsD
           query,
         });
         rows.sort(byTeamThenTitle);
+        if (!unread_only) rows.sort(favoritesFirst);
         const { rows: channels, truncated } = trimRows(rows, limit, 'start', MAX_CHANNELS, 'first');
         return untrustedResult({ channels, ...unreadInfo, ...(truncated ? { truncated } : {}) });
       } catch (err) {

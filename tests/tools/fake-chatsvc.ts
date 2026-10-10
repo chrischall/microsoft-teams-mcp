@@ -36,6 +36,10 @@ export function rawConv(
     lastIm?: number;
     /** `memberProperties.interest` — `NotInterested` is a channel hidden in Teams. */
     interest?: string;
+    /** `properties.favorite` as Teams sends it (`"true"`, `"True"`, `"false"`). */
+    favorite?: string;
+    /** `properties.ispinned`, likewise. */
+    pinned?: string;
   } = {},
 ): RawConversation {
   const at = opts.at ?? 1_760_000_000_000;
@@ -44,6 +48,8 @@ export function rawConv(
     properties: {
       consumptionhorizon: `${opts.horizon ?? at};${at};${opts.horizon ?? at}`,
       ...(opts.lastIm !== undefined ? { lastimreceivedtime: new Date(opts.lastIm).toISOString() } : {}),
+      ...(opts.favorite !== undefined ? { favorite: opts.favorite } : {}),
+      ...(opts.pinned !== undefined ? { ispinned: opts.pinned } : {}),
     },
     ...(opts.interest !== undefined ? { memberProperties: { interest: opts.interest } } : {}),
     threadProperties: {

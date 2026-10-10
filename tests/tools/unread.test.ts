@@ -107,6 +107,18 @@ describe('teams_get_unread', () => {
     expect(data).not.toHaveProperty('more_unread_conversations');
   });
 
+  it('titles an unread untitled group chat by its participants', async () => {
+    const UNTITLED = '19:untitled0001@thread.v2';
+    const convs = [rawConv(UNTITLED, { at: T0 + 4 * MIN, horizon: T0, sender: 'King, Greg' })];
+    const msgs = [
+      { ...rawMsg(T0 + MIN, { conv: UNTITLED, sender: 'Alpha, Ann' }), from: 'https://x/contacts/8:orgid:ann' },
+      rawMsg(T0 + 4 * MIN, { conv: UNTITLED, sender: 'King, Greg' }),
+    ];
+    const { data } = await call(fakeChatsvc(convs, { getMessages: perConversation({ [UNTITLED]: msgs }) }));
+    const [c] = data?.conversations as { conversation: { title: string; participants?: string[] } }[];
+    expect(c.conversation).toMatchObject({ title: 'Group chat: King, Greg; Alpha, Ann', participants: ['King, Greg', 'Alpha, Ann'] });
+  });
+
   it('never fetches a conversation that is read up to date, or whose last message is the user\'s', async () => {
     const chatsvc = chatsvcWith();
     await call(chatsvc);
