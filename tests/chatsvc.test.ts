@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { McpToolError } from '@chrischall/mcp-utils';
+import { McpToolError, RequestTimeoutError, WriteOutcomeUnknownError } from '@chrischall/mcp-utils';
 import { ChatServiceClient, DEFAULT_REGION, chatServiceBase } from '../src/chatsvc.js';
 
 /** A hand-written fixture from `tests/fixtures/` — invented names and text only. */
@@ -371,5 +371,111 @@ describe('fetchImage', () => {
       mimeType: 'image/png',
     });
     expect(capture).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('meDisplayName', () => {
+  it('reads the signed-in user name from the token name claim', async () => {
+    const c = client(vi.fn(async () => jsonResponse({})), async () => jwt(3600, { oid: ME_OID, name: 'Me Myself' }));
+    await expect(c.meDisplayName()).resolves.toBe('Me Myself');
+  });
+
+  it('is an empty string when the token carries no name', async () => {
+    const c = client(vi.fn(async () => jsonResponse({})));
+    await expect(c.meDisplayName()).resolves.toBe('');
+  });
+});
+
+describe('getMessage', () => {
+  it('GETs one message of the encoded conversation', async () => {
+    const fetchImpl: FetchMock = vi.fn(async () => jsonResponse(msg(1760000000000)));
+    const m = await client(fetchImpl).getMessage('19:a b@thread.v2', '1760000000000');
+    expect(m?.content).toBe('m1760000000000');
+    expect(urlOf(fetchImpl, 0)).toBe(
+      `${BASE}/users/ME/conversations/${encodeURIComponent('19:a b@thread.v2')}/messages/1760000000000`,
+    );
+    expect(fetchImpl.mock.calls[0]?.[1]?.method).toBe('GET');
+  });
+
+  it('is undefined for a 404', async () => {
+    const fetchImpl: FetchMock = vi.fn(async () => jsonResponse({}, 404));
+    await expect(client(fetchImpl).getMessage('19:a@thread.v2', '1')).resolves.toBeUndefined();
+  });
+
+  it('still throws for other failures', async () => {
+    const fetchImpl: FetchMock = vi.fn(async () => jsonResponse({}, 500));
+    await expect(client(fetchImpl).getMessage('19:a@thread.v2', '1')).rejects.toMatchObject({ status: 500 });
+  });
+});
+
+describe('sendMessage', () => {
+  const BODY = { content: '<p>hi</p>', clientmessageid: '1234567890123456789' };
+
+  function created(id = '1760000999999'): Response {
+    return new Response('', {
+      status: 201,
+      headers: { location: `${BASE}/users/ME/conversations/19%3Aa%40thread.v2/messages/${id}` },
+    });
+  }
+
+  it('POSTs the JSON body to the encoded conversation and returns the new id from Location', async () => {
+    const fetchImpl: FetchMock = vi.fn(async () => created());
+    const res = await client(fetchImpl).sendMessage('19:a@thread.v2', BODY);
+    expect(res).toEqual({ id: '1760000999999' });
+    expect(urlOf(fetchImpl, 0)).toBe(`${BASE}/users/ME/conversations/${encodeURIComponent('19:a@thread.v2')}/messages`);
+    const init = fetchImpl.mock.calls[0]?.[1];
+    expect(init?.method).toBe('POST');
+    expect(JSON.parse(String(init?.body))).toEqual(BODY);
+    const h = headersOf(fetchImpl, 0);
+    expect(h.get('content-type')).toBe('application/json');
+    expect(h.get('authorization')).toMatch(/^Bearer /);
+    expect(h.get('behavioroverride')).toBe('redirectAs404');
+  });
+
+  it('encodes a channel thread target (id;messageid=root) as one path segment', async () => {
+    const fetchImpl: FetchMock = vi.fn(async () => created());
+    await client(fetchImpl).sendMessage('19:c@thread.tacv2;messageid=1760000000000', BODY);
+    expect(urlOf(fetchImpl, 0)).toBe(
+      `${BASE}/users/ME/conversations/${encodeURIComponent('19:c@thread.tacv2;messageid=1760000000000')}/messages`,
+    );
+  });
+
+  it('has no id when the response carries no Location', async () => {
+    const fetchImpl: FetchMock = vi.fn(async () => new Response('', { status: 201 }));
+    await expect(client(fetchImpl).sendMessage('c', BODY)).resolves.toEqual({});
+  });
+
+  it('re-captures once and replays once on a 401 (the first POST was refused, not accepted)', async () => {
+    const capture = vi.fn(async () => jwt());
+    let n = 0;
+    const fetchImpl: FetchMock = vi.fn(async () => (n++ === 0 ? jsonResponse({}, 401) : created()));
+    await expect(client(fetchImpl, capture).sendMessage('c', BODY)).resolves.toEqual({ id: '1760000999999' });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('reports a dropped connection after sending as an unknown outcome, never a plain error', async () => {
+    const fetchImpl: FetchMock = vi.fn(async () => {
+      throw new TypeError('fetch failed');
+    });
+    const p = client(fetchImpl).sendMessage('c', BODY);
+    await expect(p).rejects.toBeInstanceOf(WriteOutcomeUnknownError);
+    await expect(p).rejects.toMatchObject({ outcomeUnknown: true, timedOut: false });
+  });
+
+  it('reports a timeout as an unknown outcome', async () => {
+    const fetchImpl: FetchMock = vi.fn(async () => {
+      throw new RequestTimeoutError('Teams', 60_000);
+    });
+    await expect(client(fetchImpl).sendMessage('c', BODY)).rejects.toMatchObject({
+      outcomeUnknown: true,
+      timedOut: true,
+    });
+  });
+
+  it('maps an HTTP failure to a plain McpToolError with its status', async () => {
+    const fetchImpl: FetchMock = vi.fn(async () => jsonResponse({}, 403));
+    const p = client(fetchImpl).sendMessage('c', BODY);
+    await expect(p).rejects.toMatchObject({ status: 403 });
+    await expect(p).rejects.not.toBeInstanceOf(WriteOutcomeUnknownError);
   });
 });

@@ -56,6 +56,16 @@ export interface NormalisedMessage {
   edited: boolean;
   deleted?: true;
   attachments: { files: FileAttachment[]; images: ImageAttachment[] };
+  /** Reactions with at least one reactor; absent when there are none. */
+  reactions?: Reaction[];
+}
+
+export interface Reaction {
+  /** `like`, `heart`, … or a unicode-style key such as `1f389_partypopper`. */
+  key: string;
+  count: number;
+  /** Whether the signed-in user is one of the reactors. */
+  byMe: boolean;
 }
 
 /** The message fields the unread test reads — a full message or a listing's `lastMessage`. */
@@ -354,6 +364,32 @@ function imageAttachments(html: string): ImageAttachment[] {
   return out;
 }
 
+/**
+ * `properties.emotions`: a JSON string (or, sometimes, an already-parsed
+ * array) of `{ key, users: [{ mri, time }] }`. Keys nobody holds any more are
+ * dropped; anything unreadable yields no reactions rather than an error.
+ */
+function reactionsOf(raw: unknown, meMri: string): Reaction[] {
+  let parsed: unknown = raw;
+  if (typeof raw === 'string') {
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(parsed)) return [];
+  const out: Reaction[] = [];
+  for (const e of parsed) {
+    if (e === null || typeof e !== 'object') continue;
+    const { key, users } = e as { key?: unknown; users?: unknown };
+    if (typeof key !== 'string' || key === '' || !Array.isArray(users) || users.length === 0) continue;
+    const byMe = users.some((u) => (u as { mri?: unknown } | null)?.mri === meMri);
+    out.push({ key, count: users.length, byMe });
+  }
+  return out;
+}
+
 export function normaliseMessage(m: RawMessage, meMri: string): NormalisedMessage {
   const props = m.properties ?? {};
   const mri = senderMri(m.from);
@@ -365,6 +401,7 @@ export function normaliseMessage(m: RawMessage, meMri: string): NormalisedMessag
   const subject = typeof props.subject === 'string' ? nonEmpty(props.subject) : undefined;
   const root = /;messageid=(\d+)/.exec(m.conversationLink ?? '')?.[1];
   const content = m.content ?? '';
+  const reactions = reactionsOf(props.emotions, meMri);
 
   return {
     id: m.id,
@@ -377,6 +414,7 @@ export function normaliseMessage(m: RawMessage, meMri: string): NormalisedMessag
     edited: props.edittime !== undefined && props.edittime !== null && props.edittime !== '',
     ...(isDeleted(m) ? { deleted: true as const } : {}),
     attachments: { files: fileAttachments(props.files), images: imageAttachments(content) },
+    ...(reactions.length > 0 ? { reactions } : {}),
   };
 }
 

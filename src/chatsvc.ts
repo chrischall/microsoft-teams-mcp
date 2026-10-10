@@ -6,8 +6,9 @@
  * held, every request is a plain Node `fetch` — the bridge is never on the hot
  * path.
  *
- * Read-only by construction: the only methods are `listConversations`,
- * `getMessages` and `fetchImage`. Nothing here writes the read marker
+ * Reads are `listConversations`, `getMessages`, `getMessage` and
+ * `fetchImage`; the one write is `sendMessage`, which only the confirm-gated
+ * `teams_send_message` calls. Nothing here writes the read marker
  * (`consumptionhorizon`), so reading a chat through this MCP never clears the
  * user's unread badges.
  *
@@ -22,6 +23,8 @@ import {
   McpToolError,
   parseBoolEnv,
   readEnvVar,
+  RequestTimeoutError,
+  WriteOutcomeUnknownError,
 } from '@chrischall/mcp-utils';
 import { TokenManager, type BearerTokens } from '@chrischall/mcp-utils/session';
 import { createTokenCache, reportCacheWriteFailure } from './token-cache.js';
@@ -87,6 +90,23 @@ const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
  * host varies by region). The bearer is sent ONLY to hosts under this suffix.
  */
 const IMAGE_HOST_SUFFIX = '.asm.skype.com';
+
+/**
+ * A write that failed after it may have reached Teams. A timeout or a
+ * transport failure (dropped connection, broken body, the caller cancelling)
+ * leaves the outcome unknown; an `McpToolError` raised before anything was
+ * sent (an oversized body cap, a bad URL) is a real failure and passes through.
+ */
+function outcomeUnknown(method: string, e: unknown): unknown {
+  if (e instanceof RequestTimeoutError) {
+    return new WriteOutcomeUnknownError('Teams', method, { timeoutMs: e.timeoutMs, cause: e, hint: WRITE_OUTCOME_HINT });
+  }
+  if (e instanceof McpToolError) return e;
+  return new WriteOutcomeUnknownError('Teams', method, { cause: e, hint: WRITE_OUTCOME_HINT });
+}
+
+const WRITE_OUTCOME_HINT =
+  'The message may already have been posted — check the conversation (teams_read_conversation) before retrying; do not resend blindly.';
 
 function toBearerTokens(accessToken: string): BearerTokens {
   let expiresAt: number;
@@ -266,6 +286,21 @@ export class ChatServiceClient {
   }
 
   /**
+   * The signed-in user's display name, from the token's `name` claim — what a
+   * sent message carries as `imdisplayname`. `''` when the token has none.
+   */
+  async meDisplayName(): Promise<string> {
+    this.#requireConfigured();
+    const token = await this.#tokenManager().getAccessToken();
+    try {
+      const name = decodeJwtClaim(token, 'name');
+      return typeof name === 'string' ? name : '';
+    } catch {
+      return '';
+    }
+  }
+
+  /**
    * Every conversation the user is in, across up to 10 pages, minus `48:*`
    * system threads (notes, calendar, …) which are not chats.
    */
@@ -316,6 +351,41 @@ export class ChatServiceClient {
       url = this.#nextLink(body);
     }
     return out;
+  }
+
+  /**
+   * One message by id, or `undefined` when the service has no such message
+   * (404). Used to quote a message: its sender and text go into the quote.
+   */
+  async getMessage(conversationId: string, messageId: string): Promise<RawMessage | undefined> {
+    this.#requireConfigured();
+    const url =
+      `${this.#baseUrl}/users/ME/conversations/${encodeURIComponent(conversationId)}` +
+      `/messages/${encodeURIComponent(messageId)}`;
+    const { status, body } = await this.#send(url, 'text');
+    if (status === 404) return undefined;
+    return this.#parseJson<RawMessage>(status, body as string);
+  }
+
+  /**
+   * Post a message (the body `compose.ts` builds). `conversationId` is the
+   * chat or channel — or, for a threaded channel reply, `<channelId>;messageid=<rootId>`,
+   * encoded as one path segment. Resolves the new message's id from the
+   * `Location` header when the service sends one.
+   *
+   * Not idempotent, so a request that was SENT but got no usable answer (a
+   * timeout, a dropped connection) is a `WriteOutcomeUnknownError` — the post
+   * may already be in the chat, and a blind retry would post it twice. A 401
+   * is still replayed once after a re-capture: Teams refused that request, so
+   * nothing was posted.
+   */
+  async sendMessage(conversationId: string, body: unknown): Promise<{ id?: string }> {
+    this.#requireConfigured();
+    const url = `${this.#baseUrl}/users/ME/conversations/${encodeURIComponent(conversationId)}/messages`;
+    const { status, headers } = await this.#send(url, 'text', undefined, { method: 'POST', body });
+    this.#checkStatus(status);
+    const id = /\/messages\/([^/?#]+)\/?(?:[?#].*)?$/.exec(headers.get('location') ?? '')?.[1];
+    return id !== undefined ? { id: decodeURIComponent(id) } : {};
   }
 
   /**
@@ -417,31 +487,32 @@ export class ChatServiceClient {
     url: string,
     read: 'text' | 'bytes',
     maxBytes?: number,
+    write?: { method: 'POST'; body: unknown },
   ): Promise<{ status: number; headers: Headers; body: string | Uint8Array }> {
     let body: string | Uint8Array = '';
+    const method = write?.method ?? 'GET';
     const res = await this.#tokenManager().withAuth(async (token) => {
-      const r = await fetchBounded(
-        url,
-        {
-          method: 'GET',
-          headers: {
-            authorization: `Bearer ${token}`,
-            // Verified live: without it the service answers some failures with
-            // a redirect to a sign-in page instead of a status we can act on.
-            behavioroverride: 'redirectAs404',
-            accept: read === 'text' ? 'application/json' : '*/*',
-          },
-          // Never let a redirect carry the bearer somewhere we did not vet.
-          redirect: 'error',
+      const init: RequestInit = {
+        method,
+        headers: {
+          authorization: `Bearer ${token}`,
+          // Verified live: without it the service answers some failures with
+          // a redirect to a sign-in page instead of a status we can act on.
+          behavioroverride: 'redirectAs404',
+          accept: read === 'text' ? 'application/json' : '*/*',
+          ...(write ? { 'content-type': 'application/json' } : {}),
         },
-        {
-          read,
-          maxBytes,
-          service: 'Teams',
-          timeoutMs: REQUEST_TIMEOUT_MS,
-          fetchImpl: this.#fetchImpl,
-        },
-      );
+        ...(write ? { body: JSON.stringify(write.body) } : {}),
+        // Never let a redirect carry the bearer somewhere we did not vet.
+        redirect: 'error',
+      };
+      const opts = { read, maxBytes, service: 'Teams', timeoutMs: REQUEST_TIMEOUT_MS, fetchImpl: this.#fetchImpl };
+      let r: Awaited<ReturnType<typeof fetchBounded<'text' | 'bytes'>>>;
+      try {
+        r = await fetchBounded(url, init, opts);
+      } catch (e) {
+        throw write ? outcomeUnknown(method, e) : e;
+      }
       body = r.body as string | Uint8Array;
       return r.res;
     });
@@ -450,9 +521,13 @@ export class ChatServiceClient {
 
   async #getJson<T>(url: string): Promise<T> {
     const { status, body } = await this.#send(url, 'text');
+    return this.#parseJson<T>(status, body as string);
+  }
+
+  #parseJson<T>(status: number, body: string): T {
     this.#checkStatus(status);
     try {
-      return JSON.parse(body as string) as T;
+      return JSON.parse(body) as T;
     } catch {
       // Never echo the body: it is the user's message content.
       throw new McpToolError('Teams chat service returned a response that is not JSON.', {

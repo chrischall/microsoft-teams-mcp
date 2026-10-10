@@ -266,6 +266,35 @@ describe('normaliseMessage', () => {
       { ref: 'good', url: 'https://eu-api.asm.skype.com/v1/objects/good/views/imgo' },
     ]);
   });
+
+  it('surfaces reactions from an emotions JSON string, with a count and whether the user reacted', () => {
+    const OTHER = '8:orgid:00000000-0000-0000-0000-0000000000b2';
+    const emotions = JSON.stringify([
+      { key: 'like', users: [{ mri: OTHER, time: 1 }, { mri: ME, time: 2 }] },
+      { key: 'heart', users: [{ mri: OTHER, time: 3 }] },
+      { key: 'laugh', users: [] },
+    ]);
+    const n = normaliseMessage({ id: '1', messagetype: 'Text', properties: { emotions } }, ME);
+    expect(n.reactions).toEqual([
+      { key: 'like', count: 2, byMe: true },
+      { key: 'heart', count: 1, byMe: false },
+    ]);
+  });
+
+  it('accepts emotions already parsed as an array', () => {
+    const n = normaliseMessage(
+      { id: '1', messagetype: 'Text', properties: { emotions: [{ key: '1f389_partypopper', users: [{ mri: ME }] }] } },
+      ME,
+    );
+    expect(n.reactions).toEqual([{ key: '1f389_partypopper', count: 1, byMe: true }]);
+  });
+
+  it('omits reactions when there are none or emotions is unreadable', () => {
+    expect(normaliseMessage({ id: '1', messagetype: 'Text' }, ME)).not.toHaveProperty('reactions');
+    expect(
+      normaliseMessage({ id: '1', messagetype: 'Text', properties: { emotions: 'not json' } }, ME),
+    ).not.toHaveProperty('reactions');
+  });
 });
 
 describe('conversationSummary', () => {

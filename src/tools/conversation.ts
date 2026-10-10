@@ -87,6 +87,33 @@ function describeCandidate(s: ConversationSummary): string {
   return `"${s.title}"${where} (${s.kind}, id ${s.id})`;
 }
 
+/**
+ * The one conversation a `conversation` argument names: an exact id, else a
+ * unique title/team substring. None, or several, is an `McpToolError` — the
+ * latter naming up to 10 candidates so the caller can pass an id. `verb` fills
+ * the hint ("Pass the id of the one to read").
+ */
+export function resolveConversation(
+  summaries: readonly ConversationSummary[],
+  conversation: string,
+  verb: string,
+): ConversationSummary {
+  const matches = matchConversations(summaries, conversation);
+  if (matches.length === 0) {
+    throw new McpToolError(`No chat or channel matches "${conversation}".`, {
+      hint: 'List them with teams_list_chats or teams_list_teams_and_channels and pass an id.',
+    });
+  }
+  if (matches.length > 1) {
+    const named = matches.slice(0, MAX_CANDIDATES).map(describeCandidate).join('; ');
+    const more = matches.length > MAX_CANDIDATES ? ` (first ${MAX_CANDIDATES} shown)` : '';
+    throw new McpToolError(`"${conversation}" matches ${matches.length} conversations${more}: ${named}.`, {
+      hint: `Pass the id of the one to ${verb} as conversation.`,
+    });
+  }
+  return matches[0];
+}
+
 export function registerConversationTools(server: McpServer, { chatsvc }: Pick<TeamsDeps, 'chatsvc'>): void {
   server.registerTool(
     'teams_read_conversation',
@@ -122,21 +149,7 @@ export function registerConversationTools(server: McpServer, { chatsvc }: Pick<T
       try {
         const [raw, me] = await Promise.all([chatsvc.listConversations(), chatsvc.meMri()]);
         const summaries = raw.map((c) => conversationSummary(c, me, raw));
-        const matches = matchConversations(summaries, conversation);
-        if (matches.length === 0) {
-          throw new McpToolError(`No chat or channel matches "${conversation}".`, {
-            hint: 'List them with teams_list_chats or teams_list_teams_and_channels and pass an id.',
-          });
-        }
-        if (matches.length > 1) {
-          const named = matches.slice(0, MAX_CANDIDATES).map(describeCandidate).join('; ');
-          const more = matches.length > MAX_CANDIDATES ? ` (first ${MAX_CANDIDATES} shown)` : '';
-          throw new McpToolError(
-            `"${conversation}" matches ${matches.length} conversations${more}: ${named}.`,
-            { hint: 'Pass the id of the one to read as conversation.' },
-          );
-        }
-        const summary = matches[0];
+        const summary = resolveConversation(summaries, conversation, 'read');
         const conv = raw.find((c) => c.id === summary.id)!;
         const horizon = readHorizon(conv);
         const cutoff = since !== undefined ? Date.parse(since) : undefined;
