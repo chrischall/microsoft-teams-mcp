@@ -1,0 +1,26 @@
+{
+  "conversations": [
+    {
+      "id": "19:bbbb2222@thread.tacv2",
+      "type": "Conversation",
+      "properties": {
+        "consumptionhorizon": "1760000200000;1760000200500;1760000200000"
+      },
+      "threadProperties": {
+        "topic": "Example channel",
+        "threadType": "topic",
+        "spaceId": "19:cccc3333@thread.tacv2"
+      }
+    },
+    {
+      "id": "19:00000000-0000-0000-0000-0000000000a1_00000000-0000-0000-0000-0000000000b2@unq.gbl.spaces",
+      "type": "Conversation",
+      "properties": {},
+      "threadProperties": {}
+    }
+  ],
+  "_metadata": {
+    "syncState": "page2",
+    "totalCount": 3
+  }
+}
