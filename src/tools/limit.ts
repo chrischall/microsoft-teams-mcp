@@ -1,5 +1,5 @@
 /**
- * Client-side trimming for every list/read tool. A DOM read or a conversation
+ * Client-side trimming for every list/read tool. A chat-service read or conversation
  * listing returns hundreds of rows at once; dumping all of them into one
  * result fills the context window with other people's messages the question
  * did not need. Each tool takes an optional `limit` (default
@@ -26,7 +26,7 @@ export function limitArg(max: number, what: string, kept = 'newest first kept') 
     .describe(`Maximum ${what} to return, ${kept} (default ${DEFAULT_LIMIT}, max ${max}).`);
 }
 
-/** Where the newest rows sit in what the DOM read returned. */
+/** Where the newest rows sit in what the chat-service read returned. */
 export type NewestAt = 'start' | 'end';
 
 export type Trimmed<T> = {

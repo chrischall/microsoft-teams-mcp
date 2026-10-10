@@ -1,10 +1,10 @@
 /**
  * How long a token capture may wait, and the bridge deadline that has to
- * outlast it — one source for every transport this MCP builds.
+ * outlast it.
  *
- * Kept free of any bridge import so `client.ts` (the Activity transport) and
- * `auth-fetchproxy.ts` (the capture transport) can both read it without the
- * capture module being loaded eagerly. Both are read at CALL time, not module
+ * Kept free of any bridge import, so it can be read and tested without
+ * loading `auth-fetchproxy.ts` (the one transport this MCP builds) and its
+ * optional `@fetchproxy/server` peer. Both are read at CALL time, not module
  * load, so `TEAMS_CAPTURE_TIMEOUT` set by the host's env (or a `.env` loaded
  * after import) is honoured.
  */

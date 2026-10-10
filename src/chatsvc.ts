@@ -6,7 +6,8 @@
  * held, every request is a plain Node `fetch` — the bridge is never on the hot
  * path.
  *
- * Reads are `listConversations`, `getMessages`, `getMessage` and
+ * Reads are `listConversations`, `getMessages` (which also reads the Activity
+ * feed, conversation `48:notifications`), `getMessage` and
  * `fetchImage`; the writes are `sendMessage`, `setReaction` and
  * `removeReaction`, which only the confirm-gated `teams_send_message` and
  * `teams_react` call. Nothing here writes the read marker
@@ -288,6 +289,16 @@ export class ChatServiceClient {
   tokenExpiresAt(): number | null {
     const at = this.#tokens?.getExpiresAt();
     return at !== undefined && Number.isFinite(at) && at > 0 ? at : null;
+  }
+
+  /**
+   * Hold a token — the cached one, or a fresh capture — without calling the
+   * API. The healthcheck resolves the credential with this before probing, so
+   * a capture failure is reported as one rather than as a failed request.
+   */
+  async ensureToken(): Promise<void> {
+    this.#requireConfigured();
+    await this.#tokenManager().getAccessToken();
   }
 
   /**

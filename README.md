@@ -2,7 +2,7 @@
 
 MCP server for **Microsoft Teams** — list every chat and channel you are in,
 read any of them by id or name, pull everything you have not read yet,
-fetch inline images, and — each one confirmed by you first — post messages
+read your Activity feed, fetch inline images, and — each one confirmed by you first — post messages
 and reactions, using your signed-in browser session.
 
 > This project was developed and is maintained by AI (Claude Code). Use at your
@@ -26,10 +26,11 @@ them can be read by id or name, and listing covers every chat, not just the
 ones the sidebar shows. To capture a token, an idle tab is not enough: click
 into any chat so Teams calls its chat service.
 
-**The one thing that still reads the page is the Activity feed**
-(`teams_get_activity`). No chat-service equivalent of it has been verified,
-so it reads the DOM your tab has rendered through the bridge — which can read
-but never navigate a tab, so it needs the Activity view (the bell icon) open.
+**The Activity feed comes from the same API.** It is a chat-service
+conversation of its own (`48:notifications`), so `teams_get_activity` reads
+it like any chat — no Activity view (or any view) needs to be open, and
+nothing reads the page. The bridge is used for one thing only: capturing the
+token.
 
 Nothing here marks anything read. Reading a chat through this server leaves
 your Teams unread badges exactly as they were. The two writes —
@@ -92,7 +93,7 @@ Everything is optional — by default the token is captured from your browser.
 | `TEAMS_DISABLE_FETCHPROXY` | `true` to never capture from the browser (then `TEAMS_ACCESS_TOKEN` is required). |
 | `TEAMS_CHATSVC_REGION` | Chat-service region in the API path. Defaults to `amer`. |
 | `TEAMS_CHATSVC_BASE` | Full override for the API base (default `https://teams.cloud.microsoft/api/chatsvc/<region>/v1`). |
-| `TEAMS_CAPTURE_TIMEOUT` | Seconds to wait for the Teams tab to issue a chat-service request. Defaults to `30`. The bridge deadline is derived from it (window + 15s), for the capture and for `teams_healthcheck` alike. |
+| `TEAMS_CAPTURE_TIMEOUT` | Seconds to wait for the Teams tab to issue a chat-service request. Defaults to `30`. The bridge deadline is derived from it (window + 15s). |
 | `TEAMS_TOKEN_CACHE` | `false` to keep the captured token in memory only. Defaults to on. |
 | `TEAMS_TOKEN_FILE` | Where the captured token is cached. Defaults to `~/.microsoft-teams-mcp/token.json`. |
 | `TEAMS_WS_PORT` | fetchproxy concentrator port. Defaults to `37149`, the fleet-wide shared port. |
@@ -160,15 +161,22 @@ Everything is optional — by default the token is captured from your browser.
   returned as the image itself; a shared file as its name, type and open
   link only (files live in SharePoint and this server cannot download their
   contents yet — the result says so).
-- `teams_get_activity` — the Activity feed (the bell icon in the left nav):
-  mentions, replies, reactions, and the like across every chat and channel,
-  each with its title, message preview, prose time, and location. Reads the
-  page, so it requires the Activity view open.
-- `teams_healthcheck` — probes the chat service (one conversations listing,
-  which also captures a token on a cold start) and reports where the token
-  came from and when it expires (both `null` when no token is held, e.g.
-  after a failed capture) — never the token — plus the bridge status the
-  capture and the Activity feed rely on.
+- `teams_get_activity` — the Activity feed (the bell icon), newest first:
+  mentions (including @team / @everyone), reactions, replies, meeting
+  notices and missed calls across every chat and channel. Each row has its
+  time (ISO 8601), `kind` (`mention`, `reaction`, `reply`, `meeting`, `call`
+  or `other`) with Teams' raw type/subtype, whether you have seen it, who
+  did it, where (`conversation_id`, title, type), the `message_id` and a
+  plain-text preview — pass `where.conversation_id` to
+  `teams_read_conversation` to read it in context. Filter with
+  `unread_only`, `kinds` and `since_days` (default 14, max 3650); `limit`
+  (default 50, max 200). Read from the chat service, so the Activity view
+  does not need to be open; it never marks anything read.
+- `teams_healthcheck` — resolves the token the way every tool does
+  (capturing one on a cold start) and probes the chat service with one
+  conversations listing. Reports where the token came from and when it
+  expires (both `null` when no token is held, e.g. after a failed capture)
+  and how many conversations the listing returned — never the token.
 
 **Write** (both ask you to confirm first — see [Writes](#writes)):
 
@@ -274,9 +282,6 @@ instead.
   refused.
 - **Shared files are links, not contents.** They live in SharePoint, which
   does not accept the chat-service token.
-- **One Teams tab at a time for the Activity feed.** If more than one
-  `teams.cloud.microsoft` tab is open, the bridge reads whichever answers
-  first — close extras if `teams_get_activity` looks wrong.
 - **Scope grows quietly.** If you see a `not in declared set` error, the
   extension's approved scope is behind the server's declared one — revoke
   and re-pair `microsoft-teams-mcp` in the ContextMint Bridge popup.
@@ -289,11 +294,6 @@ npm run build
 npm test              # typecheck + suite
 npm run test:coverage # CI's gate
 ```
-
-The Activity feed depends on `read_dom_list`, a fetchproxy capability added
-alongside this repo — it needs `@fetchproxy/protocol`/`@fetchproxy/server`
-`>= 3.1.0`, the first published versions that include it
-([chrischall/fetchproxy#381](https://github.com/chrischall/fetchproxy/pull/381)).
 
 ## License
 

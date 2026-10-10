@@ -7,7 +7,8 @@
  * chat service with a plain Node `fetch`.
  *
  * The bridge is therefore touched ONCE per token (~23h), never in the hot
- * path. Only the Activity feed still reads the page itself (see `client.ts`).
+ * path — and nothing ever reads the page itself: the Activity feed is a
+ * chat-service conversation too (`tools/activity.ts`).
  *
  * Verified live 2026-10-10 against a real Teams tenant:
  *   - the token has `aud: https://ic3.teams.office.com`,
@@ -25,14 +26,20 @@
  * code that needs a token, as Outlook's client does, so a server run with
  * `TEAMS_ACCESS_TOKEN` never has to load the bridge to boot.
  */
-import {
-  createBootstrapOpts,
-  createFetchproxyTransport,
-  type Capability,
-} from '@chrischall/mcp-utils/fetchproxy';
+import { createBootstrapOpts, createFetchproxyTransport } from '@chrischall/mcp-utils/fetchproxy';
+import { readPortEnv } from '@chrischall/mcp-utils';
 import { bridgeDeadlineMs, captureWindowMs } from './capture-window.js';
-import { getWsPort } from './client.js';
 import { PACKAGE_NAME, VERSION } from './version.js';
+
+/**
+ * fetchproxy concentrator port — one for the whole fleet. `TEAMS_WS_PORT`
+ * overrides it for local development and for a hosted bridged registration
+ * (where mcp-host names this variable in `bridgePortEnv`).
+ */
+const DEFAULT_WS_PORT = 37_149;
+export function getWsPort(): number {
+  return readPortEnv('TEAMS_WS_PORT', DEFAULT_WS_PORT);
+}
 
 /**
  * The one request we capture from: any chat-service call on the New Teams
@@ -58,23 +65,6 @@ export const TRUST_DOMAINS = [CAPTURE_DECL.host];
  */
 const MIN_TOKEN_LENGTH = 100;
 
-/**
- * Add `fetch` to the derived capability set.
- *
- * `createBootstrapOpts` infers capabilities from the bootstrap DECLARATIONS and
- * the field REPLACES the server's defaults rather than extending them, so a
- * declaration-only set can silently lose `fetch`.
- */
-function withFetch<T extends { capabilities?: readonly Capability[] }>(opts: T): T {
-  const derived = opts.capabilities ?? [];
-  return {
-    ...opts,
-    capabilities: derived.includes('fetch' as Capability)
-      ? derived
-      : ([...derived, 'fetch' as Capability] as readonly Capability[]),
-  };
-}
-
 /** Normalise a captured header to a bare token, dropping any `Bearer ` prefix. */
 export function stripBearer(raw: string): string {
   const m = /^\s*Bearer\s+(.+)$/i.exec(raw);
@@ -89,12 +79,15 @@ export async function captureTokenViaFetchproxy(env: NodeJS.ProcessEnv = process
   // Read per capture, not at import: see `capture-window.ts`.
   const windowMs = captureWindowMs(env);
   const transport = createFetchproxyTransport({
-    ...withFetch(
-      createBootstrapOpts({
-        domains: [...TRUST_DOMAINS],
-        bootstrap: { captureHeaders: [{ ...CAPTURE_DECL }] },
-      }),
-    ),
+    // `createBootstrapOpts` derives the capability set from the declarations:
+    // `capture_request_header`, the only verb this MCP uses, beside the `fetch`
+    // base verb mcp-utils always keeps (the field replaces the server default).
+    // This is the same set as before the Activity feed left the page, so an
+    // existing pairing needs no re-approval.
+    ...createBootstrapOpts({
+      domains: [...TRUST_DOMAINS],
+      bootstrap: { captureHeaders: [{ ...CAPTURE_DECL }] },
+    }),
     port: getWsPort(),
     // Both: the explicit deadline for every bridge version, and the declared
     // window so mcp-utils' own derivation agrees with it.

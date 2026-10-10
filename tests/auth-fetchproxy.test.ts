@@ -74,8 +74,9 @@ describe('captureTokenViaFetchproxy', () => {
     };
     expect(opts.domains).toEqual(['teams.cloud.microsoft']);
     expect(opts.port).toBe(37_149);
-    expect(opts.capabilities).toContain('fetch');
-    expect(opts.capabilities).toContain('capture_request_header');
+    // The header capture beside mcp-utils' always-on fetch verb — and no DOM
+    // read: the Activity feed comes from the chat service, not the page.
+    expect([...opts.capabilities].sort()).toEqual(['capture_request_header', 'fetch']);
     expect(opts.captureHeaders).toEqual([CAPTURE_DECL]);
     expect(close).toHaveBeenCalledTimes(1);
   });

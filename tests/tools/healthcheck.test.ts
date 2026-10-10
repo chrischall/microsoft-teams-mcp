@@ -1,43 +1,15 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createTestHarness, parseToolResult } from '@chrischall/mcp-utils/test';
-import type { FetchproxyTransport } from '@chrischall/mcp-utils/fetchproxy';
 import { registerHealthcheckTool } from '../../src/tools/healthcheck.js';
-import type { TeamsClient } from '../../src/client.js';
 import { ChatServiceClient } from '../../src/chatsvc.js';
 
-const BRIDGE = {
-  role: 'host' as const,
-  port: 37149,
-  server_version: 'test',
-  fetch_timeout_ms: 30_000,
-  last_success_at: null,
-  last_failure_at: null,
-  last_failure_reason: null,
-  consecutive_failures: 0,
-  session_state: 'ready',
-  pending_pair_code: null,
-  extension_connected: true,
-};
-
-/** A transport whose runProbe just runs the probe, like the real one minus the bridge. */
-function fakeTransport(): FetchproxyTransport {
+function deps(
+  listConversations: () => Promise<unknown[]>,
+  ensureToken: () => Promise<void> = async () => {},
+): { chatsvc: ChatServiceClient } {
   return {
-    status: vi.fn().mockReturnValue({ lastExtensionMessageAt: null }),
-    runProbe: vi.fn(async (fn: (p: string) => Promise<unknown>, p: string) => {
-      try {
-        await fn(p);
-        return { ok: true, elapsed_ms: 1, bridge: BRIDGE };
-      } catch (e) {
-        return { ok: false, elapsed_ms: 1, bridge: BRIDGE, error: { kind: 'other', message: (e as Error).message } };
-      }
-    }),
-  } as unknown as FetchproxyTransport;
-}
-
-function deps(listConversations: () => Promise<unknown[]>): { teams: TeamsClient; chatsvc: ChatServiceClient } {
-  return {
-    teams: { transport: fakeTransport() } as unknown as TeamsClient,
     chatsvc: {
+      ensureToken: vi.fn(ensureToken),
       listConversations: vi.fn(listConversations),
       tokenSource: 'browser capture',
       apiBase: 'https://teams.cloud.microsoft/api/chatsvc/amer/v1',
@@ -112,7 +84,6 @@ describe('teams_healthcheck', () => {
     const token = jwt(90 * 60);
     const harness = await createTestHarness((server) =>
       registerHealthcheckTool(server, {
-        teams: { transport: fakeTransport() } as unknown as TeamsClient,
         chatsvc: realChatsvc(token, 3),
       }),
     );
@@ -144,7 +115,7 @@ describe('teams_healthcheck', () => {
       fetchImpl: (async () => new Response('{}')) as unknown as typeof fetch,
     });
     const harness = await createTestHarness((server) =>
-      registerHealthcheckTool(server, { teams: { transport: fakeTransport() } as unknown as TeamsClient, chatsvc }),
+      registerHealthcheckTool(server, { chatsvc }),
     );
 
     const data = parseToolResult(await harness.callTool('teams_healthcheck')) as Record<string, unknown>;
@@ -160,7 +131,6 @@ describe('teams_healthcheck', () => {
   it('names a directly-supplied token as the source', async () => {
     const harness = await createTestHarness((server) =>
       registerHealthcheckTool(server, {
-        teams: { transport: fakeTransport() } as unknown as TeamsClient,
         chatsvc: new ChatServiceClient({
           env: { TEAMS_TOKEN_CACHE: 'false', TEAMS_ACCESS_TOKEN: jwt(3600) },
           captureToken: async () => {
@@ -179,10 +149,11 @@ describe('teams_healthcheck', () => {
   });
 
   it('still reports the chat-service block, with no expiry and no count, when no token was captured', async () => {
+    const listConversations = vi.fn(async () => []);
     const harness = await createTestHarness((server) =>
       registerHealthcheckTool(
         server,
-        deps(async () => {
+        deps(listConversations, async () => {
           throw new Error('could not capture a Teams token from the browser (timed out).');
         }),
       ),
@@ -196,12 +167,42 @@ describe('teams_healthcheck', () => {
     expect(svc.token_expires_at).toBeNull();
     expect(svc.token_minutes_remaining).toBeNull();
     expect(svc.conversations).toBeNull();
-    // The bridge section stays: the token is captured through it, and Activity reads through it.
-    expect(data.bridge).toBeDefined();
+    expect((data.error as { kind?: string } | undefined)?.kind).toBe('token_capture');
+    expect(String(data.hint)).toMatch(/click into any chat/i);
+    expect((data.credential as { resolved?: boolean }).resolved).toBe(false);
+    // No token, no probe: a listing without one would only 401.
+    expect(listConversations).not.toHaveBeenCalled();
     await harness.close();
   });
 
-  it('describes itself as a read-only, open-world probe of both paths', async () => {
+  it('reports no_credential when the bridge is disabled and no token is supplied', async () => {
+    const harness = await createTestHarness((server) =>
+      registerHealthcheckTool(server, {
+        chatsvc: new ChatServiceClient({ env: { TEAMS_TOKEN_CACHE: 'false', TEAMS_DISABLE_FETCHPROXY: '1' } }),
+      }),
+    );
+
+    const data = parseToolResult(await harness.callTool('teams_healthcheck')) as Record<string, unknown>;
+
+    expect(data.ok).toBe(false);
+    expect((data.error as { kind?: string } | undefined)?.kind).toBe('no_credential');
+    await harness.close();
+  });
+
+  it('has no bridge section — the bridge is only touched to capture the token', async () => {
+    const harness = await createTestHarness((server) =>
+      registerHealthcheckTool(server, deps(async () => [{ id: '19:a@thread.v2' }])),
+    );
+
+    const data = parseToolResult(await harness.callTool('teams_healthcheck')) as Record<string, unknown>;
+
+    expect(data).not.toHaveProperty('bridge');
+    expect(data.credential).toMatchObject({ source: 'browser capture', resolved: true });
+    expect(data.probe).toMatchObject({ url: expect.stringContaining('teams.cloud.microsoft') });
+    await harness.close();
+  });
+
+  it('describes itself as a read-only, open-world probe of the chat service', async () => {
     const harness = await createTestHarness((server) => registerHealthcheckTool(server, deps(async () => [])));
 
     const tool = (await harness.client.listTools()).tools.find((t) => t.name === 'teams_healthcheck');

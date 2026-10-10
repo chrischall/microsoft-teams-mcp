@@ -1,23 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-const createFetchproxyTransport = vi.fn((_opts: Record<string, unknown>) => ({
-  start: vi.fn(async () => {}),
-  close: vi.fn(async () => {}),
-  status: vi.fn(),
-  server: {},
-}));
-
-vi.mock('@chrischall/mcp-utils/fetchproxy', async (importOriginal) => {
-  const real = await importOriginal<typeof import('@chrischall/mcp-utils/fetchproxy')>();
-  return { ...real, createFetchproxyTransport };
-});
-
 const { bridgeDeadlineMs, captureWindowMs, DEFAULT_CAPTURE_WINDOW_MS } = await import('../src/capture-window.js');
-const { TeamsClient } = await import('../src/client.js');
 
 afterEach(() => {
   vi.unstubAllEnvs();
-  createFetchproxyTransport.mockClear();
 });
 
 describe('captureWindowMs', () => {
@@ -46,21 +32,5 @@ describe('bridgeDeadlineMs', () => {
     expect(bridgeDeadlineMs(30_000)).toBe(45_000);
     expect(bridgeDeadlineMs(120_000)).toBe(135_000);
     expect(bridgeDeadlineMs(1_000)).toBe(30_000);
-  });
-});
-
-describe('the Activity / healthcheck transport', () => {
-  it('runs under the same capture-derived deadline, not the 30s default', () => {
-    vi.stubEnv('TEAMS_CAPTURE_TIMEOUT', '120');
-    new TeamsClient();
-    const opts = createFetchproxyTransport.mock.calls[0][0] as { fetchTimeoutMs?: number };
-    expect(opts.fetchTimeoutMs).toBe(135_000);
-  });
-
-  it('defaults to 45s with no TEAMS_CAPTURE_TIMEOUT', () => {
-    vi.stubEnv('TEAMS_CAPTURE_TIMEOUT', undefined as unknown as string);
-    new TeamsClient();
-    const opts = createFetchproxyTransport.mock.calls[0][0] as { fetchTimeoutMs?: number };
-    expect(opts.fetchTimeoutMs).toBe(45_000);
   });
 });

@@ -1,46 +1,61 @@
 /**
- * Healthcheck. Chats and channels are read through the chat-service API, so
- * the probe is one conversations listing — which also exercises the token
- * capture on a cold start. The bridge status section still matters: the token
- * is captured through it, and the Activity feed reads the page through it.
+ * Healthcheck — the CREDENTIAL healthcheck, not the bridge one.
  *
- * The bridge envelope is mcp-utils' `runBridgeHealthcheck` verbatim; this adds
- * a `chat_service` block beside it — where the token came from, when it
- * expires, and how many conversations the probe listed. A SOURCE LABEL and
+ * Every tool, the Activity feed included, reads through the chat-service API
+ * with plain server-side requests. The browser bridge is touched only by the
+ * token capture, which builds a transport, lifts one header and closes it
+ * again (`auth-fetchproxy.ts`) — so there is no long-lived bridge whose role
+ * or port would mean anything here. What a broken install needs to know is
+ * whether a token resolved (and from where) and whether the chat service
+ * accepted it; that is mcp-utils' `runCredentialHealthcheck`, probed with one
+ * conversations listing.
+ *
+ * A `chat_service` block sits beside it — the API base, the token's source and
+ * expiry, and how many conversations the probe listed. A SOURCE LABEL and
  * non-secret detail only, never the token: this result is what people paste
  * into a chat when something is broken.
+ *
+ * Imported from `/healthcheck`, deliberately NOT from `/fetchproxy`: that
+ * module pulls in the optional `@fetchproxy/server` peer, which is absent in
+ * the `.mcpb` bundle.
  */
 import type { McpServer } from '@modelcontextprotocol/server';
 import { toolAnnotations } from '@chrischall/mcp-utils';
-import { bridgeHealthcheckDescription, runBridgeHealthcheck } from '@chrischall/mcp-utils/fetchproxy';
+import { credentialHealthcheckDescription, runCredentialHealthcheck } from '@chrischall/mcp-utils/healthcheck';
 import type { TeamsDeps } from '../deps.js';
 
 const HOST_LABEL = 'teams.cloud.microsoft';
-const PROBE_PATH = 'chat-service conversation listing (GET /users/ME/conversations)';
-const TITLE = 'Verify the Teams chat service and ContextMint Bridge end-to-end';
+const TITLE = 'Verify the Teams chat-service token and API end-to-end';
 
-export function registerHealthcheckTool(server: McpServer, { teams, chatsvc }: TeamsDeps): void {
+export function registerHealthcheckTool(server: McpServer, { chatsvc }: Pick<TeamsDeps, 'chatsvc'>): void {
   server.registerTool(
     'teams_healthcheck',
     {
       title: TITLE,
       description:
-        `${bridgeHealthcheckDescription(HOST_LABEL, PROBE_PATH)} Also reports the Teams ` +
-        'chat-service token behind every chat and channel tool — its source (browser capture or ' +
-        'TEAMS_ACCESS_TOKEN), its expiry, and how many conversations one listing returned — ' +
-        'never the token itself. Call this when a real tool fails and you want to know which hop broke.',
+        `${credentialHealthcheckDescription(HOST_LABEL)} The credential is the Teams chat-service ` +
+        'token behind every tool; the probe is one conversations listing. Also reports the ' +
+        'token\'s source (browser capture through the ContextMint Bridge, or TEAMS_ACCESS_TOKEN), ' +
+        'its expiry, and how many conversations the listing returned — never the token itself. ' +
+        'Call this when a real tool fails and you want to know which hop broke.',
       annotations: toolAnnotations({ title: TITLE, readOnly: true, idempotent: true, openWorld: true }),
       inputSchema: {},
     },
     async () => {
       // Set only by a probe that got as far as a listing.
       let conversations: number | null = null;
-      const result = await runBridgeHealthcheck({
+      // TEAMS_CHATSVC_BASE can point the client elsewhere; report what it really talks to.
+      const base = new URL(chatsvc.apiBase);
+      const result = await runCredentialHealthcheck({
         server,
         prefix: 'teams',
-        hostLabel: HOST_LABEL,
-        transport: teams.transport,
-        probePath: PROBE_PATH,
+        hostLabel: base.host,
+        probePath: `${base.pathname}/users/ME/conversations`,
+        // Resolves the token the way every tool does — same cache, same capture.
+        resolveCredential: async () => {
+          await chatsvc.ensureToken();
+          return { source: chatsvc.tokenSource };
+        },
         probeFn: async () => {
           conversations = (await chatsvc.listConversations()).length;
           return `${conversations} conversation(s) listed`;
@@ -51,7 +66,7 @@ export function registerHealthcheckTool(server: McpServer, { teams, chatsvc }: T
             : undefined,
       });
 
-      // Read after the probe, which is what resolves (or captures) the token.
+      // Read after the resolve, which is what loads (or captures) the token.
       const expiresAt = chatsvc.tokenExpiresAt();
       const chatService = {
         api_base: chatsvc.apiBase,
@@ -62,18 +77,16 @@ export function registerHealthcheckTool(server: McpServer, { teams, chatsvc }: T
       };
 
       const first = result.content[0];
-      if (first?.type !== 'text') return result;
       let body: unknown;
       try {
-        body = JSON.parse(first.text);
+        body = first === undefined ? undefined : JSON.parse(first.text);
       } catch {
         body = undefined;
       }
       if (body === null || typeof body !== 'object' || Array.isArray(body)) {
-        // Not the JSON envelope this expects: keep the bridge's text as-is and
-        // report the chat service beside it rather than failing the healthcheck.
+        // Not the JSON envelope this expects: keep its text as-is and report the
+        // chat service beside it rather than failing the healthcheck.
         return {
-          ...result,
           content: [
             ...result.content,
             { type: 'text' as const, text: JSON.stringify({ chat_service: chatService }, null, 2) },
@@ -81,7 +94,6 @@ export function registerHealthcheckTool(server: McpServer, { teams, chatsvc }: T
         };
       }
       return {
-        ...result,
         content: [{ type: 'text' as const, text: JSON.stringify({ ...body, chat_service: chatService }, null, 2) }],
       };
     },
