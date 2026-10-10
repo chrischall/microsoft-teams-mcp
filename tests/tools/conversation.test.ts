@@ -70,6 +70,23 @@ describe('teams_read_conversation', () => {
     expect(chatsvc.getMessages).toHaveBeenCalledWith(GROUP, expect.anything());
   });
 
+  it('orders oldest first by arrival even when the service returns a page slightly out of order', async () => {
+    // Live 2026-10-10: a quote-reply sent 6s after the message it quotes came
+    // back AHEAD of it in the newest-first page, so a plain reverse() listed
+    // the reply before its original.
+    const outOfOrder = [GROUP_MSGS[5], GROUP_MSGS[3], GROUP_MSGS[4], GROUP_MSGS[2], GROUP_MSGS[1], GROUP_MSGS[0]];
+    const chatsvc = chatsvcWith(GROUP_MSGS, { getMessages: vi.fn(async () => outOfOrder) });
+    const { data } = await call(chatsvc, { conversation: GROUP });
+
+    expect((data?.messages as Msg[]).map((m) => m.text)).toEqual([
+      'first',
+      'second',
+      'third',
+      'mine, after the horizon',
+      'fourth',
+    ]);
+  });
+
   it('resolves a conversation by a unique name', async () => {
     const { data } = await call(chatsvcWith(), { conversation: 'project falcon' });
 

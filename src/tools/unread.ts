@@ -19,6 +19,7 @@ import {
   conversationSummary,
   matchConversations,
   normaliseMessage,
+  oldestFirst,
   type ConversationKind,
   type ConversationSummary,
 } from '../model.js';
@@ -142,7 +143,7 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
 
         const cap = max_conversations ?? DEFAULT_CONVERSATIONS;
         const conversations = confirmed.slice(0, cap).map(({ summary, read }) => {
-          const messages = [...read.messages].reverse().map((m) => normaliseMessage(m, me));
+          const messages = oldestFirst(read.messages).map((m) => normaliseMessage(m, me));
           const body = summary.kind === 'channel' ? { threads: groupThreads(messages) } : { messages };
           return {
             conversation: confirmedSummary(summary, true),

@@ -18,6 +18,7 @@ import {
   isUserMessage,
   matchConversations,
   normaliseMessage,
+  oldestFirst,
   readHorizon,
   summariseAll,
   type ConversationSummary,
@@ -178,10 +179,7 @@ export function registerConversationTools(server: McpServer, { chatsvc }: Pick<T
           onCapped: () => (capped = true),
         });
 
-        const messages = fetched
-          .filter(wanted)
-          .reverse()
-          .map((m) => normaliseMessage(m, me));
+        const messages = oldestFirst(fetched.filter(wanted)).map((m) => normaliseMessage(m, me));
         const unread_count = fetched.filter((m) => wanted(m) && isUnread(m, horizon, me)).length;
         const body = summary.kind === 'channel' ? { threads: groupThreads(messages) } : { messages };
         const truncated = limited.truncated || capped;

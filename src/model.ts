@@ -457,6 +457,28 @@ function reactionsOf(raw: unknown, meMri: string): Reaction[] {
   return out;
 }
 
+/**
+ * Messages oldest first, by arrival (a message id IS its arrival ms).
+ *
+ * The service pages newest first but does not strictly order within a page:
+ * live, a quote-reply sent 6s after its original came back ahead of it, so a
+ * plain reverse() listed the reply first. Ids that are not numbers sort by
+ * originalarrivaltime instead, and keep their page order when that is missing.
+ */
+export function oldestFirst<T extends Pick<RawMessage, 'id' | 'originalarrivaltime'>>(messages: readonly T[]): T[] {
+  const at = (m: T): number => {
+    const id = Number(m.id);
+    if (Number.isFinite(id)) return id;
+    const t = Date.parse(m.originalarrivaltime ?? '');
+    return Number.isNaN(t) ? Number.NaN : t;
+  };
+  return messages
+    .map((m, i) => ({ m, i, t: at(m) }))
+    .reverse()
+    .sort((a, b) => (Number.isNaN(a.t) || Number.isNaN(b.t) ? 0 : a.t - b.t))
+    .map(({ m }) => m);
+}
+
 export function normaliseMessage(m: RawMessage, meMri: string): NormalisedMessage {
   const props = m.properties ?? {};
   const mri = senderMri(m.from);
