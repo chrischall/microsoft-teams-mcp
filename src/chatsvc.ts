@@ -83,6 +83,8 @@ const REQUEST_TIMEOUT_MS = 60_000;
 /** Paging caps — a runaway `backwardLink` chain must not hold a tool call open. */
 const MAX_CONVERSATION_PAGES = 10;
 const MAX_MESSAGE_PAGES = 20;
+/** Messages per `getMessages` request unless the caller asks for fewer. */
+const DEFAULT_MESSAGE_PAGE_SIZE = 200;
 
 /** Largest inline image we will buffer (they measured 8–18 KB live). */
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
@@ -215,6 +217,12 @@ export interface GetMessagesOptions {
   stopAt?: (m: RawMessage) => boolean;
   /** Most messages to return. */
   max: number;
+  /**
+   * Messages per request (default 200, the service's largest page). A read
+   * that wants only a few recent messages asks for fewer, so a cold read of
+   * many conversations is not 200 messages each.
+   */
+  pageSize?: number;
   /**
    * Called when the read ended at `max` or at the page cap rather than at a
    * `stopAt` boundary or the start of the history — i.e. there may be more.
@@ -352,7 +360,7 @@ export class ChatServiceClient {
     if (!(opts.max > 0)) return out;
     let url: string | undefined =
       `${this.#baseUrl}/users/ME/conversations/${encodeURIComponent(id)}/messages` +
-      '?view=msnp24Equivalent|supportsMessageProperties&pageSize=200&startTime=1';
+      `?view=msnp24Equivalent|supportsMessageProperties&pageSize=${opts.pageSize ?? DEFAULT_MESSAGE_PAGE_SIZE}&startTime=1`;
     for (let page = 0; url !== undefined; page++) {
       if (page >= MAX_MESSAGE_PAGES) {
         opts.onCapped?.();

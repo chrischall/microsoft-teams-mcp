@@ -3,7 +3,7 @@ import { createTestHarness, parseToolResult } from '@chrischall/mcp-utils/test';
 import { McpToolError } from '@chrischall/mcp-utils';
 import { registerChatTools } from '../../src/tools/chat.js';
 import type { ChatServiceClient, GetMessagesOptions, RawMessage } from '../../src/chatsvc.js';
-import { DAY, fakeChatsvc, messagesFrom, pinClock, rawConv, rawMsg } from './fake-chatsvc.js';
+import { DAY, fakeChatsvc, ME, messagesFrom, pinClock, rawConv, rawMsg } from './fake-chatsvc.js';
 
 const T0 = 1_760_000_000_000;
 const MIN = 60_000;
@@ -39,6 +39,12 @@ function perConversation(byId: Record<string, RawMessage[] | Error> = MESSAGES) 
     if (v instanceof Error) throw v;
     return messagesFrom(v)(id, opts);
   });
+}
+
+/** `untitled`'s reads go to `untitled`, the fixture's own to {@link MESSAGES}. */
+function perConversationWith(untitled: (id: string, opts: GetMessagesOptions) => Promise<RawMessage[]>) {
+  const own = perConversation();
+  return vi.fn(async (id: string, opts: GetMessagesOptions) => (id in MESSAGES ? own(id, opts) : untitled(id, opts)));
 }
 
 function chatsvcWith(convs = CONVS, byId: Record<string, RawMessage[] | Error> = MESSAGES): ChatServiceClient {
@@ -247,6 +253,135 @@ describe('teams_list_chats', () => {
     const { data } = await call(fakeChatsvc(CONVS));
 
     expect(data).not.toHaveProperty('truncated');
+  });
+
+  describe('untitled group chats', () => {
+    const FROM = (mri: string) => `https://teams.cloud.microsoft/api/chatsvc/amer/v1/users/ME/contacts/${mri}`;
+    const UNTITLED = Array.from({ length: 15 }, (_, i) => `19:untitled${String(i).padStart(4, '0')}@thread.v2`);
+    const convs = UNTITLED.map((id, i) => rawConv(id, { at: T0 + i * MIN, sender: 'King, Greg' }));
+    const other = (i: number) => `Member${String.fromCharCode(65 + i)}, Example`;
+    const byId: Record<string, RawMessage[]> = Object.fromEntries(
+      UNTITLED.map((id, i) => [
+        id,
+        [
+          { ...rawMsg(T0 - 2 * MIN, { sender: other(i), conv: id }), from: FROM(`8:orgid:member${i}`) },
+          rawMsg(T0 - MIN, { fromMe: true, conv: id }),
+          rawMsg(T0 + i * MIN, { sender: 'King, Greg', conv: id }),
+        ],
+      ]),
+    );
+
+    it('titles each by its participants, so a shared last sender no longer makes them indistinguishable', async () => {
+      const { data } = await call(chatsvcWith(convs, byId), { query: 'King' });
+      const chats = data?.chats as (Row & { participants?: string[] })[];
+
+      expect(chats).toHaveLength(15);
+      expect(new Set(chats.map((c) => c.title)).size).toBe(15);
+      expect(chats[0]).toMatchObject({
+        id: UNTITLED[14],
+        title: `Group chat: King, Greg; ${other(14)}`,
+        participants: ['King, Greg', other(14)],
+      });
+    });
+
+    it('matches query against participant names', async () => {
+      const { data } = await call(chatsvcWith(convs, byId), { query: other(3) });
+      expect((data?.chats as Row[]).map((c) => c.id)).toEqual([UNTITLED[3]]);
+    });
+
+    it('reads only the chats it returns when there is no query', async () => {
+      const chatsvc = chatsvcWith(convs, byId);
+      const { data } = await call(chatsvc, { limit: 2 });
+
+      expect((data?.chats as Row[]).map((c) => c.title)).toEqual([
+        `Group chat: King, Greg; ${other(14)}`,
+        `Group chat: King, Greg; ${other(13)}`,
+      ]);
+      expect(chatsvc.getMessages).toHaveBeenCalledTimes(2);
+    });
+
+    it('titles an untitled group chat named in unread_only errors by its participants', async () => {
+      const id = UNTITLED[0];
+      const unread = [rawConv(id, { at: T0 + 5 * MIN, horizon: T0, sender: 'King, Greg' })];
+      const limited = new McpToolError('Teams chat service is rate-limiting requests (429).', { status: 429 });
+      // The confirming read is refused; the later title read succeeds.
+      let calls = 0;
+      const getMessages = vi.fn(async (cid: string, opts: GetMessagesOptions) => {
+        if (calls++ === 0) throw limited;
+        return messagesFrom(byId[cid] ?? [])(cid, opts);
+      });
+      const { data } = await call(fakeChatsvc([...unread, ...CONVS], { getMessages: perConversationWith(getMessages) }), {
+        unread_only: true,
+      });
+
+      expect(data?.errors).toEqual(
+        expect.arrayContaining([
+          { conversation: { id, title: `Group chat: King, Greg; ${other(0)}` }, error: expect.stringMatching(/rate-limiting/) },
+        ]),
+      );
+    });
+
+    it('keeps the last-sender title for a chat whose read failed, and still lists the rest', async () => {
+      const { data } = await call(chatsvcWith(convs, { ...byId, [UNTITLED[14]]: new Error('boom') }), { limit: 2 });
+      expect((data?.chats as Row[]).map((c) => c.title)).toEqual(['King, Greg', `Group chat: King, Greg; ${other(13)}`]);
+    });
+  });
+
+  describe('1:1 chats', () => {
+    const FROM = (mri: string) => `https://teams.cloud.microsoft/api/chatsvc/amer/v1/users/ME/contacts/${mri}`;
+    const PEER_OID = '00000000-0000-0000-0000-0000000000d4';
+    const KING_DM = `19:${PEER_OID}_${ME.slice('8:orgid:'.length)}@unq.gbl.spaces`;
+    const kingSays = (at: number): RawMessage => ({ ...rawMsg(at, { sender: 'King, Greg', conv: KING_DM }), from: FROM(`8:orgid:${PEER_OID}`) });
+    // The user wrote last — the listing alone cannot say who this 1:1 is with.
+    const convs = [...CONVS, rawConv(KING_DM, { at: T0 + 50 * MIN, fromMe: true, favorite: 'True' })];
+    const byId = { ...MESSAGES, [KING_DM]: [rawMsg(T0 + 50 * MIN, { fromMe: true, conv: KING_DM }), kingSays(T0 + 45 * MIN)] };
+
+    it('finds a 1:1 whose last message is the user\'s by the other person\'s name (live: a favorite 1:1 vanished)', async () => {
+      const { data } = await call(chatsvcWith(convs, byId), { query: 'King' });
+      expect(data?.chats).toEqual([
+        expect.objectContaining({ id: KING_DM, kind: 'oneOnOne', title: 'King, Greg', participants: ['King, Greg'], favorite: true }),
+      ]);
+    });
+
+    it('titles it by the other person in a plain listing', async () => {
+      const { data } = await call(chatsvcWith(convs, byId));
+      expect((data?.chats as Row[]).find((c) => c.id === KING_DM)?.title).toBe('King, Greg');
+    });
+  });
+
+  describe('favorites and pinned chats', () => {
+    const FAV = '19:fav0001@thread.v2';
+    const PIN = '19:pin0001@thread.v2';
+    const convs = [
+      ...CONVS,
+      rawConv(FAV, { topic: 'Favorite chat', at: T0 + MIN, favorite: 'true' }),
+      rawConv(PIN, { topic: 'Pinned chat', at: T0 + 2 * MIN, pinned: 'True' }),
+    ];
+
+    it('lists favorites first, then pinned, then the rest by recency, flagging them', async () => {
+      const { data } = await call(fakeChatsvc(convs));
+      const chats = data?.chats as (Row & { favorite?: true; pinned?: true })[];
+      expect(chats.map((c) => c.id)).toEqual([FAV, PIN, GROUP, MEETING, DM]);
+      expect(chats[0]).toMatchObject({ favorite: true });
+      expect(chats[0]).not.toHaveProperty('pinned');
+      expect(chats[1]).toMatchObject({ pinned: true });
+      expect(chats[2]).not.toHaveProperty('favorite');
+    });
+
+    it('keeps a favorite when limit trims the listing', async () => {
+      const { data } = await call(fakeChatsvc(convs), { limit: 1 });
+      expect((data?.chats as Row[]).map((c) => c.id)).toEqual([FAV]);
+    });
+
+    it('keeps unread_only by recency, carrying the flags', async () => {
+      const unreadFav = rawConv(FAV, { topic: 'Favorite chat', at: T0 + MIN, horizon: T0, favorite: 'true' });
+      const { data } = await call(chatsvcWith([...CONVS, unreadFav], { ...MESSAGES, [FAV]: [rawMsg(T0 + MIN, { conv: FAV })] }), {
+        unread_only: true,
+      });
+      const chats = data?.chats as (Row & { favorite?: true })[];
+      expect(chats.map((c) => c.id)).toEqual([GROUP, DM, FAV]);
+      expect(chats[2]).toMatchObject({ favorite: true });
+    });
   });
 
   it('returns its result inside the untrusted-data envelope', async () => {

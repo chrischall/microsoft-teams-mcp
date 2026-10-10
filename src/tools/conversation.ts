@@ -11,7 +11,7 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { McpToolError, toolAnnotations } from '@chrischall/mcp-utils';
-import type { RawMessage } from '../chatsvc.js';
+import type { ChatServiceClient, RawConversation, RawMessage } from '../chatsvc.js';
 import type { TeamsDeps } from '../deps.js';
 import {
   isUnread,
@@ -20,11 +20,13 @@ import {
   normaliseMessage,
   oldestFirst,
   readHorizon,
+  SELF_CHAT_ALIASES,
   summariseAll,
   type ConversationSummary,
   type NormalisedMessage,
 } from '../model.js';
 import { confirmedSummary } from './confirm.js';
+import { enrichTitles } from './titles.js';
 import { wrapApiError } from './errors.js';
 import { untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
 import { DEFAULT_LIMIT, limitArg, makeLimitedStopAt, sinceArg } from './limit.js';
@@ -115,6 +117,26 @@ export function resolveConversation(
   return matches[0];
 }
 
+/**
+ * {@link resolveConversation} against the whole listing, with untitled group
+ * chats titled by their participants and 1:1s by the other person
+ * (`titles.ts`) so a name can pick one of several chats that share a last
+ * sender, or a 1:1 the user wrote in last. An exact id titles just that one,
+ * and a self-chat alias (`notes`, `self`) titles nothing.
+ */
+export async function resolveListed(
+  chatsvc: ChatServiceClient,
+  raw: readonly RawConversation[],
+  me: string,
+  conversation: string,
+  verb: string,
+): Promise<ConversationSummary> {
+  const summaries = summariseAll(raw, me);
+  if (SELF_CHAT_ALIASES.has(conversation.trim().toLowerCase())) return resolveConversation(summaries, conversation, verb);
+  const exact = summaries.find((s) => s.id === conversation);
+  return resolveConversation(await enrichTitles(chatsvc, raw, me, exact ? [exact] : summaries), conversation, verb);
+}
+
 export function registerConversationTools(server: McpServer, { chatsvc }: Pick<TeamsDeps, 'chatsvc'>): void {
   server.registerTool(
     'teams_read_conversation',
@@ -139,7 +161,7 @@ export function registerConversationTools(server: McpServer, { chatsvc }: Pick<T
           .min(1)
           .describe(
             'The conversation id ("48:notes", "notes" or "self" for the self-chat), or a case-insensitive ' +
-              'substring of the chat title, channel name or team name.',
+              "substring of the chat title, channel name, team name or an untitled chat's participant names.",
           ),
         unread_only: z
           .boolean()
@@ -152,7 +174,7 @@ export function registerConversationTools(server: McpServer, { chatsvc }: Pick<T
     async ({ conversation, unread_only, since, limit }) => {
       try {
         const [raw, me] = await Promise.all([chatsvc.listConversations(), chatsvc.meMri()]);
-        const summary = resolveConversation(summariseAll(raw, me), conversation, 'read');
+        const summary = await resolveListed(chatsvc, raw, me, conversation, 'read');
         // The self-chat resolves even when the listing does not carry it.
         const conv = raw.find((c) => c.id === summary.id) ?? { id: summary.id };
         const horizon = readHorizon(conv);

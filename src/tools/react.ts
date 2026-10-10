@@ -144,7 +144,7 @@ export function registerReactTools(server: McpServer, { chatsvc }: Pick<TeamsDep
           .min(1)
           .describe(
             `The conversation id (or "${SELF_CHAT}" — also by the name "notes" or "self" — for the self-chat), ` +
-              'or a case-insensitive substring of the chat title, channel name or team name.',
+              "or a case-insensitive substring of the chat title, channel name, team name or an untitled chat's participant names.",
           ),
         message_id: z.string().min(1).describe('The message to react to, as teams_read_conversation lists it.'),
         reaction: z.string().min(1).describe('An emoji (👍), a name (thumbsup) or a Teams reaction key (like, 1f389_partypopper).'),

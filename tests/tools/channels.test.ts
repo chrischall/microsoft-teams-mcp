@@ -162,6 +162,30 @@ describe('teams_list_teams_and_channels', () => {
     });
   });
 
+  describe('favorites and pinned channels', () => {
+    it('lists favorites first, then pinned, then by team and title, flagging them', async () => {
+      const convs = [
+        ...CONVS.filter((c) => c.id !== BRAVO_OPS && c.id !== ORPHAN),
+        rawConv(BRAVO_OPS, { topic: 'Ops', spaceId: BRAVO, at: T0 + 5 * MIN, horizon: T0, favorite: 'True' }),
+        rawConv(ORPHAN, { topic: 'Lonely', spaceId: '19:gone@thread.tacv2', at: T0 + 1 * MIN, pinned: 'true' }),
+      ];
+      const { data } = await call(fakeChatsvc(convs));
+      const channels = data?.channels as (Row & { favorite?: true; pinned?: true })[];
+      expect(channels.map((c) => c.title)).toEqual(['Ops', 'Lonely', 'Design', 'General', 'General']);
+      expect(channels[0]).toMatchObject({ favorite: true });
+      expect(channels[1]).toMatchObject({ pinned: true });
+      expect(channels[2]).not.toHaveProperty('favorite');
+    });
+
+    it('keeps unread_only in its usual order, carrying the flags', async () => {
+      const convs = CONVS.map((c) => (c.id === BRAVO_OPS ? rawConv(BRAVO_OPS, { topic: 'Ops', spaceId: BRAVO, at: T0 + 5 * MIN, horizon: T0, favorite: 'true' }) : c));
+      const { data } = await call(withMessages(convs), { unread_only: true });
+      const channels = data?.channels as (Row & { favorite?: true })[];
+      expect(channels.map((c) => c.id)).toEqual([ALPHA, BRAVO_OPS]);
+      expect(channels[1]).toMatchObject({ favorite: true });
+    });
+  });
+
   it('returns its result inside the untrusted-data envelope', async () => {
     const { data } = await call(fakeChatsvc(CONVS));
 

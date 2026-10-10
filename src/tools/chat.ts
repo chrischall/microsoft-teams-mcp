@@ -11,7 +11,16 @@ import type { ConversationSummary } from '../model.js';
 import { wrapApiError } from './errors.js';
 import { untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
 import { limitArg, trimRows } from './limit.js';
-import { listSinceDaysArg, listSummaries, queryArg, UNREAD_HINT_DESCRIPTION, unreadOnlyArg } from './listing.js';
+import {
+  FAVORITES_DESCRIPTION,
+  favoritesFirst,
+  GROUP_TITLE_DESCRIPTION,
+  listSinceDaysArg,
+  listSummaries,
+  queryArg,
+  UNREAD_HINT_DESCRIPTION,
+  unreadOnlyArg,
+} from './listing.js';
 
 /** Up to 10 pages of 200 come back; this bounds one result, not the listing. */
 const MAX_CHATS = 500;
@@ -28,9 +37,13 @@ export function registerChatTools(server: McpServer, { chatsvc }: Pick<TeamsDeps
       title: 'List Teams chats',
       description:
         'List every chat the signed-in user is in — 1:1s, group chats and meeting chats, not ' +
-        'just the ones visible in the Teams sidebar — most recent activity first. Each has an ' +
+        'just the ones visible in the Teams sidebar — favorites and pinned first, then most recent activity. Each has an ' +
         'id, kind (oneOnOne / group / meeting, or self for the user\'s own 48:notes self-chat), ' +
         'title, unread hint, last-activity time (ISO 8601), and a last-message preview and sender. ' +
+        GROUP_TITLE_DESCRIPTION +
+        ' query also matches those participant names. ' +
+        FAVORITES_DESCRIPTION +
+        ' ' +
         'Pass an id (or the title) to teams_read_conversation to read the messages. Use ' +
         'unread_only to find chats with messages the user has not read, exactly as Teams counts ' +
         'them: each candidate is confirmed by reading its messages past the read marker, so a ' +
@@ -44,21 +57,24 @@ export function registerChatTools(server: McpServer, { chatsvc }: Pick<TeamsDeps
       inputSchema: {
         unread_only: unreadOnlyArg,
         since_days: listSinceDaysArg,
-        query: queryArg('chat title'),
-        limit: limitArg(MAX_CHATS, 'chats', 'most recent activity first kept'),
+        query: queryArg('chat title or an untitled chat\'s participant names'),
+        limit: limitArg(MAX_CHATS, 'chats', 'favorites and pinned first, then most recent activity, kept'),
       },
     },
     async ({ unread_only, since_days, query, limit }) => {
       try {
-        const { rows, ...unreadInfo } = await listSummaries(chatsvc, {
+        const { rows, retitle, errors: _untitledErrors, ...unreadInfo } = await listSummaries(chatsvc, {
           kinds: ['group', 'meeting', 'oneOnOne', 'self'],
           unread_only,
           since_days,
           query,
         });
         rows.sort(byLastActivityDesc);
-        const { rows: chats, truncated } = trimRows(rows, limit, 'start', MAX_CHATS, 'most recent');
-        return untrustedResult({ chats, ...unreadInfo, ...(truncated ? { truncated } : {}) });
+        if (!unread_only) rows.sort(favoritesFirst);
+        const { rows: kept, truncated } = trimRows(rows, limit, 'start', MAX_CHATS, unread_only ? 'most recent' : 'first');
+        // errors names conversations too, so it is retitled alongside the rows.
+        const { rows: chats, errors } = await retitle(kept);
+        return untrustedResult({ chats, ...unreadInfo, ...(errors ? { errors } : {}), ...(truncated ? { truncated } : {}) });
       } catch (err) {
         throw wrapApiError(err, 'list chats');
       }

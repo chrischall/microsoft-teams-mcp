@@ -25,7 +25,8 @@ import {
 } from '../model.js';
 import { groupThreads } from './conversation.js';
 import { confirmedSummary, confirmUnreadCandidates, olderUnreadReport, sinceCutoff, sinceDaysArg } from './confirm.js';
-import { includeHiddenArg, isUnreadCandidateFor } from './listing.js';
+import { GROUP_TITLE_DESCRIPTION, includeHiddenArg, isUnreadCandidateFor } from './listing.js';
+import { enrichTitles } from './titles.js';
 import { wrapApiError } from './errors.js';
 import { untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
 
@@ -79,7 +80,9 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
         'could not be read is listed in errors and the rest still come back. total_unread covers ' +
         'every unread conversation found; total_unread_exact is false when a per-conversation ' +
         'limit truncated or a read failed. This does NOT mark anything read — the user\'s ' +
-        'Teams unread badges are unaffected.' +
+        'Teams unread badges are unaffected. ' +
+        GROUP_TITLE_DESCRIPTION +
+        ' query also matches those participant names.' +
         UNTRUSTED_DESCRIPTION_SUFFIX,
       annotations: toolAnnotations({ readOnly: true, openWorld: true }),
       inputSchema: {
@@ -95,7 +98,10 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
           .string()
           .min(1)
           .optional()
-          .describe('Case-insensitive substring of the chat title, channel name or team name, or an exact conversation id.'),
+          .describe(
+            'Case-insensitive substring of the chat title, channel name, team name or an untitled ' +
+              "chat's participant names, or an exact conversation id.",
+          ),
         include_hidden: includeHiddenArg,
         since_days: sinceDaysArg(),
         per_conversation_limit: z
@@ -129,17 +135,26 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
         let candidates = raw
           .map((c) => conversationSummary(c, me, raw))
           .filter((s) => allowed.has(s.kind) && isUnreadCandidateFor(s, include_hidden));
-        if (query !== undefined) candidates = matchConversations(candidates, query);
+        // A query can name a group chat or 1:1 by a participant, so every untitled candidate is titled first.
+        if (query !== undefined) candidates = matchConversations(await enrichTitles(chatsvc, raw, me, candidates), query);
         candidates.sort(byLastActivityDesc);
 
         const perLimit = per_conversation_limit ?? DEFAULT_PER_CONVERSATION;
-        const { confirmed, skippedUnreachable, olderSkipped, failed } = await confirmUnreadCandidates(
+        const outcome = await confirmUnreadCandidates(
           chatsvc,
           raw,
           me,
           candidates,
           { limit: perLimit, maxRaw: MAX_RAW_MESSAGES, since: sinceCutoff(since_days) },
         );
+        const { skippedUnreachable, olderSkipped } = outcome;
+        // Only what is returned is titled: the unread conversations and those whose read failed.
+        const retitled = await enrichTitles(chatsvc, raw, me, [
+          ...outcome.confirmed.map((c) => c.summary),
+          ...outcome.failed.map((f) => f.summary),
+        ]);
+        const confirmed = outcome.confirmed.map((c, i) => ({ ...c, summary: retitled[i] }));
+        const failed = outcome.failed.map((f, i) => ({ ...f, summary: retitled[outcome.confirmed.length + i] }));
 
         const cap = max_conversations ?? DEFAULT_CONVERSATIONS;
         const conversations = confirmed.slice(0, cap).map(({ summary, read }) => {
