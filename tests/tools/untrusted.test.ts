@@ -9,7 +9,6 @@ import {
 import { registerChatTools } from '../../src/tools/chat.js';
 import { registerChannelTools } from '../../src/tools/channels.js';
 import { registerActivityTools } from '../../src/tools/activity.js';
-import type { TeamsClient } from '../../src/client.js';
 import { fakeChatsvc, rawConv } from './fake-chatsvc.js';
 
 describe('untrustedResult', () => {
@@ -54,7 +53,6 @@ describe('untrustedResult', () => {
 });
 
 describe('every tool that returns third-party Teams text', () => {
-  const teams = { getActivity: async () => [] } as unknown as TeamsClient;
   const chatsvc = fakeChatsvc([rawConv('19:a@thread.v2', { topic: 'Example' }), rawConv('19:b@thread.tacv2', { topic: 'General' })]);
   const names = ['teams_list_chats', 'teams_list_teams_and_channels', 'teams_get_activity'];
 
@@ -62,7 +60,7 @@ describe('every tool that returns third-party Teams text', () => {
     const harness = await createTestHarness((server) => {
       registerChatTools(server, { chatsvc });
       registerChannelTools(server, { chatsvc });
-      registerActivityTools(server, { teams });
+      registerActivityTools(server, { chatsvc });
     });
     const tools = await harness.listTools();
 
@@ -77,7 +75,7 @@ describe('every tool that returns third-party Teams text', () => {
     const harness = await createTestHarness((server) => {
       registerChatTools(server, { chatsvc });
       registerChannelTools(server, { chatsvc });
-      registerActivityTools(server, { teams });
+      registerActivityTools(server, { chatsvc });
     });
 
     for (const name of names) {

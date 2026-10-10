@@ -49,7 +49,7 @@ export interface Thread {
 }
 
 /** Arrival time in epoch ms: a message's id IS its arrival ms; the ISO fields are the fallback. */
-function arrivalMs(m: RawMessage): number {
+export function arrivalMs(m: RawMessage): number {
   const n = Number(m.id);
   if (Number.isFinite(n) && n > 0) return n;
   return Date.parse(m.originalarrivaltime ?? m.composetime ?? '');

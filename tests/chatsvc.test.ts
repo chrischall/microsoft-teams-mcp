@@ -606,3 +606,30 @@ describe('setReaction / removeReaction', () => {
     });
   });
 });
+
+describe('ensureToken', () => {
+  it('captures a token without making any API request', async () => {
+    const fetchImpl: FetchMock = vi.fn();
+    const capture = vi.fn(async () => jwt(5400));
+    const c = client(fetchImpl, capture);
+
+    await c.ensureToken();
+
+    expect(capture).toHaveBeenCalledTimes(1);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(c.tokenExpiresAt()).not.toBeNull();
+  });
+
+  it('raises the deferred configuration error when no credential is configured', async () => {
+    const c = new ChatServiceClient({ env: env({ TEAMS_DISABLE_FETCHPROXY: '1' }) });
+    await expect(c.ensureToken()).rejects.toThrow(/No Teams credential is configured/);
+  });
+});
+
+describe('the Activity feed conversation', () => {
+  it('reads 48:notifications by its encoded id, like any conversation', async () => {
+    const fetchImpl: FetchMock = vi.fn(async () => jsonResponse({ messages: [msg(5)] }));
+    await client(fetchImpl).getMessages('48:notifications', { max: 10 });
+    expect(urlOf(fetchImpl, 0)).toContain('/users/ME/conversations/48%3Anotifications/messages?');
+  });
+});

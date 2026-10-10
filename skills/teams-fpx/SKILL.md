@@ -5,8 +5,8 @@ description: >-
   unread, inline images, and the Activity feed) from a shell with the fpx CLI
   (@fetchproxy/cli) instead of running the microsoft-teams-mcp server. A
   bearer token is captured once from a signed-in teams.cloud.microsoft tab,
-  then Teams' own chat-service REST API is called with plain curl; only the
-  Activity feed is still read off the rendered page. Use when you want Teams
+  then Teams' own chat-service REST API is called with plain curl — the
+  Activity feed included, as conversation 48:notifications. Use when you want Teams
   data without the MCP, in a script, or on a machine where the MCP isn't
   installed.
 ---
@@ -21,9 +21,8 @@ makes; from then on every call is a plain server-side `curl` — **the browser
 is needed only to mint the token**, and any chat or channel can be read by id
 without opening it. `teams.microsoft.com` (the old host) is not supported.
 
-The **Activity feed** is the one exception: no chat-service equivalent has
-been verified, so it is still read off the rendered page with `fpx dom-list`
-(needs the Activity view — the bell icon — open).
+The **Activity feed** (the bell icon) is a chat-service conversation too —
+`48:notifications` — so it is read the same way, with no view open.
 
 **No Calendar here.** Teams Web's Calendar is an embedded
 `outlook.office.com` iframe. Use the `office-outlook-mcp` repo's
@@ -35,13 +34,11 @@ been verified, so it is still read off the rendered page with `fpx dom-list`
 npm install -g @fetchproxy/cli   # provides `fpx`
 fpx profile add teams --domain teams.cloud.microsoft
 fpx profile declare teams \
-  --capture-header 'authorization@teams.cloud.microsoft/api/chatsvc/*' \
-  --dom-list-selector \
-  'activityFeed=[data-tid="activity-feed-list-item"]::title:[id^="activity-feed-item-title-"],preview:[id^="activity-feed-item-message-preview-"],time:[id^="activity-feed-item-timestamp-"],location:[id^="activity-feed-item-location-"]&max=200'
+  --capture-header 'authorization@teams.cloud.microsoft/api/chatsvc/*'
 ```
 
-Declare **both** scopes before the first pairing — widening them later forces
-the user to re-approve. Requirements: the **ContextMint Bridge** browser
+That header capture is the only scope needed — widening it later forces the
+user to re-approve. Requirements: the **ContextMint Bridge** browser
 extension (from https://github.com/nullnet-app/contextmint-bridge/releases —
 load the chrome zip unpacked in Chrome; Safari isn't available yet, so use
 Chrome for now — it's the fetchproxy extension renamed, source at
@@ -67,9 +64,8 @@ teams_get '/users/ME/conversations?view=msnp24Equivalent&pageSize=200' | jq '.co
 - `teams_token_expiry` — time remaining, never the token.
 
 Verified recipes — list chats/channels, read a conversation, find unread
-messages, fetch an inline image — are in **`references/chatsvc-recipes.md`**;
-the Activity-feed `dom-list` recipe is in
-**`references/dom-list-recipes.md`**.
+messages, read the Activity feed, fetch an inline image — are in
+**`references/chatsvc-recipes.md`**.
 
 ## Rules that bite
 
@@ -85,8 +81,11 @@ the Activity-feed `dom-list` recipe is in
   `8:orgid:<oid>` from the token's `oid` claim).
 - **Never PUT `consumptionhorizon`.** That is how Teams marks a chat read;
   reading messages through this API leaves the user's unread badges alone.
-- **`48:*` conversation ids are system threads** (notes, calendar, …), not
-  chats — skip them.
+- **`48:*` conversation ids are system threads**, not chats — skip them when
+  listing. Two are worth reading by id: `48:notes` (the self-chat) and
+  `48:notifications` (the Activity feed; `48:mentions` is its mentions
+  subset). The conversation listing does not carry the feed — read its
+  messages directly.
 - **Inline images** (`<img src="https://<region>-api.asm.skype.com/v1/objects/…/views/imgo">`
   in a message body) download with the same bearer. Send it ONLY to https
   hosts ending in `.asm.skype.com` — the URL comes from message content.

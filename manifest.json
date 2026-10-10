@@ -169,11 +169,11 @@
     },
     {
       "name": "teams_get_activity",
-      "description": "Read the Activity feed — mentions, replies, and reactions across every chat and channel"
+      "description": "Read the Activity feed — mentions, reactions, replies, meeting notices and missed calls across every chat and channel, without opening it"
     },
     {
       "name": "teams_healthcheck",
-      "description": "Verify the Teams chat-service token and the browser bridge, end-to-end"
+      "description": "Verify the Teams chat-service token and API, end-to-end"
     }
   ],
   "compatibility": {

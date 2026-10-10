@@ -28,6 +28,7 @@ Tell the kinds apart by id suffix:
 | `@thread.v2` | group or meeting chat (`19:meeting_…` ids are meetings) |
 | `@unq.gbl.spaces` | 1:1 chat (no topic — name it after the other person) |
 | `48:notes` | the user's own notes self-chat — readable and writable like any chat |
+| `48:notifications` | the Activity feed — read-only; see [Activity feed](#activity-feed) |
 | `48:*` (other) | system thread (calendar, …) — not a chat; skip |
 
 ## Which conversations are unread
@@ -81,6 +82,50 @@ first; older pages via `_metadata.backwardLink`. Other `messagetype`s
 
 In a **channel**, a reply's `conversationLink` ends `;messageid=<rootId>`; a
 root post's root id is its own `id`. Group by that to rebuild threads.
+
+## Activity feed
+
+The bell icon's feed is the conversation `48:notifications` (the listing
+leaves it out — read its messages by id). No view needs to be open:
+
+```sh
+teams_get "/users/ME/conversations/48%3Anotifications/messages?view=msnp24Equivalent|supportsMessageProperties&pageSize=200&startTime=1" \
+  | jq -r '.messages[]
+      | select(.properties.deletetime | not)
+      | select(.properties.activity)
+      | (.properties.activity | if type == "string" then (fromjson? // null) else . end) as $a
+      | select($a)
+      | [($a.activityTimestamp // .originalarrivaltime),
+         (if .properties.isread == "true" then "read" else "UNREAD" end),
+         ($a.activityType + "/" + ($a.activitySubtype // "")),
+         ($a.sourceUserImDisplayName // ""),
+         ($a.sourceThreadTopic // $a.sourceThreadId),
+         (($a.messagePreview // "") | gsub("<[^>]+>"; "") | .[0:120])]
+      | @tsv'
+```
+
+Each entry's `properties.activity` — a JSON **string** (occasionally already
+an object) — says what happened:
+
+| field | meaning |
+| --- | --- |
+| `activityType` / `activitySubtype` | the kind — see below |
+| `activityTimestamp` | when (ISO 8601); fall back to the entry's `originalarrivaltime` |
+| `sourceUserImDisplayName` | who did it |
+| `sourceThreadId` | the chat or channel it happened in — pass it to *Read one conversation* |
+| `sourceMessageId` / `sourceReplyChainId` | the message, and in a channel its thread root |
+| `sourceThreadTopic` / `sourceThreadType` | that conversation's title and type |
+| `messagePreview` | the message text (may carry HTML) |
+
+`properties.isread` is `"true"` / `"false"`. Kinds seen live:
+`mention/channel|person|team`, `mentionInChat/person|everyone`,
+`reaction/<key>` and `reactionInChat/<key>` (the key is the emoji, e.g.
+`like`), `reply/` and `replyToReply/`,
+`msGraph/privateMeetingCreated|Updated|Forwarded|…` (meeting notices) and
+`call/missedMeetingNudge`. `48:mentions` holds just the mentions, in the same
+shape. Skip entries with `properties.deletetime` (deleted) and the odd one
+with no `properties.activity`. Older pages: `_metadata.backwardLink`, as
+anywhere. Reading the feed does not mark it read.
 
 ## Attachments
 
