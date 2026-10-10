@@ -1,12 +1,17 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { createTestHarness, parseToolResult } from '@chrischall/mcp-utils/test';
 import { McpToolError } from '@chrischall/mcp-utils';
 import { registerChannelTools } from '../../src/tools/channels.js';
 import type { ChatServiceClient, GetMessagesOptions, RawMessage } from '../../src/chatsvc.js';
-import { fakeChatsvc, messagesFrom, rawConv, rawMsg } from './fake-chatsvc.js';
+import { DAY, fakeChatsvc, messagesFrom, pinClock, rawConv, rawMsg } from './fake-chatsvc.js';
 
 const T0 = 1_760_000_000_000;
 const MIN = 60_000;
+/** "Now" for the since_days window: an hour after every fixture's activity. */
+const NOW = T0 + 60 * MIN;
+
+beforeEach(() => pinClock(NOW));
+afterEach(() => vi.useRealTimers());
 
 /*
  * Two teams. A team's own thread (the id its channels name as `spaceId`) is in
@@ -174,6 +179,29 @@ describe('teams_list_teams_and_channels', () => {
     expect((result.content?.[0] as { text?: string })?.text ?? '').toMatch(/click into any chat/i);
   });
 
+  describe('since_days (with unread_only)', () => {
+    const DORMANT = '19:alpha-dormant@thread.tacv2';
+    const dormant = rawConv(DORMANT, { topic: 'Dormant', spaceId: ALPHA, at: NOW - 400 * DAY, horizon: NOW - 500 * DAY });
+    const msgs = { ...MESSAGES, [DORMANT]: [post(DORMANT, NOW - 400 * DAY)] };
+
+    it('skips and counts a channel with only old unread posts, without reading it', async () => {
+      const chatsvc = withMessages([...CONVS, dormant], msgs);
+      const { data } = await call(chatsvc, { unread_only: true });
+
+      expect((data?.channels as Row[]).map((c) => c.id)).toEqual([ALPHA, BRAVO_OPS]);
+      expect(data?.older_unread_skipped).toBe(1);
+      expect(String(data?.older_unread_hint)).toMatch(/since_days/);
+      expect(vi.mocked(chatsvc.getMessages).mock.calls.map((c) => c[0])).not.toContain(DORMANT);
+    });
+
+    it('includes it with a larger since_days', async () => {
+      const { data } = await call(withMessages([...CONVS, dormant], msgs), { unread_only: true, since_days: 3650 });
+
+      expect((data?.channels as Row[]).map((c) => c.id)).toEqual([DORMANT, ALPHA, BRAVO_OPS]);
+      expect(data?.older_unread_skipped).toBe(0);
+    });
+  });
+
   it('describes channel coverage, takes only optional filters, and is read-only', async () => {
     const harness = await createTestHarness((server) => registerChannelTools(server, { chatsvc: fakeChatsvc() }));
     const tools = (await harness.client.listTools()).tools;
@@ -184,7 +212,8 @@ describe('teams_list_teams_and_channels', () => {
     expect(tool?.description).toMatch(/every channel/i);
     expect(tool?.description).toMatch(/teams_read_conversation/);
     expect(tool?.annotations?.readOnlyHint).toBe(true);
-    expect(Object.keys(schema.properties ?? {}).sort()).toEqual(['include_hidden', 'limit', 'query', 'unread_only']);
+    expect(Object.keys(schema.properties ?? {}).sort()).toEqual(['include_hidden', 'limit', 'query', 'since_days', 'unread_only']);
+    expect(tool?.description).toMatch(/since_days/);
     expect(tool?.description).toMatch(/hidden/i);
     expect(schema.required ?? []).toEqual([]);
     await harness.close();

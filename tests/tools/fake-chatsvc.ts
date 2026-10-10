@@ -4,6 +4,18 @@ import { vi } from 'vitest';
 import type { ChatServiceClient, GetMessagesOptions, RawConversation, RawMessage } from '../../src/chatsvc.js';
 
 export const ME = '8:orgid:00000000-0000-0000-0000-0000000000a1';
+/** One day in ms. */
+export const DAY = 86_400_000;
+
+/**
+ * Pin the wall clock (only `Date`; timers stay real) so the unread tools'
+ * since_days window is measured from a fixed "now". Undo with `vi.useRealTimers()`.
+ */
+export function pinClock(nowMs: number): void {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(nowMs);
+}
+
 export const OTHER = '8:orgid:00000000-0000-0000-0000-0000000000b2';
 const FROM = (mri: string) => `https://teams.cloud.microsoft/api/chatsvc/amer/v1/users/ME/contacts/${mri}`;
 

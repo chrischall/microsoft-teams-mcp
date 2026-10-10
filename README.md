@@ -105,13 +105,15 @@ Everything is optional — by default the token is captured from your browser.
   not just the visible sidebar, plus your `48:notes` self-chat as kind
   `self` when Teams lists it), most recent activity first: id, kind,
   title, unread hint, ISO-8601 last-activity time, last-message preview and
-  sender. `unread_only` (exact — see below), `query` (title) and `limit`
-  (default 50, max 500).
+  sender. `unread_only` (exact — see below), `since_days` (with
+  `unread_only`; default 14), `query` (title) and `limit` (default 50, max
+  500).
 - `teams_list_teams_and_channels` — every channel you are in, by team then
   title, with the same fields. Channels you have hidden in Teams are listed
   after the rest with `hidden: true`, and left out of `unread_only` unless
-  `include_hidden` is set. `unread_only`, `include_hidden`, `query` (channel
-  or team name) and `limit` (default 50, max 500).
+  `include_hidden` is set. `unread_only`, `include_hidden`, `since_days`
+  (with `unread_only`; default 14), `query` (channel or team name) and
+  `limit` (default 50, max 500).
 - `teams_read_conversation` — read any chat or channel by id or name,
   oldest first: sender, ISO-8601 time, text, subject, edited/deleted flags
   and attachments. A channel comes back as threads (root post + replies).
@@ -124,7 +126,9 @@ Everything is optional — by default the token is captured from your browser.
   (default 50) and `max_conversations` (default 20 returned with their
   messages — the rest are named, with their `unread_count`, in
   `more_unread_conversations`). Hidden channels are left out unless
-  `include_hidden`.
+  `include_hidden`. Only conversations with unread messages from the last
+  `since_days` (default 14, max 3650) are returned; older ones are counted
+  in `older_unread_skipped`.
 - `teams_get_attachment` — one attachment of a message: an inline image is
   returned as the image itself; a shared file as its name, type and open
   link only (files live in SharePoint and this server cannot download their
@@ -228,7 +232,15 @@ instead.
   that is gone or no longer readable) is not unread: it is skipped and
   counted in `skipped_unreachable`. Channels you have hidden in Teams
   (`hidden: true`) are not counted as unread unless you pass
-  `include_hidden`. This server only reads the marker; it never moves it.
+  `include_hidden`. Unread answers are also limited to recent activity:
+  a conversation counts only when its newest unread message arrived in the
+  last `since_days` days (default 14, max 3650) — in practice most
+  "unread" channels are dormant ones, untouched for months or years in teams
+  you never open. A candidate with no activity at all inside the window is
+  not even read. Whatever the window leaves out is counted in
+  `older_unread_skipped` (with a hint to widen `since_days`), never dropped
+  silently. `teams_read_conversation` is not windowed: it takes an explicit
+  `since` and `limit`. This server only reads the marker; it never moves it.
 - **The token only goes to Teams.** It is sent to the chat-service base and,
   for inline images, only to https hosts under `.asm.skype.com` (Teams' own
   image store) — an image link in a message pointing anywhere else is

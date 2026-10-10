@@ -1,12 +1,17 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { createTestHarness, parseToolResult } from '@chrischall/mcp-utils/test';
 import { McpToolError } from '@chrischall/mcp-utils';
 import { registerUnreadTools } from '../../src/tools/unread.js';
 import type { ChatServiceClient, GetMessagesOptions, RawMessage } from '../../src/chatsvc.js';
-import { fakeChatsvc, messagesFrom, rawConv, rawMsg } from './fake-chatsvc.js';
+import { DAY, fakeChatsvc, messagesFrom, pinClock, rawConv, rawMsg } from './fake-chatsvc.js';
 
 const T0 = 1_760_000_000_000;
 const MIN = 60_000;
+/** "Now" for the since_days window: an hour after every fixture's activity. */
+const NOW = T0 + 60 * MIN;
+
+beforeEach(() => pinClock(NOW));
+afterEach(() => vi.useRealTimers());
 
 const GROUP = '19:group0001@thread.v2';
 const READ_GROUP = '19:group0002@thread.v2';
@@ -424,6 +429,72 @@ describe('teams_get_unread', () => {
     expect(entry(data, GROUP).unread_count).toBe(2);
   });
 
+  describe('since_days', () => {
+    const OLD = '19:old0001@thread.v2';
+    const DORMANT = '19:dormant0001@thread.tacv2';
+    /** Active an hour ago, but the only real unread message is 20 days old; a call event is the recent news. */
+    const old = rawConv(OLD, { topic: 'Old news', at: NOW - 20 * DAY, horizon: NOW - 30 * DAY, lastIm: NOW - 1 * MIN });
+    /** Nothing at all for over a year. */
+    const dormant = rawConv(DORMANT, { topic: 'Dormant', at: NOW - 400 * DAY, horizon: NOW - 500 * DAY, spaceId: TEAM });
+    const msgs = {
+      ...MESSAGES,
+      [OLD]: [
+        rawMsg(NOW - 20 * DAY, { conv: OLD, text: 'old unread' }),
+        rawMsg(NOW - 1 * MIN, { conv: OLD, type: 'Event/Call' }),
+      ],
+      [DORMANT]: [rawMsg(NOW - 400 * DAY, { conv: DORMANT, rootId: NOW - 400 * DAY, text: 'dormant post' })],
+    };
+    const convs = [...CONVS, old, dormant];
+
+    it('defaults to 14 days: keeps in-window unread, skips and counts older unread, with a hint', async () => {
+      const { data } = await call(fakeChatsvc(convs, { getMessages: perConversation(msgs) }));
+
+      expect(ids(data)).toEqual([DM, CHANNEL, GROUP, MEETING]);
+      expect(data?.older_unread_skipped).toBe(2);
+      expect(String(data?.older_unread_hint)).toMatch(/14 days/);
+      expect(String(data?.older_unread_hint)).toMatch(/since_days/);
+      expect(data?.total_unread).toBe(7);
+    });
+
+    it('never reads a candidate whose newest activity is older than the window', async () => {
+      const getMessages = perConversation(msgs);
+      await call(fakeChatsvc(convs, { getMessages }));
+
+      const fetched = getMessages.mock.calls.map((c) => c[0]);
+      expect(fetched).not.toContain(DORMANT);
+      expect(fetched).toContain(OLD);
+    });
+
+    it('a larger since_days brings older unread back', async () => {
+      const month = await call(fakeChatsvc(convs, { getMessages: perConversation(msgs) }), { since_days: 30 });
+      expect(ids(month.data)).toContain(OLD);
+      expect(ids(month.data)).not.toContain(DORMANT);
+      expect(month.data?.older_unread_skipped).toBe(1);
+
+      const all = await call(fakeChatsvc(convs, { getMessages: perConversation(msgs) }), { since_days: 3650 });
+      expect(ids(all.data)).toEqual(expect.arrayContaining([OLD, DORMANT]));
+      expect(all.data?.older_unread_skipped).toBe(0);
+      expect(all.data).not.toHaveProperty('older_unread_hint');
+    });
+
+    it('a smaller since_days narrows the window', async () => {
+      const recent = rawConv(GROUP, { topic: 'Project Falcon', at: NOW - 2 * DAY, horizon: NOW - 3 * DAY });
+      const getMessages = perConversation({ [GROUP]: [rawMsg(NOW - 2 * DAY, { text: 'two days ago' })] });
+      const { data } = await call(fakeChatsvc([recent], { getMessages }), { since_days: 1 });
+
+      expect(ids(data)).toEqual([]);
+      expect(data?.older_unread_skipped).toBe(1);
+      expect(getMessages).not.toHaveBeenCalled();
+    });
+
+    it('rejects since_days outside 1..3650', async () => {
+      for (const since_days of [0, 3651, 1.5]) {
+        const { result } = await call(chatsvcWith(), { since_days });
+        expect(result.isError).toBe(true);
+      }
+    });
+  });
+
   describe('hidden channels', () => {
     const HIDDEN = '19:hidden0001@thread.tacv2';
     const convs = [
@@ -501,6 +572,9 @@ describe('teams_get_unread', () => {
       'max_conversations',
       'per_conversation_limit',
       'query',
+      'since_days',
     ]);
+    expect(tool.description).toMatch(/since_days/);
+    expect(tool.description).toMatch(/older_unread_skipped/);
   });
 });

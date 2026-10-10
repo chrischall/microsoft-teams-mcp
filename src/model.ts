@@ -216,6 +216,18 @@ export function lastImReceivedMs(c: RawConversation): number | undefined {
 }
 
 /**
+ * The conversation's newest activity of any kind (epoch ms): the later of the
+ * last message's arrival (its id) and `lastimreceivedtime`, since either can
+ * lag the other. `undefined` when the listing carries neither. Nothing real
+ * can be unread after this, so it bounds how recent an unread message can be.
+ */
+export function newestActivityMs(c: RawConversation): number | undefined {
+  const lastArrival = c.lastMessage !== undefined ? Number(c.lastMessage.id) : NaN;
+  const signals = [lastArrival, lastImReceivedMs(c)].filter((n): n is number => n !== undefined && Number.isFinite(n) && n > 0);
+  return signals.length === 0 ? undefined : Math.max(...signals);
+}
+
+/**
  * Whether the conversation is an unread CANDIDATE: its newest activity — the
  * later of `lastimreceivedtime` and the last message's arrival, of any type —
  * is past the read horizon (0 for a conversation never opened), and is not
@@ -232,11 +244,8 @@ export function isUnreadCandidate(c: RawConversation, meMri: string): boolean {
   const horizon = readHorizon(c);
   const last = c.lastMessage;
   const lastArrival = last !== undefined ? Number(last.id) : NaN;
-  const lastIm = lastImReceivedMs(c);
-  const signals = [lastArrival, lastIm].filter((n): n is number => n !== undefined && Number.isFinite(n) && n > 0);
-  if (signals.length === 0) return false;
-  const newest = Math.max(...signals);
-  if (newest <= horizon) return false;
+  const newest = newestActivityMs(c);
+  if (newest === undefined || newest <= horizon) return false;
   // The newest thing is the user's own doing: they were there for it.
   const lastIsMine = last !== undefined && senderMri(last.from) === meMri;
   return !(lastIsMine && lastArrival >= newest);

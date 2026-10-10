@@ -1,12 +1,17 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { createTestHarness, parseToolResult } from '@chrischall/mcp-utils/test';
 import { McpToolError } from '@chrischall/mcp-utils';
 import { registerChatTools } from '../../src/tools/chat.js';
 import type { ChatServiceClient, GetMessagesOptions, RawMessage } from '../../src/chatsvc.js';
-import { fakeChatsvc, messagesFrom, rawConv, rawMsg } from './fake-chatsvc.js';
+import { DAY, fakeChatsvc, messagesFrom, pinClock, rawConv, rawMsg } from './fake-chatsvc.js';
 
 const T0 = 1_760_000_000_000;
 const MIN = 60_000;
+/** "Now" for the since_days window: an hour after every fixture's activity. */
+const NOW = T0 + 60 * MIN;
+
+beforeEach(() => pinClock(NOW));
+afterEach(() => vi.useRealTimers());
 
 const GROUP = '19:group0001@thread.v2';
 const MEETING = '19:meeting_abc0001@thread.v2';
@@ -279,6 +284,46 @@ describe('teams_list_chats', () => {
     expect(text).toMatch(/Wait a minute/);
   });
 
+  describe('since_days (with unread_only)', () => {
+    const OLD = '19:old0001@thread.v2';
+    const DORMANT = '19:dormant0001@thread.v2';
+    const old = rawConv(OLD, { topic: 'Old news', at: NOW - 20 * DAY, horizon: NOW - 30 * DAY, lastIm: NOW - 1 * MIN });
+    const dormant = rawConv(DORMANT, { topic: 'Dormant', at: NOW - 400 * DAY, horizon: NOW - 500 * DAY });
+    const msgs = {
+      ...MESSAGES,
+      [OLD]: [rawMsg(NOW - 20 * DAY, { conv: OLD }), rawMsg(NOW - 1 * MIN, { conv: OLD, type: 'Event/Call' })],
+      [DORMANT]: [rawMsg(NOW - 400 * DAY, { conv: DORMANT })],
+    };
+    const convs = [...CONVS, old, dormant];
+
+    it('defaults to 14 days, counting what it left out and never reading a dormant chat', async () => {
+      const chatsvc = chatsvcWith(convs, msgs);
+      const { data } = await call(chatsvc, { unread_only: true });
+
+      expect((data?.chats as Row[]).map((c) => c.id)).toEqual([GROUP, DM]);
+      expect(data?.older_unread_skipped).toBe(2);
+      expect(String(data?.older_unread_hint)).toMatch(/since_days/);
+      expect(vi.mocked(chatsvc.getMessages).mock.calls.map((c) => c[0])).not.toContain(DORMANT);
+    });
+
+    it('a larger since_days brings older unread chats back', async () => {
+      const { data } = await call(chatsvcWith(convs, msgs), { unread_only: true, since_days: 3650 });
+
+      expect((data?.chats as Row[]).map((c) => c.id)).toEqual([GROUP, DM, OLD, DORMANT]);
+      expect(data?.older_unread_skipped).toBe(0);
+      expect(data).not.toHaveProperty('older_unread_hint');
+    });
+
+    it('changes nothing without unread_only', async () => {
+      const chatsvc = chatsvcWith(convs, msgs);
+      const { data } = await call(chatsvc, { since_days: 1 });
+
+      expect((data?.chats as Row[]).map((c) => c.id)).toContain(DORMANT);
+      expect(data).not.toHaveProperty('older_unread_skipped');
+      expect(chatsvc.getMessages).not.toHaveBeenCalled();
+    });
+  });
+
   it('says it covers every chat and that ids feed teams_read_conversation', async () => {
     const harness = await createTestHarness((server) => registerChatTools(server, { chatsvc: fakeChatsvc() }));
     const tool = (await harness.client.listTools()).tools.find((t) => t.name === 'teams_list_chats');
@@ -291,8 +336,10 @@ describe('teams_list_chats', () => {
     expect(Object.keys((tool?.inputSchema as { properties?: object }).properties ?? {}).sort()).toEqual([
       'limit',
       'query',
+      'since_days',
       'unread_only',
     ]);
+    expect(tool?.description).toMatch(/since_days/);
     await harness.close();
   });
 

@@ -6,8 +6,10 @@
  * horizon at all; channels hidden in Teams left out); each is then read newest
  * first down to its own horizon, a few at a time, and kept only when a real
  * message from someone else is there (`confirm.ts` — the same rule the list
- * tools' unread_only uses). Nothing writes the read marker, so the user's
- * unread badges in Teams are exactly as they were.
+ * tools' unread_only uses), and only when that message is within `since_days`
+ * (a candidate with no activity at all inside the window is not read). Nothing
+ * writes the read marker, so the user's unread badges in Teams are exactly as
+ * they were.
  */
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
@@ -21,7 +23,7 @@ import {
   type ConversationSummary,
 } from '../model.js';
 import { groupThreads } from './conversation.js';
-import { confirmedSummary, confirmUnreadCandidates } from './confirm.js';
+import { confirmedSummary, confirmUnreadCandidates, olderUnreadReport, sinceCutoff, sinceDaysArg } from './confirm.js';
 import { includeHiddenArg, isUnreadCandidateFor } from './listing.js';
 import { wrapApiError } from './errors.js';
 import { untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
@@ -67,7 +69,10 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
         'past the marker and kept only if it holds a real message from someone else, so a call ' +
         'recording, transcript or other system event never makes a conversation unread. Channels ' +
         'the user has hidden in Teams are left out (include_hidden adds them); one that is gone ' +
-        'or no longer readable (404/403) is skipped and counted in skipped_unreachable. ' +
+        'or no longer readable (404/403) is skipped and counted in skipped_unreachable. Only ' +
+        'conversations whose newest unread message is from the last 14 days are returned by ' +
+        'default (since_days widens or narrows it); older unread conversations — typically dormant ' +
+        'channels — are not read past their marker and are counted in older_unread_skipped. ' +
         'Unread conversations past max_conversations are listed by id, title and unread_count in ' +
         'more_unread_conversations; read one with teams_read_conversation. A conversation that ' +
         'could not be read is listed in errors and the rest still come back. total_unread covers ' +
@@ -91,6 +96,7 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
           .optional()
           .describe('Case-insensitive substring of the chat title, channel name or team name, or an exact conversation id.'),
         include_hidden: includeHiddenArg,
+        since_days: sinceDaysArg(),
         per_conversation_limit: z
           .number()
           .int()
@@ -114,7 +120,7 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
           ),
       },
     },
-    async ({ kinds, query, include_hidden, per_conversation_limit, max_conversations }) => {
+    async ({ kinds, query, include_hidden, since_days, per_conversation_limit, max_conversations }) => {
       try {
         const [raw, me] = await Promise.all([chatsvc.listConversations(), chatsvc.meMri()]);
         const allowed = new Set<ConversationKind>((kinds ?? ['chat', 'channel']).flatMap((k) => KIND_FILTERS[k]));
@@ -126,10 +132,13 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
         candidates.sort(byLastActivityDesc);
 
         const perLimit = per_conversation_limit ?? DEFAULT_PER_CONVERSATION;
-        const { confirmed, skippedUnreachable, failed } = await confirmUnreadCandidates(chatsvc, raw, me, candidates, {
-          limit: perLimit,
-          maxRaw: MAX_RAW_MESSAGES,
-        });
+        const { confirmed, skippedUnreachable, olderSkipped, failed } = await confirmUnreadCandidates(
+          chatsvc,
+          raw,
+          me,
+          candidates,
+          { limit: perLimit, maxRaw: MAX_RAW_MESSAGES, since: sinceCutoff(since_days) },
+        );
 
         const cap = max_conversations ?? DEFAULT_CONVERSATIONS;
         const conversations = confirmed.slice(0, cap).map(({ summary, read }) => {
@@ -159,6 +168,7 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
           total_unread_exact: exact,
           conversations,
           skipped_unreachable: skippedUnreachable,
+          ...olderUnreadReport(olderSkipped, since_days),
           ...(failed.length > 0
             ? {
                 errors: failed.map((f) => ({

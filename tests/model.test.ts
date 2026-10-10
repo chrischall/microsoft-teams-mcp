@@ -9,6 +9,7 @@ import {
   isUnreadCandidate,
   isUserMessage,
   matchConversations,
+  newestActivityMs,
   normaliseMessage,
   readHorizon,
   senderMri,
@@ -446,6 +447,25 @@ describe('conversationSummary', () => {
     it('the user\'s own message is a candidate when something newer arrived after it', () => {
       const c = withLast('Text', iso(HORIZON + 120_000), { fromMe: true, lastId: HORIZON + 60_000 });
       expect(isUnreadCandidate(c, ME)).toBe(true);
+    });
+  });
+
+  describe('newestActivityMs', () => {
+    const AT = 1_760_000_000_000;
+    const base = (): RawConversation => ({ ...conv(GROUP), lastMessage: { ...conv(GROUP).lastMessage!, id: String(AT) } });
+
+    it('is the last message\'s arrival when nothing newer is known', () => {
+      expect(newestActivityMs({ ...base(), properties: { consumptionhorizon: '1;1;1' } })).toBe(AT);
+    });
+
+    it('is lastimreceivedtime when that moved past a stale lastMessage', () => {
+      const c = base();
+      c.properties = { ...c.properties, lastimreceivedtime: new Date(AT + 60_000).toISOString() };
+      expect(newestActivityMs(c)).toBe(AT + 60_000);
+    });
+
+    it('is undefined when the conversation carries no activity at all', () => {
+      expect(newestActivityMs({ id: '19:x@thread.v2' })).toBeUndefined();
     });
   });
 

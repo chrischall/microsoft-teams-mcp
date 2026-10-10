@@ -11,7 +11,7 @@ import type { ConversationSummary } from '../model.js';
 import { wrapApiError } from './errors.js';
 import { untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
 import { limitArg, trimRows } from './limit.js';
-import { listSummaries, queryArg, UNREAD_HINT_DESCRIPTION, unreadOnlyArg } from './listing.js';
+import { listSinceDaysArg, listSummaries, queryArg, UNREAD_HINT_DESCRIPTION, unreadOnlyArg } from './listing.js';
 
 /** Up to 10 pages of 200 come back; this bounds one result, not the listing. */
 const MAX_CHATS = 500;
@@ -34,20 +34,28 @@ export function registerChatTools(server: McpServer, { chatsvc }: Pick<TeamsDeps
         'Pass an id (or the title) to teams_read_conversation to read the messages. Use ' +
         'unread_only to find chats with messages the user has not read, exactly as Teams counts ' +
         'them: each candidate is confirmed by reading its messages past the read marker, so a ' +
-        'call recording, transcript or other system event never makes a chat unread. ' +
+        'call recording, transcript or other system event never makes a chat unread. By default ' +
+        'unread_only keeps only chats whose newest unread message is from the last 14 days ' +
+        '(since_days widens it); older ones are counted in older_unread_skipped, not listed. ' +
         UNREAD_HINT_DESCRIPTION +
         ' Listing never marks anything read. Channels are listed by teams_list_teams_and_channels instead.' +
         UNTRUSTED_DESCRIPTION_SUFFIX,
       annotations: toolAnnotations({ readOnly: true, openWorld: true }),
       inputSchema: {
         unread_only: unreadOnlyArg,
+        since_days: listSinceDaysArg,
         query: queryArg('chat title'),
         limit: limitArg(MAX_CHATS, 'chats', 'most recent activity first kept'),
       },
     },
-    async ({ unread_only, query, limit }) => {
+    async ({ unread_only, since_days, query, limit }) => {
       try {
-        const { rows, ...unreadInfo } = await listSummaries(chatsvc, { kinds: ['group', 'meeting', 'oneOnOne', 'self'], unread_only, query });
+        const { rows, ...unreadInfo } = await listSummaries(chatsvc, {
+          kinds: ['group', 'meeting', 'oneOnOne', 'self'],
+          unread_only,
+          since_days,
+          query,
+        });
         rows.sort(byLastActivityDesc);
         const { rows: chats, truncated } = trimRows(rows, limit, 'start', MAX_CHATS, 'most recent');
         return untrustedResult({ chats, ...unreadInfo, ...(truncated ? { truncated } : {}) });

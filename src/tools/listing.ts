@@ -7,7 +7,7 @@
  */
 import { z } from 'zod';
 import type { ChatServiceClient } from '../chatsvc.js';
-import { confirmedSummary, confirmUnreadCandidates } from './confirm.js';
+import { confirmedSummary, confirmUnreadCandidates, olderUnreadReport, sinceCutoff, sinceDaysArg } from './confirm.js';
 import { wrapApiError } from './errors.js';
 import {
   conversationSummary,
@@ -21,8 +21,13 @@ export interface ListFilter {
   unread_only?: boolean;
   /** With `unread_only`, keep channels hidden in Teams too (default false). */
   include_hidden?: boolean;
+  /** With `unread_only`, the window (days) the newest unread message must fall in (default 14). */
+  since_days?: number;
   query?: string;
 }
+
+/** The list tools' `since_days`: it narrows `unread_only` only. */
+export const listSinceDaysArg = sinceDaysArg('With unread_only: ');
 
 export const unreadOnlyArg = z
   .boolean()
@@ -76,6 +81,9 @@ export interface Listing {
   rows: ListedRow[];
   /** With `unread_only`: candidates that answered 404/403 and so are not unread. */
   skipped_unreachable?: number;
+  /** With `unread_only`: conversations left out because their unread activity is older than `since_days`. */
+  older_unread_skipped?: number;
+  older_unread_hint?: string;
   /** With `unread_only`: candidates whose confirming read failed; they are left out of `rows`. */
   errors?: { conversation: { id: string; title: string }; error: string }[];
 }
@@ -93,7 +101,11 @@ export async function listSummaries(chatsvc: ChatServiceClient, filter: ListFilt
   if (filter.query !== undefined) rows = matchConversations(rows, filter.query);
   if (!filter.unread_only) return { rows };
 
-  const outcome = await confirmUnreadCandidates(chatsvc, raw, me, rows, { limit: CONFIRM_LIMIT, maxRaw: CONFIRM_MAX_RAW });
+  const outcome = await confirmUnreadCandidates(chatsvc, raw, me, rows, {
+    limit: CONFIRM_LIMIT,
+    maxRaw: CONFIRM_MAX_RAW,
+    since: sinceCutoff(filter.since_days),
+  });
   return {
     rows: outcome.confirmed.map(({ summary, read }) => ({
       ...confirmedSummary(summary, true),
@@ -101,6 +113,7 @@ export async function listSummaries(chatsvc: ChatServiceClient, filter: ListFilt
       ...(read.truncated ? { unread_count_exact: false as const } : {}),
     })),
     skipped_unreachable: outcome.skippedUnreachable,
+    ...olderUnreadReport(outcome.olderSkipped, filter.since_days),
     ...(outcome.failed.length > 0
       ? {
           errors: outcome.failed.map((f) => ({
