@@ -1,0 +1,65 @@
+{
+  "messages": [
+    {
+      "id": "1760000300000",
+      "composetime": "2026-10-09T12:04:59.000Z",
+      "originalarrivaltime": "2026-10-09T12:05:00.000Z",
+      "content": "<blockquote itemtype=\"http://schema.skype.com/Reply\" itemid=\"1760000200000\"><strong itemprop=\"mri\" itemid=\"8:orgid:00000000-0000-0000-0000-0000000000b2\">Example Person</strong><span itemprop=\"time\" itemid=\"1760000200000\"></span><p itemprop=\"preview\">Original question</p></blockquote><p>Here is the answer</p>",
+      "messagetype": "RichText/Html",
+      "from": "https://teams.cloud.microsoft/api/chatsvc/amer/v1/users/ME/contacts/8:orgid:00000000-0000-0000-0000-0000000000c3",
+      "imdisplayname": "Another Person",
+      "conversationLink": "https://teams.cloud.microsoft/api/chatsvc/amer/v1/users/ME/conversations/19:group0001@thread.v2",
+      "properties": { "edittime": "1760000310000" }
+    },
+    {
+      "id": "1760000250000",
+      "originalarrivaltime": "2026-10-09T12:04:10.000Z",
+      "content": "",
+      "messagetype": "RichText/Html",
+      "from": "https://teams.cloud.microsoft/api/chatsvc/amer/v1/users/ME/contacts/8:orgid:00000000-0000-0000-0000-0000000000b2",
+      "imdisplayname": "Example Person",
+      "properties": { "deletetime": "1760000260000" }
+    },
+    {
+      "id": "1760000240000",
+      "originalarrivaltime": "2026-10-09T12:04:00.000Z",
+      "content": "<addmember><target>8:orgid:00000000-0000-0000-0000-0000000000d4</target></addmember>",
+      "messagetype": "ThreadActivity/AddMember",
+      "from": "https://teams.cloud.microsoft/api/chatsvc/amer/v1/users/ME/contacts/8:orgid:00000000-0000-0000-0000-0000000000b2",
+      "properties": {}
+    },
+    {
+      "id": "1760000230000",
+      "originalarrivaltime": "2026-10-09T12:03:50.000Z",
+      "content": "<p>Reply in the thread</p>",
+      "messagetype": "RichText/Html",
+      "from": "https://teams.cloud.microsoft/api/chatsvc/amer/v1/users/ME/contacts/8:orgid:00000000-0000-0000-0000-0000000000b2",
+      "imdisplayname": "Example Person",
+      "conversationLink": "https://teams.cloud.microsoft/api/chatsvc/amer/v1/users/ME/conversations/19:channel0001@thread.tacv2;messageid=1760000100000",
+      "properties": {}
+    },
+    {
+      "id": "1760000100000",
+      "originalarrivaltime": "2026-10-09T12:01:40.000Z",
+      "content": "<p>Root post with a file and a picture <img src=\"https://us-api.asm.skype.com/v1/objects/0-eus-d1-abc123/views/imgo\" width=\"100\"></p>",
+      "messagetype": "RichText/Html",
+      "from": "https://teams.cloud.microsoft/api/chatsvc/amer/v1/users/ME/contacts/8:orgid:00000000-0000-0000-0000-0000000000b2",
+      "imdisplayname": "Example Person",
+      "conversationLink": "https://teams.cloud.microsoft/api/chatsvc/amer/v1/users/ME/conversations/19:channel0001@thread.tacv2;messageid=1760000100000",
+      "properties": {
+        "subject": "Weekly update",
+        "files": "[{\"fileName\":\"example-notes.docx\",\"fileType\":\"docx\",\"title\":\"example-notes.docx\",\"objectUrl\":\"https://example.sharepoint.com/sites/example/Shared%20Documents/example-notes.docx\",\"openUrl\":\"https://example.sharepoint.com/sites/example/_layouts/15/Doc.aspx?sourcedoc=x\",\"id\":\"file-1\",\"type\":\"docx\",\"state\":\"active\"},{\"title\":\"diagram.png\",\"type\":\"png\",\"fileInfo\":{\"fileUrl\":\"https://example.sharepoint.com/diagram.png\",\"shareUrl\":\"https://example.sharepoint.com/:i:/s/share\"}}]"
+      }
+    },
+    {
+      "id": "1760000050000",
+      "composetime": "2026-10-09T12:00:50.000Z",
+      "content": "A note from me",
+      "messagetype": "Text",
+      "from": "https://teams.cloud.microsoft/api/chatsvc/amer/v1/users/ME/contacts/8:orgid:00000000-0000-0000-0000-0000000000a1",
+      "imdisplayname": "Test User",
+      "conversationLink": "https://teams.cloud.microsoft/api/chatsvc/amer/v1/users/ME/conversations/19:00000000-0000-0000-0000-0000000000a1_00000000-0000-0000-0000-0000000000b2@unq.gbl.spaces",
+      "properties": {}
+    }
+  ]
+}

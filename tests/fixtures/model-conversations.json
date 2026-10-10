@@ -1,0 +1,81 @@
+{
+  "conversations": [
+    {
+      "id": "19:group0001@thread.v2",
+      "properties": { "consumptionhorizon": "1760000000000;1760000000500;1760000000000" },
+      "threadProperties": { "topic": "Example project group", "threadType": "chat", "productThreadType": "Chat" },
+      "lastMessage": {
+        "id": "1760000100000",
+        "originalarrivaltime": "2026-10-09T12:01:40.000Z",
+        "composetime": "2026-10-09T12:01:39.000Z",
+        "content": "<p>Example &amp; message</p>",
+        "from": "https://teams.cloud.microsoft/api/chatsvc/amer/v1/users/ME/contacts/8:orgid:00000000-0000-0000-0000-0000000000b2",
+        "imdisplayname": "Example Person",
+        "messagetype": "RichText/Html"
+      }
+    },
+    {
+      "id": "19:group0002@thread.v2",
+      "properties": { "consumptionhorizon": "1760000200000;1760000200500;1760000200000" },
+      "threadProperties": { "threadType": "chat" },
+      "lastMessage": {
+        "id": "1760000150000",
+        "originalarrivaltime": "2026-10-09T12:02:30.000Z",
+        "content": "Already read",
+        "from": "https://teams.cloud.microsoft/api/chatsvc/amer/v1/users/ME/contacts/8:orgid:00000000-0000-0000-0000-0000000000c3",
+        "imdisplayname": "Another Person",
+        "messagetype": "Text"
+      }
+    },
+    {
+      "id": "19:meeting_ZXhhbXBsZQ@thread.v2",
+      "properties": {},
+      "threadProperties": { "topic": "Example standup" }
+    },
+    {
+      "id": "19:group0003@thread.v2",
+      "properties": {},
+      "threadProperties": { "topic": "Example review", "productThreadType": "Meeting" }
+    },
+    {
+      "id": "19:group0004@thread.v2",
+      "properties": {},
+      "threadProperties": { "threadType": "meeting" }
+    },
+    {
+      "id": "19:00000000-0000-0000-0000-0000000000a1_00000000-0000-0000-0000-0000000000b2@unq.gbl.spaces",
+      "properties": { "consumptionhorizon": "1760000000000;1760000000500;1760000000000" },
+      "threadProperties": {},
+      "lastMessage": {
+        "id": "1760000400000",
+        "originalarrivaltime": "2026-10-09T12:06:40.000Z",
+        "content": "Sent by me",
+        "from": "https://teams.cloud.microsoft/api/chatsvc/amer/v1/users/ME/contacts/8:orgid:00000000-0000-0000-0000-0000000000a1",
+        "imdisplayname": "Test User",
+        "messagetype": "Text"
+      }
+    },
+    {
+      "id": "19:team0001@thread.tacv2",
+      "properties": { "consumptionhorizon": "garbage" },
+      "threadProperties": { "topic": "Example Team", "threadType": "space", "spaceId": "19:team0001@thread.tacv2" }
+    },
+    {
+      "id": "19:channel0001@thread.tacv2",
+      "properties": { "consumptionhorizon": "1760000000000;1760000000500;1760000000000" },
+      "threadProperties": { "topic": "Design", "threadType": "topic", "spaceId": "19:team0001@thread.tacv2" },
+      "lastMessage": {
+        "id": "1760000500000",
+        "composetime": "2026-10-09T12:08:20.000Z",
+        "content": "System event",
+        "from": "https://teams.cloud.microsoft/api/chatsvc/amer/v1/users/ME/contacts/8:orgid:00000000-0000-0000-0000-0000000000b2",
+        "messagetype": "ThreadActivity/AddMember"
+      }
+    },
+    {
+      "id": "19:channel0002@thread.tacv2",
+      "properties": {},
+      "threadProperties": { "threadType": "topic", "spaceId": "19:unknownteam@thread.tacv2" }
+    }
+  ]
+}
