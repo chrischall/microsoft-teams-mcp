@@ -54,7 +54,7 @@ export function rawMsg(
 /**
  * A `getMessages` stub that pages the way the real client does over the given
  * messages (in any order — served newest first): it stops BEFORE the first
- * message `stopAt` accepts, or once `max` are collected.
+ * message `stopAt` accepts, or once `max` are collected (reporting `onCapped`).
  */
 export function messagesFrom(messages: RawMessage[]) {
   const newestFirst = [...messages].sort((a, b) => Number(b.id) - Number(a.id));
@@ -63,7 +63,10 @@ export function messagesFrom(messages: RawMessage[]) {
     for (const m of newestFirst) {
       if (opts.stopAt?.(m)) return out;
       out.push(m);
-      if (out.length >= opts.max) return out;
+      if (out.length >= opts.max) {
+        opts.onCapped?.();
+        return out;
+      }
     }
     return out;
   });

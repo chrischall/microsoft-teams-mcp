@@ -241,6 +241,51 @@ describe('teams_get_unread', () => {
     expect(ids(data)).toEqual([DM]);
   });
 
+  it('says total_unread is exact when nothing was capped or truncated', async () => {
+    const { data } = await call(chatsvcWith());
+
+    expect(data?.total_unread_exact).toBe(true);
+  });
+
+  it('says total_unread is not exact when conversations were capped', async () => {
+    const { data } = await call(chatsvcWith(), { max_conversations: 2 });
+
+    expect(data?.total_unread_exact).toBe(false);
+  });
+
+  it('says total_unread is not exact when a per-conversation limit truncated', async () => {
+    const { data } = await call(chatsvcWith(), { per_conversation_limit: 1 });
+
+    expect(data?.total_unread_exact).toBe(false);
+  });
+
+  it('records a conversation whose read failed and carries on with the rest', async () => {
+    const pager = perConversation();
+    const getMessages = vi.fn(async (id: string, opts: GetMessagesOptions) => {
+      if (id === GROUP) throw new McpToolError('Teams chat service is rate-limiting requests (429).', { status: 429 });
+      return pager(id, opts);
+    });
+    const { result, data } = await call(chatsvcWith({ getMessages }));
+
+    expect(result.isError).toBeFalsy();
+    expect(ids(data)).toEqual([DM, CHANNEL, MEETING]);
+    const errors = data?.errors as { conversation: { id: string; title: string }; error: string }[];
+    expect(errors).toHaveLength(1);
+    expect(errors[0].conversation).toMatchObject({ id: GROUP, title: 'Project Falcon' });
+    expect(errors[0].error).toMatch(/rate-limiting/);
+    expect(data?.total_unread).toBe(1 + 3 + 1);
+    expect(data?.total_unread_exact).toBe(false);
+  });
+
+  it('confirms an unread_uncertain conversation by fetching it', async () => {
+    const base = rawConv(GROUP, { topic: 'Call happened', at: T0 + 4 * MIN, horizon: T0 + 2 * MIN });
+    const convs = [{ ...base, lastMessage: { ...base.lastMessage!, messagetype: 'Event/Call' } }];
+    const { data } = await call(fakeChatsvc(convs, { getMessages: perConversation() }));
+
+    expect(ids(data)).toEqual([GROUP]);
+    expect(entry(data, GROUP).conversation).not.toHaveProperty('unread_uncertain');
+  });
+
   it('returns an empty result when nothing is unread', async () => {
     const { data } = await call(fakeChatsvc([rawConv(READ_GROUP, { topic: 'All caught up' })]));
 
@@ -263,7 +308,7 @@ describe('teams_get_unread', () => {
     expect(errorText(result)).toMatch(/click into any chat/i);
   });
 
-  it('passes an already-actionable API error from a message read through unchanged', async () => {
+  it('passes an already-actionable API error through unchanged when every read failed', async () => {
     const chatsvc = chatsvcWith({
       getMessages: vi.fn().mockRejectedValue(new McpToolError('Teams chat service is rate-limiting requests (429).', { status: 429 })),
     });

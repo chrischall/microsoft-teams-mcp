@@ -63,7 +63,23 @@ export function registerHealthcheckTool(server: McpServer, { teams, chatsvc }: T
 
       const first = result.content[0];
       if (first?.type !== 'text') return result;
-      const body = JSON.parse(first.text) as Record<string, unknown>;
+      let body: unknown;
+      try {
+        body = JSON.parse(first.text);
+      } catch {
+        body = undefined;
+      }
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+        // Not the JSON envelope this expects: keep the bridge's text as-is and
+        // report the chat service beside it rather than failing the healthcheck.
+        return {
+          ...result,
+          content: [
+            ...result.content,
+            { type: 'text' as const, text: JSON.stringify({ chat_service: chatService }, null, 2) },
+          ],
+        };
+      }
       return {
         ...result,
         content: [{ type: 'text' as const, text: JSON.stringify({ ...body, chat_service: chatService }, null, 2) }],

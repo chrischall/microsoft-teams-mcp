@@ -292,8 +292,30 @@ describe('getMessages', () => {
         _metadata: { backwardLink: `${BASE}/users/ME/conversations/x/messages?syncState=${n}` },
       });
     });
-    await expect(client(fetchImpl).getMessages(CONV, { max: 1000 })).resolves.toHaveLength(20);
+    const onCapped = vi.fn();
+    await expect(client(fetchImpl).getMessages(CONV, { max: 1000, onCapped })).resolves.toHaveLength(20);
     expect(fetchImpl).toHaveBeenCalledTimes(20);
+    expect(onCapped).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports hitting max through onCapped', async () => {
+    const onCapped = vi.fn();
+    await client(pagedFetch()).getMessages(CONV, { max: 3, onCapped });
+    expect(onCapped).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not report a cap when stopAt or the end of the history ended the read', async () => {
+    const onCapped = vi.fn();
+    await client(pagedFetch()).getMessages(CONV, { max: 100, onCapped });
+    await client(pagedFetch()).getMessages(CONV, { max: 100, onCapped, stopAt: (m) => Number(m.id) <= 1760000200000 });
+    expect(onCapped).not.toHaveBeenCalled();
+  });
+
+  it('returns nothing, without a request, for a max of 0 or less', async () => {
+    const fetchImpl = pagedFetch();
+    await expect(client(fetchImpl).getMessages(CONV, { max: 0 })).resolves.toEqual([]);
+    await expect(client(fetchImpl).getMessages(CONV, { max: -5 })).resolves.toEqual([]);
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });
 

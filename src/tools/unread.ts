@@ -22,9 +22,10 @@ import {
   type ConversationKind,
   type ConversationSummary,
 } from '../model.js';
-import { groupThreads } from './conversation.js';
+import { confirmUnread, groupThreads } from './conversation.js';
 import { wrapApiError } from './errors.js';
 import { untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
+import { makeLimitedStopAt } from './limit.js';
 
 const MAX_PER_CONVERSATION = 200;
 const DEFAULT_PER_CONVERSATION = 50;
@@ -67,7 +68,9 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
         'messages the user has not read, oldest first; a channel\'s are grouped as threads ' +
         'under their root post (a root the user already read is marked missing). Conversations ' +
         'past max_conversations are listed by id and title in more_unread_conversations; read ' +
-        'one with teams_read_conversation. This does NOT mark anything read — the user\'s ' +
+        'one with teams_read_conversation. A conversation that could not be read is listed in ' +
+        'errors and the rest still come back. total_unread_exact is false when conversations ' +
+        'were capped, truncated or failed. This does NOT mark anything read — the user\'s ' +
         'Teams unread badges are unaffected.' +
         UNTRUSTED_DESCRIPTION_SUFFIX,
       annotations: toolAnnotations({ readOnly: true, openWorld: true }),
@@ -123,29 +126,33 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
         const toRead = unread.slice(0, cap);
         const rest = unread.slice(cap);
 
+        const failed: { conversation: ConversationSummary; error: unknown }[] = [];
         const read = await mapWithConcurrency(toRead, CONCURRENCY, async (summary) => {
           const horizon = readHorizon(raw.find((c) => c.id === summary.id)!);
           const wanted = (m: RawMessage): boolean => isUserMessage(m) && isUnread(m, horizon, me);
 
-          // As in teams_read_conversation: the first wanted message past the
-          // limit is the boundary, and its existence says the read was truncated.
-          let kept = 0;
-          let truncated = false;
-          const stopAt = (m: RawMessage): boolean => {
-            if (Number(m.id) <= horizon) return true;
-            if (!wanted(m)) return false;
-            if (kept >= perLimit) return (truncated = true);
-            kept++;
-            return false;
-          };
-          const fetched = await chatsvc.getMessages(summary.id, { stopAt, max: MAX_RAW_MESSAGES });
+          const limited = makeLimitedStopAt(horizon, wanted, perLimit);
+          let capped = false;
+          let fetched: RawMessage[];
+          try {
+            fetched = await chatsvc.getMessages(summary.id, {
+              stopAt: limited.stopAt,
+              max: MAX_RAW_MESSAGES,
+              onCapped: () => (capped = true),
+            });
+          } catch (err) {
+            // One conversation failing must not cost the user the others.
+            failed.push({ conversation: summary, error: err });
+            return null;
+          }
           const messages = fetched
             .filter(wanted)
             .reverse()
             .map((m) => normaliseMessage(m, me));
           const body = summary.kind === 'channel' ? { threads: groupThreads(messages) } : { messages };
+          const truncated = limited.truncated || capped;
           return {
-            conversation: summary,
+            conversation: confirmUnread(summary, messages.length, !truncated),
             unread_count: messages.length,
             ...body,
             ...(truncated
@@ -162,12 +169,29 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
           };
         });
 
+        failed.sort((a, b) => toRead.indexOf(a.conversation) - toRead.indexOf(b.conversation));
+        // Every read failing is a failure of the call (a revoked token, a
+        // rate limit), so its own actionable error is what the caller sees.
+        const first = failed[0];
+        if (first !== undefined && failed.length === read.length) throw first.error;
+
         // The listing can call a conversation unread when what is past the
-        // horizon has since been deleted; leave those out.
-        const conversations = read.filter((c) => c.unread_count > 0);
+        // horizon has since been deleted, or when it only saw a system event;
+        // leave those out.
+        const conversations = read.flatMap((r) => (r === null || r.unread_count === 0 ? [] : [r]));
+        const exact = rest.length === 0 && failed.length === 0 && conversations.every((c) => c.truncated === undefined);
         return untrustedResult({
           total_unread: conversations.reduce((n, c) => n + c.unread_count, 0),
+          total_unread_exact: exact,
           conversations,
+          ...(failed.length > 0
+            ? {
+                errors: failed.map((f) => ({
+                  conversation: f.conversation,
+                  error: wrapApiError(f.error, 'read this conversation').message,
+                })),
+              }
+            : {}),
           ...(rest.length > 0
             ? { more_unread_conversations: rest.map((s) => ({ id: s.id, title: s.title })) }
             : {}),

@@ -17,6 +17,12 @@ export interface ConversationSummary {
   /** A channel's team name, when the team's own thread is in the listing. */
   team?: string;
   unread: boolean;
+  /**
+   * Set when `unread` rests on a last message that is a system event or
+   * deleted: a real unread message may or may not sit behind it, so the read
+   * tools confirm by fetching.
+   */
+  unread_uncertain?: true;
   /** ISO time of the last message; absent for a conversation with none. */
   lastActivity?: string;
   lastMessagePreview?: string;
@@ -65,6 +71,12 @@ const USER_MESSAGE_TYPES = new Set(['Text', 'RichText/Html']);
 
 /** Longest last-message preview a conversation summary carries. */
 const PREVIEW_CHARS = 200;
+
+/** The preview of a last message that is a system event (a call, a member added, …). */
+const SYSTEM_EVENT_PREVIEW = '(system event)';
+
+/** A channel's team name when the team's own thread is listed but names nothing. */
+const UNNAMED_TEAM = '(team)';
 
 /** Inline images live on Skype's AMS object store; only those are attachment refs. */
 const IMAGE_HOST_SUFFIX = '.asm.skype.com';
@@ -136,6 +148,39 @@ function nonEmpty(s: string | undefined): string | undefined {
   return t ? t : undefined;
 }
 
+/** A team's thread: its own `spaceId`, or a `space` thread type. */
+function isTeamThread(c: RawConversation): boolean {
+  const tp = c.threadProperties ?? {};
+  return tp.spaceId === c.id || tp.threadType === 'space';
+}
+
+/**
+ * A team's name from its own thread: the topic, else the space/topic-thread
+ * topic Teams sometimes carries instead, else {@link UNNAMED_TEAM}.
+ */
+function teamName(team: RawConversation): string {
+  const tp = team.threadProperties ?? {};
+  return nonEmpty(tp.topic) ?? nonEmpty(tp.spaceThreadTopic) ?? nonEmpty(tp.topicThreadTopic) ?? UNNAMED_TEAM;
+}
+
+/**
+ * Whether the listing's `lastMessage` makes the conversation unread. A real,
+ * live last message decides it outright. A system event or a deleted message
+ * hides what is behind it, so one past the horizon (and not the user's own)
+ * counts as unread but uncertain — the read tools confirm by fetching.
+ */
+function lastMessageUnread(
+  last: RawLastMessage | undefined,
+  horizon: number,
+  meMri: string,
+): { unread: boolean; uncertain: boolean } {
+  if (last === undefined) return { unread: false, uncertain: false };
+  if (isUserMessage(last) && !isDeleted(last)) return { unread: isUnread(last, horizon, meMri), uncertain: false };
+  const arrival = Number(last.id);
+  const unread = Number.isFinite(arrival) && arrival > horizon && senderMri(last.from) !== meMri;
+  return { unread, uncertain: unread };
+}
+
 export function conversationSummary(
   c: RawConversation,
   meMri: string,
@@ -144,10 +189,13 @@ export function conversationSummary(
   const kind = conversationKind(c);
   const tp = c.threadProperties ?? {};
   const last: RawLastMessage | undefined = c.lastMessage;
+  const systemEvent = last !== undefined && !isUserMessage(last);
   const lastFromMe = last !== undefined && senderMri(last.from) === meMri;
-  const lastSender = nonEmpty(last?.imdisplayname);
+  // A system event's display name is whoever triggered it, not a sender.
+  const lastSender = systemEvent ? undefined : nonEmpty(last?.imdisplayname);
+  const ownTeam = kind === 'channel' && isTeamThread(c);
 
-  let title = nonEmpty(tp.topic);
+  let title = ownTeam ? 'General' : nonEmpty(tp.topic);
   if (title === undefined) {
     // An untopiced chat is named after the other person — learnable only when
     // they sent the last message.
@@ -155,19 +203,22 @@ export function conversationSummary(
   }
 
   let team: string | undefined;
-  if (kind === 'channel' && tp.spaceId) {
-    team = nonEmpty(all.find((x) => x.id === tp.spaceId)?.threadProperties?.topic);
+  if (kind === 'channel') {
+    const teamThread = ownTeam ? c : tp.spaceId ? all.find((x) => x.id === tp.spaceId) : undefined;
+    if (teamThread !== undefined) team = teamName(teamThread);
   }
 
   const lastActivity = last ? (toIso(last.originalarrivaltime) ?? toIso(last.composetime)) : undefined;
-  const preview = last?.content !== undefined ? htmlToText(last.content) : undefined;
+  const preview = systemEvent ? SYSTEM_EVENT_PREVIEW : last?.content !== undefined ? htmlToText(last.content) : undefined;
+  const { unread, uncertain } = lastMessageUnread(last, readHorizon(c), meMri);
 
   return {
     id: c.id,
     kind,
     title,
     ...(team !== undefined ? { team } : {}),
-    unread: last !== undefined && isUnread(last, readHorizon(c), meMri),
+    unread,
+    ...(uncertain ? { unread_uncertain: true as const } : {}),
     ...(lastActivity !== undefined ? { lastActivity } : {}),
     ...(preview ? { lastMessagePreview: truncate(preview, PREVIEW_CHARS) } : {}),
     ...(lastSender !== undefined ? { lastSender } : {}),

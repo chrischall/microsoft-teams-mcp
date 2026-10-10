@@ -25,7 +25,7 @@ import {
 } from '../model.js';
 import { wrapApiError } from './errors.js';
 import { untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
-import { DEFAULT_LIMIT, limitArg, sinceArg } from './limit.js';
+import { DEFAULT_LIMIT, limitArg, makeLimitedStopAt, sinceArg } from './limit.js';
 
 const MAX_MESSAGES = 500;
 
@@ -71,6 +71,17 @@ export function groupThreads(messages: readonly NormalisedMessage[]): Thread[] {
   return [...byRoot.values()];
 }
 
+/**
+ * Settle a listing's `unread_uncertain` with what the read actually found:
+ * an unread message confirms it, and a read that saw everything past the
+ * horizon without one refutes it. A window-cut read with none proves nothing.
+ */
+export function confirmUnread(summary: ConversationSummary, unreadCount: number, exact: boolean): ConversationSummary {
+  if (!summary.unread_uncertain || (unreadCount === 0 && !exact)) return summary;
+  const { unread_uncertain: _settled, ...rest } = summary;
+  return { ...rest, unread: unreadCount > 0 };
+}
+
 function describeCandidate(s: ConversationSummary): string {
   const where = s.team !== undefined ? ` in ${s.team}` : '';
   return `"${s.title}"${where} (${s.kind}, id ${s.id})`;
@@ -88,8 +99,9 @@ export function registerConversationTools(server: McpServer, { chatsvc }: Pick<T
         'text, subject, edited/deleted flags and attachments; a channel is returned as threads, ' +
         'each root post with its replies (a root older than the window is marked missing). ' +
         'unread_only returns just the messages the user has not read; since stops at a time; ' +
-        'limit keeps the newest. This does NOT mark anything read — the user\'s Teams unread ' +
-        'badges are unaffected. Attachments are listed per message (images by ref, files by ' +
+        'limit keeps the newest (truncated says when more exist; unread_count_scope "window" says ' +
+        'unread_count only covers what limit/since let through). This does NOT mark anything ' +
+        'read — the user\'s Teams unread badges are unaffected. Attachments are listed per message (images by ref, files by ' +
         'name) and fetched with teams_get_attachment.' +
         UNTRUSTED_DESCRIPTION_SUFFIX,
       annotations: toolAnnotations({ readOnly: true, openWorld: true }),
@@ -128,24 +140,27 @@ export function registerConversationTools(server: McpServer, { chatsvc }: Pick<T
         const conv = raw.find((c) => c.id === summary.id)!;
         const horizon = readHorizon(conv);
         const cutoff = since !== undefined ? Date.parse(since) : undefined;
-        const n = limit ?? DEFAULT_LIMIT;
         const wanted = (m: RawMessage): boolean => isUserMessage(m) && (!unread_only || isUnread(m, horizon, me));
 
-        // `stopAt` sees each message once, newest first, so it can count: the
-        // first wanted message past `limit` is the boundary, and its existence
-        // is what says the result was truncated.
-        let kept = 0;
-        let truncated = false;
+        const limited = makeLimitedStopAt(unread_only ? horizon : undefined, wanted, limit ?? DEFAULT_LIMIT);
+        // A `since` cutoff above the read horizon leaves unread messages unseen.
+        let sinceCut = false;
+        let capped = false;
         const stopAt = (m: RawMessage): boolean => {
+          // The read horizon (checked inside `limited`) wins over `since`, as it is the nearer boundary.
+          const atHorizon = unread_only && Number(m.id) <= horizon;
           const at = arrivalMs(m);
-          if (unread_only && Number(m.id) <= horizon) return true;
-          if (cutoff !== undefined && Number.isFinite(at) && at < cutoff) return true;
-          if (!wanted(m)) return false;
-          if (kept >= n) return (truncated = true);
-          kept++;
-          return false;
+          if (!atHorizon && cutoff !== undefined && Number.isFinite(at) && at < cutoff) {
+            if (Number(m.id) > horizon) sinceCut = true;
+            return true;
+          }
+          return limited.stopAt(m);
         };
-        const fetched = await chatsvc.getMessages(summary.id, { stopAt, max: MAX_RAW_MESSAGES });
+        const fetched = await chatsvc.getMessages(summary.id, {
+          stopAt,
+          max: MAX_RAW_MESSAGES,
+          onCapped: () => (capped = true),
+        });
 
         const messages = fetched
           .filter(wanted)
@@ -153,10 +168,14 @@ export function registerConversationTools(server: McpServer, { chatsvc }: Pick<T
           .map((m) => normaliseMessage(m, me));
         const unread_count = fetched.filter((m) => wanted(m) && isUnread(m, horizon, me)).length;
         const body = summary.kind === 'channel' ? { threads: groupThreads(messages) } : { messages };
+        const truncated = limited.truncated || capped;
+        // Whether every message past the read horizon was seen, so unread_count is the whole count.
+        const exact = !truncated && !sinceCut;
 
         return untrustedResult({
-          conversation: summary,
+          conversation: confirmUnread(summary, unread_count, exact),
           unread_count,
+          ...(exact ? {} : { unread_count_scope: 'window' as const }),
           ...body,
           ...(truncated
             ? {

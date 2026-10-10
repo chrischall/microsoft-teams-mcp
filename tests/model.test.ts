@@ -306,9 +306,73 @@ describe('conversationSummary', () => {
   it('names a channel\'s team from the spaceId conversation', () => {
     const s = conversationSummary(conv(CHANNEL), ME, CONVS);
     expect(s).toMatchObject({ kind: 'channel', title: 'Design', team: 'Example Team' });
-    // Only a system event since the horizon: not unread.
-    expect(s.unread).toBe(false);
     expect(s.lastActivity).toBe('2026-10-09T12:08:20.000Z');
+  });
+
+  it('calls a conversation whose last message is someone else\'s system event past the horizon unread, but uncertain', () => {
+    // A real message may sit between the horizon and the event; only a fetch can tell.
+    const s = conversationSummary(conv(CHANNEL), ME, CONVS);
+    expect(s.unread).toBe(true);
+    expect(s.unread_uncertain).toBe(true);
+  });
+
+  it('previews a system-event last message as "(system event)" with no sender', () => {
+    const s = conversationSummary(conv(CHANNEL), ME, CONVS);
+    expect(s.lastMessagePreview).toBe('(system event)');
+    expect(s).not.toHaveProperty('lastSender');
+  });
+
+  it('calls a conversation whose last message was deleted after the horizon unread, but uncertain', () => {
+    const c: RawConversation = {
+      ...conv(GROUP),
+      lastMessage: { ...conv(GROUP).lastMessage!, properties: { deletetime: '1760000100001' } },
+    };
+    expect(conversationSummary(c, ME, CONVS)).toMatchObject({ unread: true, unread_uncertain: true });
+  });
+
+  it('never calls a conversation unread when the last event past the horizon is the user\'s own', () => {
+    const c: RawConversation = {
+      ...conv(CHANNEL),
+      lastMessage: { ...conv(CHANNEL).lastMessage!, from: `https://example.invalid/contacts/${ME}` },
+    };
+    const s = conversationSummary(c, ME, CONVS);
+    expect(s.unread).toBe(false);
+    expect(s).not.toHaveProperty('unread_uncertain');
+  });
+
+  it('is certain about a real last message: no unread_uncertain either way', () => {
+    expect(conversationSummary(conv(GROUP), ME, CONVS)).not.toHaveProperty('unread_uncertain');
+    expect(conversationSummary(conv(GROUP_READ), ME, CONVS)).not.toHaveProperty('unread_uncertain');
+  });
+
+  it('caps the last-message preview at 200 characters', () => {
+    const c: RawConversation = {
+      ...conv(GROUP),
+      lastMessage: { ...conv(GROUP).lastMessage!, content: `<p>${'x'.repeat(500)}</p>` },
+    };
+    const preview = conversationSummary(c, ME, CONVS).lastMessagePreview!;
+    expect(preview).toHaveLength(200);
+    expect(preview.endsWith('…')).toBe(true);
+  });
+
+  it('lists a team\'s own thread as "General" in that team', () => {
+    expect(conversationSummary(conv(TEAM), ME, CONVS)).toMatchObject({
+      kind: 'channel',
+      title: 'General',
+      team: 'Example Team',
+    });
+  });
+
+  it('names a team whose thread has no topic from spaceThreadTopic, then topicThreadTopic, else "(team)"', () => {
+    const team = (tp: Record<string, string>): RawConversation => ({
+      id: TEAM,
+      threadProperties: { threadType: 'space', spaceId: TEAM, ...tp },
+    });
+    const teamOf = (t: RawConversation) => conversationSummary(conv(CHANNEL), ME, [t, conv(CHANNEL)]).team;
+
+    expect(teamOf(team({ topic: ' ', spaceThreadTopic: 'Space Name', topicThreadTopic: 'Topic Name' }))).toBe('Space Name');
+    expect(teamOf(team({ topicThreadTopic: 'Topic Name' }))).toBe('Topic Name');
+    expect(teamOf(team({}))).toBe('(team)');
   });
 
   it('titles a topic-less channel "General" and omits an unknown team', () => {

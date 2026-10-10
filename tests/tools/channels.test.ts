@@ -41,14 +41,14 @@ async function call(chatsvc: ChatServiceClient, args: Record<string, unknown> = 
 type Row = { id: string; kind: string; title: string; team?: string; unread: boolean };
 
 describe('teams_list_teams_and_channels', () => {
-  it('lists every channel from the API sorted by team then title, with no chats', async () => {
+  it('lists every channel from the API sorted by team then title, a team\'s own thread as General, with no chats', async () => {
     const { data } = await call(fakeChatsvc(CONVS));
     const channels = data?.channels as Row[];
 
     expect(channels.map((c) => [c.team, c.title])).toEqual([
-      ['Alpha Team', 'Alpha Team'],
       ['Alpha Team', 'Design'],
-      ['Bravo Team', 'Bravo Team'],
+      ['Alpha Team', 'General'],
+      ['Bravo Team', 'General'],
       ['Bravo Team', 'Ops'],
       [undefined, 'Lonely'],
     ]);
@@ -79,7 +79,7 @@ describe('teams_list_teams_and_channels', () => {
   it('honours limit and says what was left out', async () => {
     const { data } = await call(fakeChatsvc(CONVS), { limit: 2 });
 
-    expect((data?.channels as Row[]).map((c) => c.title)).toEqual(['Alpha Team', 'Design']);
+    expect((data?.channels as Row[]).map((c) => c.title)).toEqual(['Design', 'General']);
     expect(data?.truncated).toMatchObject({ total: 5, returned: 2 });
   });
 

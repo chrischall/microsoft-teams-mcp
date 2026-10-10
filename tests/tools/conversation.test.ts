@@ -177,6 +177,69 @@ describe('teams_read_conversation', () => {
     expect((threads[1].root as Msg).text).toBe('new post');
     expect(threads[1].replies.map((r) => r.text)).toEqual(['reply A', 'reply B']);
     expect(data?.unread_count).toBe(2);
+    // since stopped below the read horizon, so every unread message was seen.
+    expect(data).not.toHaveProperty('unread_count_scope');
+  });
+
+  it('labels unread_count window-scoped when limit cut the read', async () => {
+    const { data } = await call(chatsvcWith(), { conversation: GROUP, limit: 2 });
+
+    expect(data?.unread_count).toBe(1);
+    expect(data?.unread_count_scope).toBe('window');
+  });
+
+  it('labels unread_count window-scoped when since cut the read above the read horizon', async () => {
+    const { data } = await call(chatsvcWith(), { conversation: GROUP, since: new Date(T0 + 3.5 * MIN).toISOString() });
+
+    expect(data?.unread_count).toBe(1);
+    expect(data?.unread_count_scope).toBe('window');
+  });
+
+  it('leaves unread_count unlabelled when the read was not cut', async () => {
+    const { data } = await call(chatsvcWith(), { conversation: GROUP });
+
+    expect(data).not.toHaveProperty('unread_count_scope');
+  });
+
+  it('says the result was truncated when the client stopped at its own page/message cap', async () => {
+    const getMessages = vi.fn(async (_id: string, opts: GetMessagesOptions) => {
+      opts.onCapped?.();
+      return [rawMsg(T0 + 4 * MIN, { text: 'fourth' })];
+    });
+    const { data } = await call(chatsvcWith(GROUP_MSGS, { getMessages }), { conversation: GROUP });
+
+    expect(data?.truncated).toMatchObject({ returned: 1 });
+    expect(data?.unread_count_scope).toBe('window');
+  });
+
+  describe('a conversation the listing could only call unread_uncertain', () => {
+    const QUIET = '19:quiet0001@thread.v2';
+    const base = rawConv(QUIET, { topic: 'Quiet', at: T0 + 5 * MIN, horizon: T0 + 2 * MIN });
+    const quiet = { ...base, lastMessage: { ...base.lastMessage!, messagetype: 'Event/Call' } };
+    const read = (messages: ReturnType<typeof rawMsg>[], args: Record<string, unknown> = {}) =>
+      call(fakeChatsvc([quiet], { getMessages: messagesFrom(messages) }), { conversation: QUIET, ...args });
+
+    it('is confirmed read when the fetch finds nothing unread', async () => {
+      const { data } = await read([rawMsg(T0 + 1 * MIN), rawMsg(T0 + 5 * MIN, { type: 'Event/Call' })]);
+
+      expect(data?.conversation).toMatchObject({ unread: false });
+      expect(data?.conversation).not.toHaveProperty('unread_uncertain');
+    });
+
+    it('is confirmed unread when the fetch finds an unread message', async () => {
+      const { data } = await read([rawMsg(T0 + 3 * MIN), rawMsg(T0 + 5 * MIN, { type: 'Event/Call' })]);
+
+      expect(data?.conversation).toMatchObject({ unread: true });
+      expect(data?.conversation).not.toHaveProperty('unread_uncertain');
+    });
+
+    it('stays uncertain when a window cut the read before the horizon', async () => {
+      const { data } = await read([rawMsg(T0 + 3 * MIN), rawMsg(T0 + 5 * MIN, { type: 'Event/Call' })], {
+        since: new Date(T0 + 4 * MIN).toISOString(),
+      });
+
+      expect(data?.conversation).toMatchObject({ unread: true, unread_uncertain: true });
+    });
   });
 
   it('returns its result inside the untrusted-data envelope', async () => {

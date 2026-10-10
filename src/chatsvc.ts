@@ -111,6 +111,8 @@ export interface RawLastMessage {
   messagetype?: string;
   conversationid?: string;
   sequenceId?: number;
+  /** As on a full message: `deletetime` set means deleted. */
+  properties?: Record<string, unknown>;
 }
 
 /** One entry of `GET /users/ME/conversations`. */
@@ -178,6 +180,11 @@ export interface GetMessagesOptions {
   stopAt?: (m: RawMessage) => boolean;
   /** Most messages to return. */
   max: number;
+  /**
+   * Called when the read ended at `max` or at the page cap rather than at a
+   * `stopAt` boundary or the start of the history — i.e. there may be more.
+   */
+  onCapped?: () => void;
 }
 
 export interface ChatServiceClientOptions {
@@ -286,17 +293,25 @@ export class ChatServiceClient {
   async getMessages(id: string, opts: GetMessagesOptions): Promise<RawMessage[]> {
     this.#requireConfigured();
     const out: RawMessage[] = [];
+    if (!(opts.max > 0)) return out;
     let url: string | undefined =
       `${this.#baseUrl}/users/ME/conversations/${encodeURIComponent(id)}/messages` +
       '?view=msnp24Equivalent|supportsMessageProperties&pageSize=200&startTime=1';
-    for (let page = 0; url !== undefined && page < MAX_MESSAGE_PAGES; page++) {
+    for (let page = 0; url !== undefined; page++) {
+      if (page >= MAX_MESSAGE_PAGES) {
+        opts.onCapped?.();
+        break;
+      }
       const body: MessagesPage = await this.#getJson<MessagesPage>(url);
       const msgs = body.messages ?? [];
       if (msgs.length === 0) break;
       for (const m of msgs) {
         if (opts.stopAt?.(m)) return out;
         out.push(m);
-        if (out.length >= opts.max) return out;
+        if (out.length >= opts.max) {
+          opts.onCapped?.();
+          return out;
+        }
       }
       url = this.#nextLink(body);
     }

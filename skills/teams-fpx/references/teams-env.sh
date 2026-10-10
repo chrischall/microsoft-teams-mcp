@@ -58,8 +58,9 @@ sys.stdout.write(vals[0].strip() if vals else "")
   esac
 
   local rc_file; rc_file="$(_teams_curlrc)"
-  umask 077
-  printf 'header = "Authorization: %s"\n' "$token" > "$rc_file" || return 1
+  # The umask is set in a subshell: this file is sourced, so a bare umask
+  # would leak into the caller's shell for good.
+  ( umask 077; printf 'header = "Authorization: %s"\n' "$token" > "$rc_file" ) || return 1
   chmod 600 "$rc_file" 2>/dev/null
   echo "token stored in $rc_file ($(teams_token_expiry))" >&2
 }

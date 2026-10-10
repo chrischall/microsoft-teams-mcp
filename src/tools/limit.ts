@@ -8,6 +8,7 @@
  * START of a newest-first feed), the first for an alphabetical listing.
  */
 import { z } from 'zod';
+import type { RawMessage } from '../chatsvc.js';
 
 export const DEFAULT_LIMIT = 50;
 
@@ -73,4 +74,40 @@ export function filterSince<T extends { time?: string }>(rows: T[], since: strin
     const t = row.time === undefined ? Number.NaN : Date.parse(row.time);
     return Number.isNaN(t) || t >= cutoff;
   });
+}
+
+export interface LimitedStopAt {
+  /** A `getMessages` `stopAt`: true at the read horizon, or at the first wanted message past `limit`. */
+  stopAt: (m: RawMessage) => boolean;
+  /** True once a wanted message past `limit` was seen — there is more than was kept. */
+  readonly truncated: boolean;
+}
+
+/**
+ * The `stopAt` behind `teams_read_conversation` and `teams_get_unread`. It
+ * sees each message once, newest first, so it can count: the first wanted
+ * message past `limit` is the boundary, and its existence is what says the
+ * result was truncated. `horizon` (when given) ends the read at the first
+ * message the user had already read — checked first, so a boundary there is
+ * never a truncation.
+ */
+export function makeLimitedStopAt(
+  horizon: number | undefined,
+  wanted: (m: RawMessage) => boolean,
+  limit: number,
+): LimitedStopAt {
+  let kept = 0;
+  let truncated = false;
+  return {
+    stopAt: (m) => {
+      if (horizon !== undefined && Number(m.id) <= horizon) return true;
+      if (!wanted(m)) return false;
+      if (kept >= limit) return (truncated = true);
+      kept++;
+      return false;
+    },
+    get truncated() {
+      return truncated;
+    },
+  };
 }
