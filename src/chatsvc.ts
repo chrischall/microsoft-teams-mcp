@@ -361,14 +361,22 @@ export class ChatServiceClient {
       const body: MessagesPage = await this.#getJson<MessagesPage>(url);
       const msgs = body.messages ?? [];
       if (msgs.length === 0) break;
+      // A page is newest first but not strictly ordered (seen live
+      // 2026-10-10), so the page `stopAt` fires in is finished — skipping
+      // each message it rejects — and only the NEXT page is not fetched.
+      let stopped = false;
       for (const m of msgs) {
-        if (opts.stopAt?.(m)) return out;
+        if (opts.stopAt?.(m)) {
+          stopped = true;
+          continue;
+        }
         out.push(m);
         if (out.length >= opts.max) {
           opts.onCapped?.();
           return out;
         }
       }
+      if (stopped) return out;
       url = this.#nextLink(body);
     }
     return out;

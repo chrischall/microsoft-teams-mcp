@@ -40,9 +40,8 @@ import { untrustedField, untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from '.
 const TOOL = 'teams_react';
 
 /**
- * The ✅ reaction's key. UNVERIFIED: inferred from the unicode-style key rule
- * (see `KEY_RULE`), not yet read off a real ✅ reaction — confirm it live and
- * fix it here if Teams uses another.
+ * The ✅ reaction's key, from the unicode-style key rule (see `KEY_RULE`) and
+ * confirmed live 2026-10-10 by reading a ✅ the user added in Teams itself.
  */
 export const CHECKMARK_KEY = '2705_whiteheavycheckmark';
 
