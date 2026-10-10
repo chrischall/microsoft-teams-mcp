@@ -284,3 +284,154 @@ shared file returns metadata + link.
   demand) — spike.
 - Mark-as-read, sending messages.
 - Hosting on mcp-host.
+
+---
+
+## Task 8b — review follow-ups from Part 1
+
+- `conversationSummary.unread`: compare the conversation's horizon against the
+  newest NON-system, non-deleted message id. `lastMessage` alone is wrong when it
+  is a system event (`Event/Call`, `ThreadActivity/*`) or deleted: treat such a
+  conversation as unread when `lastMessage.id > horizon` and it is not from me,
+  and mark `unread_uncertain: true` so the read tools confirm by fetching.
+  `lastMessagePreview`/`lastSender`: skip system events (preview `"(system event)"`),
+  and cap the preview at 200 chars.
+- Team naming: when the team thread's topic is empty, fall back to the
+  `threadProperties.spaceThreadTopic`/`topicThreadTopic` if present, else
+  `"(team)"`; a team's own thread lists with title `"General"`.
+- `teams_get_unread`: a failure on one conversation must not fail the call —
+  record `{ conversation, error }` for it and carry on. `total_unread` must say
+  whether it is exact (`total_unread_exact: false` when conversations were
+  capped or per-conversation limits truncated).
+- Share one `makeLimitedStopAt(horizon, wanted, limit)` helper between
+  `teams_read_conversation` and `teams_get_unread`. In `teams_read_conversation`
+  set `truncated` whenever the client stopped at its page/message cap too, and
+  label `unread_count` as window-scoped when `limit`/`since` cut it.
+- `skills/teams-fpx/references/teams-env.sh`: never change the caller's umask —
+  use a subshell `(umask 077; …)`.
+- healthcheck: tolerate non-JSON text from `runBridgeHealthcheck`.
+- `getMessages`: guard `max <= 0`.
+
+---
+
+# Part 2 — writes: send (quote-reply, mentions, emoji) and reactions
+
+Added 2026-10-10 after the read tasks landed. Shapes below were captured live
+from Teams' own requests (ids replaced). The token, base URL and client from
+Part 1 are reused; writes go through the same `ChatServiceClient`.
+
+## Verified write shapes
+
+- **Send.** `POST {base}/users/ME/conversations/{encodeURIComponent(convId)}/messages`
+  → 201; `Location` header ends `/messages/<newId>`. Body:
+  `{ id: "-1", type: "Message", conversationid, conversationLink: "blah/<convId>",
+  from: meMri, fromUserId: meMri, composetime: ISO, originalarrivaltime: ISO,
+  content: "<p>…</p>", messagetype: "RichText/Html", contenttype: "Text",
+  imdisplayname: <my display name — from the JWT \`name\` claim>,
+  clientmessageid: <random 19-digit numeric string>, callId: "", state: 0,
+  version: "0", amsreferences: [], properties: { importance: "", subject: "",
+  title: "", cards: "[]", links: "[]", mentions: "[]", onbehalfof: null,
+  files: "[]", policyViolation: null, formatVariant: "TEAMS" },
+  crossPostChannels: [] }`. Note `properties.*` values are JSON STRINGS.
+- **Channel reply** (unverified — verify live): post to
+  `encodeURIComponent(channelId + ";messageid=" + rootId)` as the conversation
+  id in the URL path; a new top-level channel post may set
+  `properties.subject`.
+- **Quote reply.** Same POST; content is
+  `<blockquote itemscope itemtype="http://schema.skype.com/Reply" itemid="{qid}"><strong itemprop="mri" itemid="{qSenderMri}">{qSenderName}</strong><span itemprop="time" itemid="{qid}"></span><p itemprop="preview">{escaped preview ≤ 200 chars}</p></blockquote><p>{reply}</p>`
+  and `properties.qtdMsgs = JSON.stringify([{ messageId: qid, sender: qSenderMri, time: Number(qid) }])`.
+- **Inline emoji in text:** `<span contenteditable="false" title="{Title}" type="({key})" class="animated-emoticon-20-{key}" itemscope><img itemscope itemtype="http://schema.skype.com/Emoji" itemid="{key}" src="https://statics.teams.cdn.office.net/evergreen-assets/personal-expressions/v2/assets/emoticons/{key}/default/20_f.png" title="{Title}" alt="{unicode}" style="width:20px;height:20px;"></span>`.
+  Plain unicode emoji in the text are also acceptable; only emit the span form
+  for shortcodes the caller passes as `:key:`.
+- **Mention** (documented format, NOT captured — verify live): in content
+  `<span itemscope itemtype="http://schema.skype.com/Mention" itemid="{n}">{displayName}</span>`,
+  and `properties.mentions = JSON.stringify([{ "@type": "http://schema.skype.com/Mention", itemid: "{n}", mri: "{personMri}", mentionType: "person", displayName: "{displayName}" }])`,
+  `n` = 0,1,… in order of appearance.
+- **Reaction.** `PUT {base}/users/ME/conversations/{encodeURIComponent(convId)}/messages/{msgId}/properties?name=emotions`
+  body `{ "emotions": { "key": "<key>", "value": <epoch ms> } }` → 2xx.
+  👍 = `like`. Known named keys: `like, heart, laugh, surprised, sad, angry,
+  yes, party, fire, smile, cool, wink, hearteyes`; unicode-style keys look like
+  `1f389_partypopper`. Removal (unverified): `DELETE` same URL with body
+  `{ "emotions": { "key": "<key>" } }`.
+- **Read-back.** Existing reactions appear on read messages as
+  `properties.emotions` (JSON string or array of `{ key, users: [{ mri, time }] }`)
+  — Part 1's `normaliseMessage` should surface them as
+  `reactions: [{ key, count, byMe }]` (add this in Task 9 if Part 1 did not).
+
+## Safety rules for every write tool
+
+- Use `confirmWrite`/`confirmTokenParam` from `@chrischall/mcp-utils` exactly
+  as `~/git/office-outlook-mcp/src/tools/writes.ts` does: the first call returns
+  a preview (conversation title + kind, the rendered text, mentions, quoted
+  message preview, reaction) and a token; only the second call with the token
+  posts. Read that file first and match it.
+- Non-idempotent sends go through a `writeOrUnknown` equivalent: a timeout or
+  dropped connection after the request was sent returns `status: "unknown"`
+  with "check the conversation before retrying", never a plain error.
+- After a send, read back the newest messages and confirm a message with our
+  `clientmessageid` exists; warn if not. After a reaction, read the message
+  and confirm the key is present with `byMe`.
+- Annotations: send `destructiveHint: true, idempotentHint: false,
+  openWorldHint: true`; react `destructiveHint: false, idempotentHint: true`.
+- Never send to `48:*` system conversations except `48:notes` (self-chat —
+  useful for testing; say so in the description).
+
+## Task 9 — `teams_send_message`
+
+**Files:** `src/tools/send.ts`, `src/compose.ts` (pure HTML builders),
+tests for both; `ChatServiceClient.sendMessage(convId, body)` and
+`getMessage(convId, id)` in `src/chatsvc.ts` (+ tests).
+
+Input `{ conversation (id or name, resolved like teams_read_conversation),
+text (plain text; newlines → <br>; HTML-escaped), reply_to?: message id
+(channel: posts as a threaded reply to that root; chat: quote-reply),
+quote?: message id (explicit quote-reply in any conversation),
+mentions?: [{ name_in_text: string, person: string (display name or MRI) }],
+confirmToken? }`.
+
+- Resolve mention people: MRI as-is; else match display names among recent
+  senders of that conversation (`imdisplayname` → `from` MRI); ambiguous or
+  unknown → `McpToolError` listing candidates. Replace the FIRST occurrence of
+  `@{name_in_text}` (or `name_in_text`) in the text with the mention span.
+- `:key:` shortcodes → emoji spans; everything else escaped.
+- Quote: fetch the quoted message for sender MRI/name and preview text.
+- Return `{ status: 'sent', conversation, message_id, verified: boolean }`.
+
+## Task 10 — `teams_react`
+
+**Files:** `src/tools/react.ts` (+ tests); `ChatServiceClient.setReaction` /
+`removeReaction`.
+
+Input `{ conversation (id or name), message_id, reaction: string, remove?:
+boolean, confirmToken? }`. `reaction` accepts aliases → key: `thumbsup|👍|like`
+→ `like`, `heart|❤️` → `heart`, `laugh|😆` → `laugh`, `surprised|😮` →
+`surprised`, `sad|😢` → `sad`, `angry|😡` → `angry`, plus any raw key passed
+through. `checkmark|✅` → read from a constant `CHECKMARK_KEY` that defaults to
+`2705_whiteheavycheckmark` with a comment that it is UNVERIFIED and must be
+confirmed live (the orchestrator will fix it after reading a real ✅ reaction).
+Confirm-gated (it is visible to everyone in the chat). Read-back verification.
+
+## Task 11 — manifests/docs for the write tools
+
+manifest tools list, README (writes section: confirm flow, self-chat for
+testing), skill doc, served-tools/annotation tests.
+
+## Live verification for Part 2 (orchestrator + user, explicit go-ahead per send)
+
+In `48:notes`: plain send, quote-reply, :emoji:, 👍 react + remove. Read a
+message carrying ✅ to learn its key and fix `CHECKMARK_KEY`. Mention: only in
+a chat the user picks, with their explicit go-ahead.
+
+## Addendum to Task 10 — reaction key rule (from captured recentReactions, 2026-10-10)
+
+Any emoji is a valid reaction key, not just the named ones: 😬 reacted as
+`1f62c_grimacingface`. Unicode-style keys are `<lowercase hex code point(s)>_<Unicode
+character NAME, lowercased, spaces/punctuation removed>` — e.g. 💯 `1f4af_hundredpointssymbol`,
+🛫 `1f6eb_airplanedeparture`, 🌍 `1f30d_earthglobeeuropeafrica`, 👀 `1f440_eyes`. Hence ✅
+should be `2705_whiteheavycheckmark` (still confirm live). Teams also keeps short legacy
+names for common ones (`like`, `heart`, `laugh`, `surprised`, `sad`, `angry`, `yes`, `no`,
+`party`, `fire`, `smile`, `cool`, `wink`, `hearteyes`, `manshrug`, `fistbump`, `handsinair`).
+`teams_react` must: accept a raw key; map the alias table; and for a single unicode emoji not
+in the table, return an McpToolError asking for the key (no Unicode-name database is bundled)
+with the rule above as the hint. Do NOT write the user's `recentReactions` property (Teams does
+that as a UI nicety; we must not touch preferences).
