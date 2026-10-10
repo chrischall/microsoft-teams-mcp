@@ -11,7 +11,7 @@ import type { ConversationSummary } from '../model.js';
 import { wrapApiError } from './errors.js';
 import { untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
 import { limitArg, trimRows } from './limit.js';
-import { includeHiddenArg, listSummaries, queryArg, unreadOnlyArg } from './listing.js';
+import { includeHiddenArg, listSummaries, queryArg, UNREAD_HINT_DESCRIPTION, unreadOnlyArg } from './listing.js';
 
 /** Up to 10 pages of 200 come back; this bounds one result, not the listing. */
 const MAX_CHANNELS = 500;
@@ -39,12 +39,15 @@ export function registerChannelTools(server: McpServer, { chatsvc }: Pick<TeamsD
       description:
         'List every channel the signed-in user is in, across all their teams, sorted by team ' +
         'name then channel title. Each has an id, title, team (when Teams makes it ' +
-        'determinable), unread flag, last-activity time (ISO 8601), and a last-message preview ' +
+        'determinable), unread hint, last-activity time (ISO 8601), and a last-message preview ' +
         'and sender. Channels the user has hidden in Teams are listed after the rest with ' +
         'hidden: true. Pass an id (or the channel name) to teams_read_conversation to read its ' +
-        'posts and replies. Use unread_only for channels with posts the user has not read — ' +
-        'hidden channels are left out of it unless include_hidden is set, as Teams shows them no ' +
-        'badge; listing never marks anything read. query matches the channel title or team name.' +
+        'posts and replies. Use unread_only for channels with real posts the user has not read, ' +
+        'each confirmed by reading past the read marker (a channel that is gone or no longer ' +
+        'readable is skipped and counted in skipped_unreachable); hidden channels are left out ' +
+        'of it unless include_hidden is set, as Teams shows them no badge. ' +
+        UNREAD_HINT_DESCRIPTION +
+        ' Listing never marks anything read. query matches the channel title or team name.' +
         UNTRUSTED_DESCRIPTION_SUFFIX,
       annotations: toolAnnotations({ readOnly: true, openWorld: true }),
       inputSchema: {
@@ -56,10 +59,10 @@ export function registerChannelTools(server: McpServer, { chatsvc }: Pick<TeamsD
     },
     async ({ unread_only, include_hidden, query, limit }) => {
       try {
-        const rows = await listSummaries(chatsvc, { kinds: ['channel'], unread_only, include_hidden, query });
+        const { rows, ...unreadInfo } = await listSummaries(chatsvc, { kinds: ['channel'], unread_only, include_hidden, query });
         rows.sort(byTeamThenTitle);
         const { rows: channels, truncated } = trimRows(rows, limit, 'start', MAX_CHANNELS, 'first');
-        return untrustedResult({ channels, ...(truncated ? { truncated } : {}) });
+        return untrustedResult({ channels, ...unreadInfo, ...(truncated ? { truncated } : {}) });
       } catch (err) {
         throw wrapApiError(err, 'list channels');
       }

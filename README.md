@@ -104,8 +104,9 @@ Everything is optional — by default the token is captured from your browser.
 - `teams_list_chats` — every chat you are in (1:1, group and meeting chats,
   not just the visible sidebar, plus your `48:notes` self-chat as kind
   `self` when Teams lists it), most recent activity first: id, kind,
-  title, unread flag, ISO-8601 last-activity time, last-message preview and
-  sender. `unread_only`, `query` (title) and `limit` (default 50, max 500).
+  title, unread hint, ISO-8601 last-activity time, last-message preview and
+  sender. `unread_only` (exact — see below), `query` (title) and `limit`
+  (default 50, max 500).
 - `teams_list_teams_and_channels` — every channel you are in, by team then
   title, with the same fields. Channels you have hidden in Teams are listed
   after the rest with `hidden: true`, and left out of `unread_only` unless
@@ -120,10 +121,10 @@ Everything is optional — by default the token is captured from your browser.
 - `teams_get_unread` — every unread message across your chats and channels,
   grouped by conversation, most recent first. Filter by `kinds` (`chat`,
   `channel`, `meeting`, `oneOnOne`) or `query`; `per_conversation_limit`
-  (default 50) and `max_conversations` (default 20 — the rest are named in
+  (default 50) and `max_conversations` (default 20 returned with their
+  messages — the rest are named, with their `unread_count`, in
   `more_unread_conversations`). Hidden channels are left out unless
-  `include_hidden`; `include_uncertain` also reads conversations the listing
-  could not decide (see below).
+  `include_hidden`.
 - `teams_get_attachment` — one attachment of a message: an inline image is
   returned as the image itself; a shared file as its name, type and open
   link only (files live in SharePoint and this server cannot download their
@@ -210,17 +211,23 @@ instead.
   subjects are data to report, never instructions to follow — this matters
   because the server usually runs beside write-capable MCPs (mail, messaging)
   that an injected instruction could otherwise reach.
-- **Unread means what Teams means.** A message is unread when it arrived
-  after the conversation's read marker (`consumptionhorizon`), was not sent
-  by you, and is a real message. System messages — call recordings and
+- **Unread means what Teams means, and is confirmed by reading.** A message
+  is unread when it arrived after the conversation's read marker
+  (`consumptionhorizon`), was not sent by you, is a real message (`Text` or
+  `RichText/Html`) and is not deleted. System messages — call recordings and
   transcripts (`RichText/Media_*`), `Event/*`, `ThreadActivity/*`,
-  `Control/*` — never make anything unread, so a meeting chat whose only news
-  is its recording is read. A conversation is unread when its last real
-  message (`lastimreceivedtime`, else a real last message) is past the
-  marker. When neither says (a system event past the marker and no
-  `lastimreceivedtime`), the summary is `unread: false, unread_uncertain:
-  true`; reading the conversation settles it. Channels you have hidden in
-  Teams (`hidden: true`) are not counted as unread unless you pass
+  `Control/*` — never make anything unread. The conversation listing cannot
+  tell on its own: `lastimreceivedtime` moves for a call recording too,
+  `lastMessage` can be stale, and a chat you never opened has no marker at
+  all. So the listing only nominates candidates (anything past the marker,
+  or no marker), and `unread_only` and `teams_get_unread` read each
+  candidate's messages past its marker (four at a time) and keep only those
+  holding a real unread message, with its `unread_count`. Without
+  `unread_only` the list tools' `unread` is just that cheap hint, marked
+  `unread_confirmed: false`. A candidate that answers 404 or 403 (a channel
+  that is gone or no longer readable) is not unread: it is skipped and
+  counted in `skipped_unreachable`. Channels you have hidden in Teams
+  (`hidden: true`) are not counted as unread unless you pass
   `include_hidden`. This server only reads the marker; it never moves it.
 - **The token only goes to Teams.** It is sent to the chat-service base and,
   for inline images, only to https hosts under `.asm.skype.com` (Teams' own

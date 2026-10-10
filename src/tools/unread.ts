@@ -2,40 +2,34 @@
  * `teams_get_unread` — every message the user has not read, across all their
  * chats and channels, in one call, from the Teams chat-service API.
  *
- * One listing finds the unread conversations (the last REAL message — never a
- * call recording or other system event — is past the read horizon and not the
- * user's own; channels hidden in Teams left out); each is then read newest
- * first down to its own horizon, a few at a time. Nothing writes the read marker, so the
- * user's unread badges in Teams are exactly as they were.
+ * One listing nominates candidates (activity past the read horizon, or no
+ * horizon at all; channels hidden in Teams left out); each is then read newest
+ * first down to its own horizon, a few at a time, and kept only when a real
+ * message from someone else is there (`confirm.ts` — the same rule the list
+ * tools' unread_only uses). Nothing writes the read marker, so the user's
+ * unread badges in Teams are exactly as they were.
  */
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import { mapWithConcurrency, toolAnnotations } from '@chrischall/mcp-utils';
-import type { RawMessage } from '../chatsvc.js';
+import { toolAnnotations } from '@chrischall/mcp-utils';
 import type { TeamsDeps } from '../deps.js';
 import {
   conversationSummary,
-  isUnread,
-  isUserMessage,
   matchConversations,
   normaliseMessage,
-  readHorizon,
   type ConversationKind,
   type ConversationSummary,
 } from '../model.js';
-import { confirmUnread, groupThreads } from './conversation.js';
-import { countsAsUnread, includeHiddenArg } from './listing.js';
+import { groupThreads } from './conversation.js';
+import { confirmedSummary, confirmUnreadCandidates } from './confirm.js';
+import { includeHiddenArg, isUnreadCandidateFor } from './listing.js';
 import { wrapApiError } from './errors.js';
 import { untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
-import { makeLimitedStopAt } from './limit.js';
 
 const MAX_PER_CONVERSATION = 200;
 const DEFAULT_PER_CONVERSATION = 50;
 const MAX_CONVERSATIONS = 50;
 const DEFAULT_CONVERSATIONS = 20;
-
-/** Conversations read at once. */
-const CONCURRENCY = 4;
 
 /**
  * Raw messages read per conversation before giving up. The real bound is the
@@ -68,16 +62,17 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
         '(or those matching kinds / query), grouped by conversation, most recent activity ' +
         'first. Each conversation comes with its summary (id, kind, title, team) and only the ' +
         'messages the user has not read, oldest first; a channel\'s are grouped as threads ' +
-        'under their root post (a root the user already read is marked missing). Conversations ' +
-        'past max_conversations are listed by id and title in more_unread_conversations; read ' +
-        'one with teams_read_conversation. As in Teams, a call recording, transcript or other ' +
-        'system event never makes a conversation unread, and channels the user has hidden in ' +
-        'Teams are left out (include_hidden adds them). A conversation whose listing cannot ' +
-        'say (a system event past the read marker, no record of the last real message) is ' +
-        'left out too unless include_uncertain is set, which reads it to find out. ' +
-        'A conversation that could not be read is listed in ' +
-        'errors and the rest still come back. total_unread_exact is false when conversations ' +
-        'were capped, truncated or failed. This does NOT mark anything read — the user\'s ' +
+        'under their root post (a root the user already read is marked missing). Exact, as in ' +
+        'Teams: every conversation with activity past its read marker (or never opened) is read ' +
+        'past the marker and kept only if it holds a real message from someone else, so a call ' +
+        'recording, transcript or other system event never makes a conversation unread. Channels ' +
+        'the user has hidden in Teams are left out (include_hidden adds them); one that is gone ' +
+        'or no longer readable (404/403) is skipped and counted in skipped_unreachable. ' +
+        'Unread conversations past max_conversations are listed by id, title and unread_count in ' +
+        'more_unread_conversations; read one with teams_read_conversation. A conversation that ' +
+        'could not be read is listed in errors and the rest still come back. total_unread covers ' +
+        'every unread conversation found; total_unread_exact is false when a per-conversation ' +
+        'limit truncated or a read failed. This does NOT mark anything read — the user\'s ' +
         'Teams unread badges are unaffected.' +
         UNTRUSTED_DESCRIPTION_SUFFIX,
       annotations: toolAnnotations({ readOnly: true, openWorld: true }),
@@ -96,14 +91,6 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
           .optional()
           .describe('Case-insensitive substring of the chat title, channel name or team name, or an exact conversation id.'),
         include_hidden: includeHiddenArg,
-        include_uncertain: z
-          .boolean()
-          .optional()
-          .describe(
-            'Also read conversations the listing marks unread_uncertain (a system event past the read ' +
-              'marker and no record of when the last real message came), keeping those that turn out ' +
-              'to hold unread messages (default false).',
-          ),
         per_conversation_limit: z
           .number()
           .int()
@@ -121,62 +108,38 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
           .max(MAX_CONVERSATIONS)
           .optional()
           .describe(
-            `Maximum conversations to read, most recent activity first (default ${DEFAULT_CONVERSATIONS}, ` +
-              `max ${MAX_CONVERSATIONS}); the rest are listed in more_unread_conversations.`,
+            `Maximum unread conversations returned with their messages, most recent activity first ` +
+              `(default ${DEFAULT_CONVERSATIONS}, max ${MAX_CONVERSATIONS}); the rest are listed in ` +
+              'more_unread_conversations.',
           ),
       },
     },
-    async ({ kinds, query, include_hidden, include_uncertain, per_conversation_limit, max_conversations }) => {
+    async ({ kinds, query, include_hidden, per_conversation_limit, max_conversations }) => {
       try {
         const [raw, me] = await Promise.all([chatsvc.listConversations(), chatsvc.meMri()]);
         const allowed = new Set<ConversationKind>((kinds ?? ['chat', 'channel']).flatMap((k) => KIND_FILTERS[k]));
         // Summaries are built against the FULL listing so a channel can find its team's name.
-        let unread = raw
+        let candidates = raw
           .map((c) => conversationSummary(c, me, raw))
-          .filter(
-            (s) =>
-              allowed.has(s.kind) &&
-              (countsAsUnread(s, include_hidden) ||
-                (include_uncertain === true && s.unread_uncertain === true && (include_hidden === true || !s.hidden))),
-          );
-        if (query !== undefined) unread = matchConversations(unread, query);
-        unread.sort(byLastActivityDesc);
+          .filter((s) => allowed.has(s.kind) && isUnreadCandidateFor(s, include_hidden));
+        if (query !== undefined) candidates = matchConversations(candidates, query);
+        candidates.sort(byLastActivityDesc);
+
+        const perLimit = per_conversation_limit ?? DEFAULT_PER_CONVERSATION;
+        const { confirmed, skippedUnreachable, failed } = await confirmUnreadCandidates(chatsvc, raw, me, candidates, {
+          limit: perLimit,
+          maxRaw: MAX_RAW_MESSAGES,
+        });
 
         const cap = max_conversations ?? DEFAULT_CONVERSATIONS;
-        const perLimit = per_conversation_limit ?? DEFAULT_PER_CONVERSATION;
-        const toRead = unread.slice(0, cap);
-        const rest = unread.slice(cap);
-
-        const failed: { conversation: ConversationSummary; error: unknown }[] = [];
-        const read = await mapWithConcurrency(toRead, CONCURRENCY, async (summary) => {
-          const horizon = readHorizon(raw.find((c) => c.id === summary.id)!);
-          const wanted = (m: RawMessage): boolean => isUserMessage(m) && isUnread(m, horizon, me);
-
-          const limited = makeLimitedStopAt(horizon, wanted, perLimit);
-          let capped = false;
-          let fetched: RawMessage[];
-          try {
-            fetched = await chatsvc.getMessages(summary.id, {
-              stopAt: limited.stopAt,
-              max: MAX_RAW_MESSAGES,
-              onCapped: () => (capped = true),
-            });
-          } catch (err) {
-            // One conversation failing must not cost the user the others.
-            failed.push({ conversation: summary, error: err });
-            return null;
-          }
-          const messages = fetched
-            .filter(wanted)
-            .reverse()
-            .map((m) => normaliseMessage(m, me));
+        const conversations = confirmed.slice(0, cap).map(({ summary, read }) => {
+          const messages = [...read.messages].reverse().map((m) => normaliseMessage(m, me));
           const body = summary.kind === 'channel' ? { threads: groupThreads(messages) } : { messages };
-          const truncated = limited.truncated || capped;
           return {
-            conversation: confirmUnread(summary, messages.length, !truncated),
+            conversation: confirmedSummary(summary, true),
             unread_count: messages.length,
             ...body,
-            ...(truncated
+            ...(read.truncated
               ? {
                   truncated: {
                     returned: messages.length,
@@ -189,31 +152,29 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
               : {}),
           };
         });
-
-        failed.sort((a, b) => toRead.indexOf(a.conversation) - toRead.indexOf(b.conversation));
-        // Every read failing is a failure of the call (a revoked token, a
-        // rate limit), so its own actionable error is what the caller sees.
-        const first = failed[0];
-        if (first !== undefined && failed.length === read.length) throw first.error;
-
-        // What is past the horizon may since have been deleted, and an
-        // uncertain conversation may hold nothing unread; leave those out.
-        const conversations = read.flatMap((r) => (r === null || r.unread_count === 0 ? [] : [r]));
-        const exact = rest.length === 0 && failed.length === 0 && conversations.every((c) => c.truncated === undefined);
+        const rest = confirmed.slice(cap);
+        const exact = failed.length === 0 && confirmed.every((c) => !c.read.truncated);
         return untrustedResult({
-          total_unread: conversations.reduce((n, c) => n + c.unread_count, 0),
+          total_unread: confirmed.reduce((n, c) => n + c.read.messages.length, 0),
           total_unread_exact: exact,
           conversations,
+          skipped_unreachable: skippedUnreachable,
           ...(failed.length > 0
             ? {
                 errors: failed.map((f) => ({
-                  conversation: f.conversation,
+                  conversation: f.summary,
                   error: wrapApiError(f.error, 'read this conversation').message,
                 })),
               }
             : {}),
           ...(rest.length > 0
-            ? { more_unread_conversations: rest.map((s) => ({ id: s.id, title: s.title })) }
+            ? {
+                more_unread_conversations: rest.map(({ summary, read }) => ({
+                  id: summary.id,
+                  title: summary.title,
+                  unread_count: read.messages.length,
+                })),
+              }
             : {}),
         });
       } catch (err) {

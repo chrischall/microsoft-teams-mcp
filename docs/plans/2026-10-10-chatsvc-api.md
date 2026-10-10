@@ -53,6 +53,17 @@ typecheck — `npm test` runs both).
   `id` (numeric string = arrival ms) > the first segment and it is not from
   the user. 19 of 194 conversations were unread by `lastMessage.id >
   horizon[0]` on the live tenant.
+  **Superseded (measured later the same day):** conversation-level signals
+  are NOT reliable for unread. `lastimreceivedtime` equals `lastMessage.id`
+  even when that is `RichText/Media_CallRecording`; `lastMessage` can be
+  stale (newest messages past the horizon all `Event/Call` /
+  `ThreadActivity/DeleteMember` while it showed an older `RichText/Html`);
+  13 meeting chats had no `consumptionhorizon` at all (never opened).
+  Confirming each candidate by reading past its horizon (real = `Text` /
+  `RichText/Html`, not deleted, not mine) gave 0 of 32 meeting-chat
+  candidates — matching Teams' UI exactly — and 29 of 37 channel candidates;
+  4 channels answered 404 on GET messages. The listing only nominates
+  candidates now; `src/tools/confirm.ts` confirms them.
 - **Messages.**
   `GET {base}/users/ME/conversations/{encodeURIComponent(id)}/messages?view=msnp24Equivalent|supportsMessageProperties&pageSize=200&startTime=1`
   → `{ messages: [...] (newest first), _metadata: { backwardLink,

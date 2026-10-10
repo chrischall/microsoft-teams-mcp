@@ -157,24 +157,42 @@ describe('teams_get_unread', () => {
     expect(ids((await call(chatsvcWith(), { query: 'platform team' })).data)).toEqual([CHANNEL]);
   });
 
-  it('caps the conversations read and lists the rest by id and title', async () => {
+  it('caps the conversations returned and lists the rest, confirmed, by id, title and unread_count', async () => {
     const chatsvc = chatsvcWith();
     const { data } = await call(chatsvc, { max_conversations: 2 });
 
     expect(ids(data)).toEqual([DM, CHANNEL]);
     expect(data?.more_unread_conversations).toEqual([
-      { id: GROUP, title: 'Project Falcon' },
-      { id: MEETING, title: 'Weekly sync' },
+      { id: GROUP, title: 'Project Falcon', unread_count: 2 },
+      { id: MEETING, title: 'Weekly sync', unread_count: 1 },
     ]);
-    expect(data?.total_unread).toBe(1 + 3);
-    expect(chatsvc.getMessages).toHaveBeenCalledTimes(2);
+    // Every candidate is confirmed, so the rest are counted too.
+    expect(data?.total_unread).toBe(1 + 3 + 2 + 1);
+    expect(chatsvc.getMessages).toHaveBeenCalledTimes(4);
+  });
+
+  it('never lists an unconfirmed candidate in more_unread_conversations', async () => {
+    const recs = Array.from({ length: 3 }, (_, i) =>
+      rawConv(`19:meeting_rec${i}@thread.v2`, { at: T0 + (20 + i) * MIN, horizon: T0, type: 'RichText/Media_CallRecording' }),
+    );
+    const recMsgs = Object.fromEntries(
+      recs.map((c) => [c.id, [rawMsg(T0 + 15 * MIN, { conv: c.id, type: 'RichText/Media_CallRecording' })]]),
+    );
+    const { data } = await call(
+      fakeChatsvc([...CONVS, ...recs], { getMessages: perConversation({ ...MESSAGES, ...recMsgs }) }),
+      { max_conversations: 3 },
+    );
+
+    expect(ids(data)).toEqual([DM, CHANNEL, GROUP]);
+    expect(data?.more_unread_conversations).toEqual([{ id: MEETING, title: 'Weekly sync', unread_count: 1 }]);
   });
 
   it('defaults to 20 conversations', async () => {
     const many = Array.from({ length: 25 }, (_, i) =>
       rawConv(`19:many${i}@thread.v2`, { topic: `Chat ${i}`, at: T0 + i * MIN, horizon: T0 - MIN }),
     );
-    const { data } = await call(fakeChatsvc(many, { getMessages: vi.fn().mockResolvedValue([]) }));
+    const manyMsgs = Object.fromEntries(many.map((c, i) => [c.id, [rawMsg(T0 + i * MIN, { conv: c.id })]]));
+    const { data } = await call(fakeChatsvc(many, { getMessages: perConversation(manyMsgs) }));
 
     expect(data?.more_unread_conversations).toHaveLength(5);
     expect((data?.more_unread_conversations as { id: string }[])[0].id).toBe('19:many4@thread.v2');
@@ -247,10 +265,10 @@ describe('teams_get_unread', () => {
     expect(data?.total_unread_exact).toBe(true);
   });
 
-  it('says total_unread is not exact when conversations were capped', async () => {
+  it('says total_unread is exact when conversations were capped but every one was confirmed', async () => {
     const { data } = await call(chatsvcWith(), { max_conversations: 2 });
 
-    expect(data?.total_unread_exact).toBe(false);
+    expect(data?.total_unread_exact).toBe(true);
   });
 
   it('says total_unread is not exact when a per-conversation limit truncated', async () => {
@@ -277,25 +295,94 @@ describe('teams_get_unread', () => {
     expect(data?.total_unread_exact).toBe(false);
   });
 
-  it('leaves an unread_uncertain conversation out by default, without fetching it', async () => {
-    const convs = [rawConv(GROUP, { topic: 'Call happened', at: T0 + 4 * MIN, horizon: T0 + 2 * MIN, type: 'Event/Call' })];
-    const getMessages = perConversation();
+  it('reads a recording-only meeting chat (lastimreceivedtime equal to the recording, as live) and leaves it out', async () => {
+    const REC = '19:meeting_rec0001@thread.v2';
+    const convs = [
+      rawConv(REC, {
+        topic: 'Recorded sync',
+        at: T0 + 9 * MIN,
+        horizon: T0 + 2 * MIN,
+        lastIm: T0 + 9 * MIN,
+        type: 'RichText/Media_CallRecording',
+      }),
+    ];
+    const getMessages = perConversation({
+      [REC]: [
+        rawMsg(T0 + 2 * MIN, { conv: REC }),
+        rawMsg(T0 + 5 * MIN, { conv: REC, type: 'Event/Call' }),
+        rawMsg(T0 + 9 * MIN, { conv: REC, type: 'RichText/Media_CallRecording' }),
+      ],
+    });
+    const { data } = await call(fakeChatsvc(convs, { getMessages }));
+
+    expect(data).toMatchObject({ total_unread: 0, conversations: [], skipped_unreachable: 0 });
+    expect(getMessages).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves out a chat whose stale lastMessage is real but whose news past the horizon is only system events (live)', async () => {
+    const STALE = '19:stale0001@thread.v2';
+    const convs = [
+      rawConv(STALE, { topic: 'Stale', at: T0 + 1 * MIN, horizon: T0 + 2 * MIN, lastIm: T0 + 6 * MIN, type: 'RichText/Html' }),
+    ];
+    const getMessages = perConversation({
+      [STALE]: [
+        rawMsg(T0 + 1 * MIN, { conv: STALE, type: 'RichText/Html' }),
+        rawMsg(T0 + 4 * MIN, { conv: STALE, type: 'Event/Call' }),
+        rawMsg(T0 + 6 * MIN, { conv: STALE, type: 'ThreadActivity/DeleteMember' }),
+      ],
+    });
     const { data } = await call(fakeChatsvc(convs, { getMessages }));
 
     expect(data).toMatchObject({ total_unread: 0, conversations: [] });
-    expect(getMessages).not.toHaveBeenCalled();
+    expect(getMessages).toHaveBeenCalledTimes(1);
   });
 
-  it('confirms an unread_uncertain conversation by fetching it with include_uncertain', async () => {
-    const convs = [rawConv(GROUP, { topic: 'Call happened', at: T0 + 4 * MIN, horizon: T0 + 2 * MIN, type: 'Event/Call' })];
-    const { data } = await call(fakeChatsvc(convs, { getMessages: perConversation() }), { include_uncertain: true });
+  it('reads a never-opened meeting chat (no read horizon) and returns its real messages from others', async () => {
+    const NEW = '19:meeting_new0001@thread.v2';
+    const never = rawConv(NEW, { topic: 'Never opened', at: T0 + 9 * MIN, type: 'Event/Call' });
+    delete never.properties!.consumptionhorizon;
+    const getMessages = perConversation({
+      [NEW]: [
+        rawMsg(T0 + 1 * MIN, { conv: NEW, type: 'ThreadActivity/AddMember' }),
+        rawMsg(T0 + 3 * MIN, { conv: NEW, text: 'agenda attached' }),
+        rawMsg(T0 + 4 * MIN, { conv: NEW, text: 'mine', fromMe: true }),
+        rawMsg(T0 + 9 * MIN, { conv: NEW, type: 'Event/Call' }),
+      ],
+    });
+    const { data } = await call(fakeChatsvc([never], { getMessages }));
 
-    expect(ids(data)).toEqual([GROUP]);
-    expect(entry(data, GROUP).conversation).toMatchObject({ unread: true });
-    expect(entry(data, GROUP).conversation).not.toHaveProperty('unread_uncertain');
+    expect(ids(data)).toEqual([NEW]);
+    expect(entry(data, NEW).messages?.map((m) => m.text)).toEqual(['agenda attached']);
+    expect(entry(data, NEW).conversation).toMatchObject({ unread: true, unread_confirmed: true });
   });
 
-  it('never reads a meeting chat whose only news is a call recording or transcript', async () => {
+  it('skips a channel that answers 404 or 403 silently, counting it in skipped_unreachable (live)', async () => {
+    const gone = new McpToolError('Teams chat service returned HTTP 404.', { status: 404, kind: 'http' });
+    const denied = new McpToolError('Teams chat service returned HTTP 403.', { status: 403, kind: 'http' });
+    const pager = perConversation();
+    const getMessages = vi.fn(async (id: string, opts: GetMessagesOptions) => {
+      if (id === CHANNEL) throw gone;
+      if (id === MEETING) throw denied;
+      return pager(id, opts);
+    });
+    const { result, data } = await call(chatsvcWith({ getMessages }));
+
+    expect(result.isError).toBeFalsy();
+    expect(ids(data)).toEqual([DM, GROUP]);
+    expect(data?.skipped_unreachable).toBe(2);
+    expect(data).not.toHaveProperty('errors');
+    expect(data?.total_unread_exact).toBe(true);
+  });
+
+  it('returns an empty result, not an error, when every candidate is unreachable', async () => {
+    const gone = new McpToolError('Teams chat service returned HTTP 404.', { status: 404, kind: 'http' });
+    const { result, data } = await call(chatsvcWith({ getMessages: vi.fn().mockRejectedValue(gone) }));
+
+    expect(result.isError).toBeFalsy();
+    expect(data).toMatchObject({ total_unread: 0, conversations: [], skipped_unreachable: 4 });
+  });
+
+  it('reads a meeting chat whose only news is a call recording or transcript, and leaves it out', async () => {
     const convs = [
       rawConv(MEETING, {
         topic: 'Recorded sync',
@@ -312,11 +399,13 @@ describe('teams_get_unread', () => {
         type: 'RichText/Media_CallTranscript',
       }),
     ];
-    const getMessages = perConversation();
+    const getMessages = perConversation({
+      [MEETING]: [rawMsg(T0 + 9 * MIN, { conv: MEETING, type: 'RichText/Media_CallRecording' })],
+      [GROUP]: [rawMsg(T0 + 8 * MIN, { type: 'RichText/Media_CallTranscript' })],
+    });
     const { data } = await call(fakeChatsvc(convs, { getMessages }));
 
     expect(data).toMatchObject({ total_unread: 0, conversations: [] });
-    expect(getMessages).not.toHaveBeenCalled();
   });
 
   it('reads a chat whose last message is a recording but whose last real message is unread', async () => {
@@ -404,9 +493,10 @@ describe('teams_get_unread', () => {
     expect(tool.annotations?.openWorldHint).toBe(true);
     expect(tool.description).toMatch(/call recording/i);
     expect(tool.description).toMatch(/hidden/i);
+    expect(tool.description).toMatch(/skipped_unreachable/);
+    expect(tool.description).not.toMatch(/uncertain/);
     expect(Object.keys((tool.inputSchema as { properties?: object }).properties ?? {}).sort()).toEqual([
       'include_hidden',
-      'include_uncertain',
       'kinds',
       'max_conversations',
       'per_conversation_limit',

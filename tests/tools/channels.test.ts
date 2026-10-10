@@ -1,8 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createTestHarness, parseToolResult } from '@chrischall/mcp-utils/test';
+import { McpToolError } from '@chrischall/mcp-utils';
 import { registerChannelTools } from '../../src/tools/channels.js';
-import type { ChatServiceClient } from '../../src/chatsvc.js';
-import { fakeChatsvc, rawConv } from './fake-chatsvc.js';
+import type { ChatServiceClient, GetMessagesOptions, RawMessage } from '../../src/chatsvc.js';
+import { fakeChatsvc, messagesFrom, rawConv, rawMsg } from './fake-chatsvc.js';
 
 const T0 = 1_760_000_000_000;
 const MIN = 60_000;
@@ -28,6 +29,23 @@ const CONVS = [
   rawConv(CHAT, { topic: 'Not a channel', at: T0 + 9 * MIN, horizon: T0 }),
 ];
 
+/** A real unread post past the horizon in each candidate channel. */
+const post = (conv: string, at: number) => rawMsg(at, { conv, rootId: at });
+const MESSAGES: Record<string, RawMessage[]> = {
+  [BRAVO_OPS]: [post(BRAVO_OPS, T0), post(BRAVO_OPS, T0 + 5 * MIN)],
+  [ALPHA]: [post(ALPHA, T0), post(ALPHA, T0 + 1 * MIN), post(ALPHA, T0 + 2 * MIN)],
+};
+
+/** A `getMessages` that serves each conversation's own messages; an `Error`-valued entry is thrown instead. */
+function withMessages(convs = CONVS, byId: Record<string, RawMessage[] | Error> = MESSAGES): ChatServiceClient {
+  const getMessages = vi.fn(async (id: string, opts: GetMessagesOptions) => {
+    const v = byId[id] ?? [];
+    if (v instanceof Error) throw v;
+    return messagesFrom(v)(id, opts);
+  });
+  return fakeChatsvc(convs, { getMessages });
+}
+
 async function call(chatsvc: ChatServiceClient, args: Record<string, unknown> = {}) {
   const harness = await createTestHarness((server) => registerChannelTools(server, { chatsvc }));
   try {
@@ -38,7 +56,7 @@ async function call(chatsvc: ChatServiceClient, args: Record<string, unknown> = 
   }
 }
 
-type Row = { id: string; kind: string; title: string; team?: string; unread: boolean };
+type Row = { id: string; kind: string; title: string; team?: string; unread: boolean; unread_confirmed: boolean; unread_count?: number };
 
 describe('teams_list_teams_and_channels', () => {
   it('lists every channel from the API sorted by team then title, a team\'s own thread as General, with no chats', async () => {
@@ -55,17 +73,41 @@ describe('teams_list_teams_and_channels', () => {
     expect(channels.every((c) => c.kind === 'channel')).toBe(true);
   });
 
-  it('marks each channel read or unread', async () => {
-    const { data } = await call(fakeChatsvc(CONVS));
+  it('marks each channel with an unconfirmed unread hint, reading no messages', async () => {
+    const chatsvc = withMessages();
+    const { data } = await call(chatsvc);
     const unread = (data?.channels as Row[]).filter((c) => c.unread).map((c) => c.id);
 
     expect(unread.sort()).toEqual([ALPHA, BRAVO_OPS].sort());
+    expect((data?.channels as Row[]).every((c) => c.unread_confirmed === false)).toBe(true);
+    expect(chatsvc.getMessages).not.toHaveBeenCalled();
   });
 
-  it('keeps only unread channels with unread_only', async () => {
-    const { data } = await call(fakeChatsvc(CONVS), { unread_only: true });
+  it('keeps only channels a read confirms unread with unread_only, with their unread_count', async () => {
+    const { data } = await call(withMessages(), { unread_only: true });
+    const channels = data?.channels as Row[];
 
-    expect((data?.channels as Row[]).map((c) => c.id)).toEqual([ALPHA, BRAVO_OPS]);
+    expect(channels.map((c) => c.id)).toEqual([ALPHA, BRAVO_OPS]);
+    expect(channels.map((c) => c.unread_count)).toEqual([2, 1]);
+    expect(channels.every((c) => c.unread_confirmed)).toBe(true);
+    expect(data?.skipped_unreachable).toBe(0);
+  });
+
+  it('drops a candidate channel whose posts past the horizon are only system events', async () => {
+    const msgs = { ...MESSAGES, [ALPHA]: [post(ALPHA, T0), rawMsg(T0 + 2 * MIN, { conv: ALPHA, type: 'ThreadActivity/AddMember' })] };
+    const { data } = await call(withMessages(CONVS, msgs), { unread_only: true });
+
+    expect((data?.channels as Row[]).map((c) => c.id)).toEqual([BRAVO_OPS]);
+  });
+
+  it('skips a channel that answers 404 (gone, or no access) silently, counting it in skipped_unreachable (live fact)', async () => {
+    const gone = new McpToolError('Teams chat service returned HTTP 404.', { status: 404, kind: 'http' });
+    const { result, data } = await call(withMessages(CONVS, { ...MESSAGES, [ALPHA]: gone }), { unread_only: true });
+
+    expect(result.isError).toBeFalsy();
+    expect((data?.channels as Row[]).map((c) => c.id)).toEqual([BRAVO_OPS]);
+    expect(data?.skipped_unreachable).toBe(1);
+    expect(data).not.toHaveProperty('errors');
   });
 
   it('filters by channel title or team name with query', async () => {
@@ -90,6 +132,7 @@ describe('teams_list_teams_and_channels', () => {
       ...CONVS,
       rawConv(HIDDEN, { topic: 'Archive', spaceId: ALPHA, at: T0 + 6 * MIN, horizon: T0, interest: 'NotInterested' }),
     ];
+    const HIDDEN_MSGS = { ...MESSAGES, [HIDDEN]: [post(HIDDEN, T0 + 6 * MIN)] };
 
     it('lists a hidden channel marked hidden, after every visible one', async () => {
       const { data } = await call(fakeChatsvc(WITH_HIDDEN));
@@ -100,13 +143,15 @@ describe('teams_list_teams_and_channels', () => {
     });
 
     it('leaves a hidden channel out of unread_only by default', async () => {
-      const { data } = await call(fakeChatsvc(WITH_HIDDEN), { unread_only: true });
+      const chatsvc = withMessages(WITH_HIDDEN, HIDDEN_MSGS);
+      const { data } = await call(chatsvc, { unread_only: true });
 
       expect((data?.channels as Row[]).map((c) => c.id)).toEqual([ALPHA, BRAVO_OPS]);
+      expect(vi.mocked(chatsvc.getMessages).mock.calls.map((c) => c[0])).not.toContain(HIDDEN);
     });
 
     it('includes it with include_hidden', async () => {
-      const { data } = await call(fakeChatsvc(WITH_HIDDEN), { unread_only: true, include_hidden: true });
+      const { data } = await call(withMessages(WITH_HIDDEN, HIDDEN_MSGS), { unread_only: true, include_hidden: true });
 
       expect((data?.channels as Row[]).map((c) => c.id)).toEqual([ALPHA, BRAVO_OPS, HIDDEN]);
     });

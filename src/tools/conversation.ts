@@ -23,6 +23,7 @@ import {
   type ConversationSummary,
   type NormalisedMessage,
 } from '../model.js';
+import { confirmedSummary } from './confirm.js';
 import { wrapApiError } from './errors.js';
 import { untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
 import { DEFAULT_LIMIT, limitArg, makeLimitedStopAt, sinceArg } from './limit.js';
@@ -72,14 +73,13 @@ export function groupThreads(messages: readonly NormalisedMessage[]): Thread[] {
 }
 
 /**
- * Settle a listing's `unread_uncertain` with what the read actually found:
- * an unread message confirms it, and a read that saw everything past the
- * horizon without one refutes it. A window-cut read with none proves nothing.
+ * Settle a listing's unread hint with what the read actually found: an unread
+ * message confirms it, and a read that saw everything past the horizon without
+ * one refutes it. A window-cut read with none proves nothing, so the hint stays.
  */
 export function confirmUnread(summary: ConversationSummary, unreadCount: number, exact: boolean): ConversationSummary {
-  if (!summary.unread_uncertain || (unreadCount === 0 && !exact)) return summary;
-  const { unread_uncertain: _settled, ...rest } = summary;
-  return { ...rest, unread: unreadCount > 0 };
+  if (unreadCount > 0) return confirmedSummary(summary, true);
+  return exact ? confirmedSummary(summary, false) : summary;
 }
 
 function describeCandidate(s: ConversationSummary): string {

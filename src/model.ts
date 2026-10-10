@@ -27,15 +27,18 @@ export interface ConversationSummary {
   title: string;
   /** A channel's team name, when the team's own thread is in the listing. */
   team?: string;
-  unread: boolean;
   /**
-   * Set only when the listing cannot tell: the last message is a system event
-   * or deleted, newer than the read horizon, and the conversation carries no
-   * `lastimreceivedtime` to say when its last REAL message came. `unread` is
-   * then false — Teams shows no badge for a call recording — and the read
-   * tools settle it by fetching.
+   * A HINT from the listing alone: there is activity past the read horizon
+   * (or no horizon at all) that is not plainly the user's own. The listing
+   * cannot say whether that activity is a real message — `lastimreceivedtime`
+   * moves for call recordings and other system events too, and `lastMessage`
+   * can be stale — so `unread` is only exact once `unread_confirmed` is true,
+   * i.e. after the messages past the horizon were read (see
+   * `tools/confirm.ts`).
    */
-  unread_uncertain?: true;
+  unread: boolean;
+  /** True once a read of the messages past the horizon settled `unread`. */
+  unread_confirmed: boolean;
   /**
    * A channel the user has hidden in Teams (`memberProperties.interest` is
    * `NotInterested`). Teams shows it nowhere, unread or not.
@@ -197,8 +200,9 @@ function teamName(team: RawConversation): string {
 }
 
 /**
- * `properties.lastimreceivedtime` — when the conversation's last real IM
- * arrived — as epoch ms. Seen as an ISO string; epoch ms (a number or a
+ * `properties.lastimreceivedtime` as epoch ms. Despite the name it moves for
+ * system events too (a call recording sets it to that message's id), so it
+ * says only that SOMETHING arrived, not that a real message did. Seen as an ISO string; epoch ms (a number or a
  * numeric string) is read too. `undefined` when absent or unparseable.
  */
 export function lastImReceivedMs(c: RawConversation): number | undefined {
@@ -212,36 +216,30 @@ export function lastImReceivedMs(c: RawConversation): number | undefined {
 }
 
 /**
- * Whether the conversation is unread, the way Teams decides it: its last REAL
- * message (Text / RichText/Html, not deleted) is newer than the read horizon
- * and not the user's own. System events — a call recording, a member added —
- * never make a conversation unread.
+ * Whether the conversation is an unread CANDIDATE: its newest activity — the
+ * later of `lastimreceivedtime` and the last message's arrival, of any type —
+ * is past the read horizon (0 for a conversation never opened), and is not
+ * the user's own doing.
  *
- * The last real message's time is the newer of `lastimreceivedtime` and a
- * real `lastMessage`. A real `lastMessage` is the newest message of all, so it
- * also says who sent the last real one. When the last message is a system
- * event or deleted and there is no `lastimreceivedtime`, nothing says when the
- * last real message came: that is not unread, but uncertain.
+ * Only a candidate. Measured live (2026-10-10): `lastimreceivedtime` equals
+ * the last message's id even when that is a call recording, and `lastMessage`
+ * can be stale (older than system events after it), so neither can say a real
+ * message is waiting. The tools confirm a candidate by reading the messages
+ * past the horizon. A false here is reliable: nothing at all came after the
+ * horizon, or the newest thing is the user's own message.
  */
-function lastMessageUnread(
-  c: RawConversation,
-  horizon: number,
-  meMri: string,
-): { unread: boolean; uncertain: boolean } {
+export function isUnreadCandidate(c: RawConversation, meMri: string): boolean {
+  const horizon = readHorizon(c);
   const last = c.lastMessage;
-  const lastIsReal = last !== undefined && isUserMessage(last) && !isDeleted(last);
-  if (lastIsReal && senderMri(last.from) === meMri) return { unread: false, uncertain: false };
-
+  const lastArrival = last !== undefined ? Number(last.id) : NaN;
   const lastIm = lastImReceivedMs(c);
-  const lastArrival = lastIsReal ? Number(last.id) : NaN;
-  const candidates = [lastIm, lastArrival].filter((n): n is number => n !== undefined && Number.isFinite(n));
-  if (candidates.length > 0) return { unread: Math.max(...candidates) > horizon, uncertain: false };
-
-  // A system event or deleted message past the horizon, and no other signal.
-  if (last === undefined) return { unread: false, uncertain: false };
-  const arrival = Number(last.id);
-  const uncertain = Number.isFinite(arrival) && arrival > horizon && senderMri(last.from) !== meMri;
-  return { unread: false, uncertain };
+  const signals = [lastArrival, lastIm].filter((n): n is number => n !== undefined && Number.isFinite(n) && n > 0);
+  if (signals.length === 0) return false;
+  const newest = Math.max(...signals);
+  if (newest <= horizon) return false;
+  // The newest thing is the user's own doing: they were there for it.
+  const lastIsMine = last !== undefined && senderMri(last.from) === meMri;
+  return !(lastIsMine && lastArrival >= newest);
 }
 
 /** A channel the user has hidden in Teams. */
@@ -278,7 +276,7 @@ export function conversationSummary(
 
   const lastActivity = last ? (toIso(last.originalarrivaltime) ?? toIso(last.composetime)) : undefined;
   const preview = systemEvent ? SYSTEM_EVENT_PREVIEW : last?.content !== undefined ? htmlToText(last.content) : undefined;
-  const { unread, uncertain } = lastMessageUnread(c, readHorizon(c), meMri);
+  const unread = isUnreadCandidate(c, meMri);
   const hidden = kind === 'channel' && isHiddenChannel(c);
 
   return {
@@ -287,7 +285,7 @@ export function conversationSummary(
     title,
     ...(team !== undefined ? { team } : {}),
     unread,
-    ...(uncertain ? { unread_uncertain: true as const } : {}),
+    unread_confirmed: false,
     ...(hidden ? { hidden: true as const } : {}),
     ...(lastActivity !== undefined ? { lastActivity } : {}),
     ...(preview ? { lastMessagePreview: truncate(preview, PREVIEW_CHARS) } : {}),

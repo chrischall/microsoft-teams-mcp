@@ -32,6 +32,9 @@ Tell the kinds apart by id suffix:
 
 ## Which conversations are unread
 
+The conversation listing can only nominate **candidates** — anything that
+arrived after the read marker, or a conversation never opened (no marker):
+
 ```sh
 teams_get '/users/ME/conversations?view=msnp24Equivalent&pageSize=200' \
   | jq -r '.conversations[]
@@ -41,24 +44,24 @@ teams_get '/users/ME/conversations?view=msnp24Equivalent&pageSize=200' \
       | (.properties.lastimreceivedtime // "" | tostring
           | if test("^[0-9]+$") then tonumber
             else (sub("\\.[0-9]+Z$"; "Z") | (fromdateiso8601? // 0) * 1000) end) as $lastIm
-      | (if (.lastMessage.messagetype // "") as $t | ($t == "Text" or $t == "RichText/Html")
-           then (.lastMessage.id // "0" | tonumber? // 0) else 0 end) as $lastReal
-      | select([$lastIm, $lastReal] | max > $read)
-      | [.id, (.threadProperties.topic // .lastMessage.imdisplayname // "(untitled)")] | @tsv'
+      | (.lastMessage.id // "0" | tonumber? // 0) as $last
+      | select([$lastIm, $last] | max > $read)
+      | [.id, $read, (.threadProperties.topic // .lastMessage.imdisplayname // "(untitled)")] | @tsv'
 ```
 
 `properties.consumptionhorizon` is `"<lastReadArrivalMs>;<clientMs>;<messageId>"`.
-A conversation is unread when its last REAL message (`Text` / `RichText/Html`)
-arrived after the first segment. Only real messages count: a meeting chat whose
-newest message is a call recording (`RichText/Media_CallRecording`), a
-transcript, `Event/Call`, `ThreadActivity/*` or `Control/*` is not unread in
-Teams, so use `properties.lastimreceivedtime` (when the last real IM arrived —
-an ISO time) rather than `lastMessage.id` when the last message is one of those.
-Channels with `memberProperties.interest == "NotInterested"` are hidden in
-Teams and show no badge; the filter skips them. It still counts a conversation
-whose newest message is your own; drop those by comparing `.lastMessage.from`
-(a URL ending in the sender's MRI) with your MRI, `8:orgid:<oid>` from the
-token's `oid` claim.
+Nothing at the conversation level says whether a REAL message is waiting:
+`lastimreceivedtime` moves for a call recording too, and `lastMessage` can be
+stale (an old `RichText/Html` while only `Event/Call` / `ThreadActivity/*`
+came since). Confirm each candidate by reading its messages past the marker
+(next section, stopping at the first message with `id <= $read`) and keep it
+only when one is `Text` / `RichText/Html`, has no `properties.deletetime`,
+and is not from you (`.from` is a URL ending in the sender's MRI; yours is
+`8:orgid:<oid>` from the token's `oid` claim). That matches Teams' badges
+exactly — a meeting chat whose only news is its recording is not unread. A
+candidate that answers 404 or 403 (a channel that is gone or no longer
+readable) is not unread. Channels with `memberProperties.interest ==
+"NotInterested"` are hidden in Teams and show no badge; the filter skips them.
 
 ## Read one conversation
 

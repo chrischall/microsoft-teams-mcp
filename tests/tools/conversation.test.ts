@@ -212,33 +212,30 @@ describe('teams_read_conversation', () => {
     expect(data?.unread_count_scope).toBe('window');
   });
 
-  describe('a conversation the listing could only call unread_uncertain', () => {
+  describe('settling the listing\'s unread hint', () => {
     const QUIET = '19:quiet0001@thread.v2';
-    const base = rawConv(QUIET, { topic: 'Quiet', at: T0 + 5 * MIN, horizon: T0 + 2 * MIN });
-    const quiet = { ...base, lastMessage: { ...base.lastMessage!, messagetype: 'Event/Call' } };
+    const quiet = rawConv(QUIET, { topic: 'Quiet', at: T0 + 5 * MIN, horizon: T0 + 2 * MIN, type: 'Event/Call' });
     const read = (messages: ReturnType<typeof rawMsg>[], args: Record<string, unknown> = {}) =>
       call(fakeChatsvc([quiet], { getMessages: messagesFrom(messages) }), { conversation: QUIET, ...args });
 
     it('is confirmed read when the fetch finds nothing unread', async () => {
       const { data } = await read([rawMsg(T0 + 1 * MIN), rawMsg(T0 + 5 * MIN, { type: 'Event/Call' })]);
 
-      expect(data?.conversation).toMatchObject({ unread: false });
-      expect(data?.conversation).not.toHaveProperty('unread_uncertain');
+      expect(data?.conversation).toMatchObject({ unread: false, unread_confirmed: true });
     });
 
     it('is confirmed unread when the fetch finds an unread message', async () => {
       const { data } = await read([rawMsg(T0 + 3 * MIN), rawMsg(T0 + 5 * MIN, { type: 'Event/Call' })]);
 
-      expect(data?.conversation).toMatchObject({ unread: true });
-      expect(data?.conversation).not.toHaveProperty('unread_uncertain');
+      expect(data?.conversation).toMatchObject({ unread: true, unread_confirmed: true });
     });
 
-    it('stays uncertain when a window cut the read before the horizon', async () => {
+    it('stays an unconfirmed hint when a window cut the read before the horizon', async () => {
       const { data } = await read([rawMsg(T0 + 3 * MIN), rawMsg(T0 + 5 * MIN, { type: 'Event/Call' })], {
         since: new Date(T0 + 4 * MIN).toISOString(),
       });
 
-      expect(data?.conversation).toMatchObject({ unread: false, unread_uncertain: true });
+      expect(data?.conversation).toMatchObject({ unread: true, unread_confirmed: false });
     });
   });
 
