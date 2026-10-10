@@ -3,6 +3,7 @@ import { createTestHarness, parseToolResult } from '@chrischall/mcp-utils/test';
 import type { FetchproxyTransport } from '@chrischall/mcp-utils/fetchproxy';
 import { registerHealthcheckTool } from '../../src/tools/healthcheck.js';
 import type { TeamsClient } from '../../src/client.js';
+import type { ChatServiceClient } from '../../src/chatsvc.js';
 
 const BRIDGE = {
   role: 'host' as const,
@@ -33,17 +34,17 @@ function fakeTransport(): FetchproxyTransport {
   } as unknown as FetchproxyTransport;
 }
 
-function fakeClient(rows: unknown[]): TeamsClient {
+function deps(listConversations: () => Promise<unknown[]>): { teams: TeamsClient; chatsvc: ChatServiceClient } {
   return {
-    listChats: vi.fn().mockResolvedValue(rows),
-    transport: fakeTransport(),
-  } as unknown as TeamsClient;
+    teams: { transport: fakeTransport() } as unknown as TeamsClient,
+    chatsvc: { listConversations: vi.fn(listConversations) } as unknown as ChatServiceClient,
+  };
 }
 
 describe('teams_healthcheck', () => {
-  it('reports healthy when the chat list renders', async () => {
+  it('reports healthy when the chat service lists conversations', async () => {
     const harness = await createTestHarness((server) =>
-      registerHealthcheckTool(server, fakeClient([{ title: 'Standup' }])),
+      registerHealthcheckTool(server, deps(async () => [{ id: '19:a@thread.v2' }])),
     );
 
     const data = parseToolResult(await harness.callTool('teams_healthcheck')) as Record<string, unknown>;
@@ -52,14 +53,21 @@ describe('teams_healthcheck', () => {
     await harness.close();
   });
 
-  it('does not report healthy when no chat list is rendered (wrong Teams view)', async () => {
-    const harness = await createTestHarness((server) => registerHealthcheckTool(server, fakeClient([])));
+  it('reports a token-capture failure with the open-a-Teams-tab hint', async () => {
+    const harness = await createTestHarness((server) =>
+      registerHealthcheckTool(
+        server,
+        deps(async () => {
+          throw new Error('could not capture a Teams token from the browser (timed out). Open …');
+        }),
+      ),
+    );
 
     const data = parseToolResult(await harness.callTool('teams_healthcheck')) as Record<string, unknown>;
 
     expect(data.ok).toBe(false);
-    expect((data.error as { kind?: string } | undefined)?.kind).toBe('chat_view_not_open');
-    expect(String(data.hint)).toMatch(/Chat view/i);
+    expect((data.error as { kind?: string } | undefined)?.kind).toBe('token_capture');
+    expect(String(data.hint)).toMatch(/click into any chat/i);
     await harness.close();
   });
 });

@@ -1,227 +1,117 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createTestHarness, parseToolResult } from '@chrischall/mcp-utils/test';
 import { registerChannelTools } from '../../src/tools/channels.js';
-import type { TeamsClient } from '../../src/client.js';
+import type { ChatServiceClient } from '../../src/chatsvc.js';
+import { fakeChatsvc, rawConv } from './fake-chatsvc.js';
 
-function fakeClient(overrides: Partial<TeamsClient> = {}): TeamsClient {
-  return {
-    listTeamsAndChannels: vi.fn().mockResolvedValue([]),
-    getOpenChannelPosts: vi.fn().mockResolvedValue([]),
-    getSelectedConversations: vi.fn().mockResolvedValue([]),
-    ...overrides,
-  } as unknown as TeamsClient;
+const T0 = 1_760_000_000_000;
+const MIN = 60_000;
+
+/*
+ * Two teams. A team's own thread (the id its channels name as `spaceId`) is in
+ * the listing, which is what names the team. The orphan channel's team thread
+ * is not, so its team is unknown and it sorts after the named teams.
+ */
+const ALPHA = '19:alpha@thread.tacv2';
+const ALPHA_DESIGN = '19:alpha-design@thread.tacv2';
+const BRAVO = '19:bravo@thread.tacv2';
+const BRAVO_OPS = '19:bravo-ops@thread.tacv2';
+const ORPHAN = '19:orphan@thread.tacv2';
+const CHAT = '19:chat0001@thread.v2';
+
+const CONVS = [
+  rawConv(BRAVO_OPS, { topic: 'Ops', spaceId: BRAVO, at: T0 + 5 * MIN, horizon: T0 }),
+  rawConv(ALPHA_DESIGN, { topic: 'Design', spaceId: ALPHA, at: T0 + 4 * MIN }),
+  rawConv(BRAVO, { topic: 'Bravo Team', spaceId: BRAVO, at: T0 + 3 * MIN }),
+  rawConv(ALPHA, { topic: 'Alpha Team', spaceId: ALPHA, at: T0 + 2 * MIN, horizon: T0 }),
+  rawConv(ORPHAN, { topic: 'Lonely', spaceId: '19:gone@thread.tacv2', at: T0 + 1 * MIN }),
+  rawConv(CHAT, { topic: 'Not a channel', at: T0 + 9 * MIN, horizon: T0 }),
+];
+
+async function call(chatsvc: ChatServiceClient, args: Record<string, unknown> = {}) {
+  const harness = await createTestHarness((server) => registerChannelTools(server, { chatsvc }));
+  try {
+    const result = await harness.callTool('teams_list_teams_and_channels', args);
+    return { result, data: result.isError ? undefined : (parseToolResult(result) as Record<string, unknown>) };
+  } finally {
+    await harness.close();
+  }
 }
 
+type Row = { id: string; kind: string; title: string; team?: string; unread: boolean };
+
 describe('teams_list_teams_and_channels', () => {
-  it('says the Teams view may not be open when nothing is rendered', async () => {
-    const client = fakeClient({ listTeamsAndChannels: vi.fn().mockResolvedValue([]) });
-    const harness = await createTestHarness((server) => registerChannelTools(server, client));
+  it('lists every channel from the API sorted by team then title, with no chats', async () => {
+    const { data } = await call(fakeChatsvc(CONVS));
+    const channels = data?.channels as Row[];
 
-    const data = parseToolResult(await harness.callTool('teams_list_teams_and_channels')) as Record<string, unknown>;
-
-    expect(data.rows).toEqual([]);
-    expect(String(data.empty_hint)).toMatch(/Teams view/);
-    await harness.close();
-  });
-
-  it('adds no empty_hint when rows were read', async () => {
-    const client = fakeClient({ listTeamsAndChannels: vi.fn().mockResolvedValue([{ title: 'General', itemType: 'channel' }]) });
-    const harness = await createTestHarness((server) => registerChannelTools(server, client));
-
-    const data = parseToolResult(await harness.callTool('teams_list_teams_and_channels')) as Record<string, unknown>;
-
-    expect(data).not.toHaveProperty('empty_hint');
-    await harness.close();
-  });
-
-  it('returns the teams and channels from the client', async () => {
-    const client = fakeClient({
-      listTeamsAndChannels: vi.fn().mockResolvedValue([
-        { title: 'General', teamName: 'TruAudience', time: '9/18', conversationKey: 'k', itemType: 'channel' },
-        { title: 'TruAudience', time: '', conversationKey: 'k2', itemType: 'team' },
-      ]),
-    });
-    const harness = await createTestHarness((server) => registerChannelTools(server, client));
-
-    const result = await harness.callTool('teams_list_teams_and_channels');
-    const data = (parseToolResult(result) as { rows: unknown }).rows;
-
-    expect(data).toEqual([
-      { title: 'General', teamName: 'TruAudience', time: '9/18', conversationKey: 'k', itemType: 'channel' },
-      { title: 'TruAudience', time: '', conversationKey: 'k2', itemType: 'team' },
+    expect(channels.map((c) => [c.team, c.title])).toEqual([
+      ['Alpha Team', 'Alpha Team'],
+      ['Alpha Team', 'Design'],
+      ['Bravo Team', 'Bravo Team'],
+      ['Bravo Team', 'Ops'],
+      [undefined, 'Lonely'],
     ]);
-    await harness.close();
+    expect(channels.every((c) => c.kind === 'channel')).toBe(true);
   });
 
-  it('surfaces a no-tab failure with an actionable hint', async () => {
-    const client = fakeClient({
-      listTeamsAndChannels: vi
-        .fn()
-        .mockRejectedValue(new Error('could not reach a signed-in Teams tab on any of […]')),
-    });
-    const harness = await createTestHarness((server) => registerChannelTools(server, client));
+  it('marks each channel read or unread', async () => {
+    const { data } = await call(fakeChatsvc(CONVS));
+    const unread = (data?.channels as Row[]).filter((c) => c.unread).map((c) => c.id);
 
-    const result = await harness.callTool('teams_list_teams_and_channels');
+    expect(unread.sort()).toEqual([ALPHA, BRAVO_OPS].sort());
+  });
+
+  it('keeps only unread channels with unread_only', async () => {
+    const { data } = await call(fakeChatsvc(CONVS), { unread_only: true });
+
+    expect((data?.channels as Row[]).map((c) => c.id)).toEqual([ALPHA, BRAVO_OPS]);
+  });
+
+  it('filters by channel title or team name with query', async () => {
+    const byTeam = (await call(fakeChatsvc(CONVS), { query: 'bravo' })).data!;
+    const byTitle = (await call(fakeChatsvc(CONVS), { query: 'DESIGN' })).data!;
+
+    expect((byTeam.channels as Row[]).map((c) => c.id)).toEqual([BRAVO, BRAVO_OPS]);
+    expect((byTitle.channels as Row[]).map((c) => c.id)).toEqual([ALPHA_DESIGN]);
+  });
+
+  it('honours limit and says what was left out', async () => {
+    const { data } = await call(fakeChatsvc(CONVS), { limit: 2 });
+
+    expect((data?.channels as Row[]).map((c) => c.title)).toEqual(['Alpha Team', 'Design']);
+    expect(data?.truncated).toMatchObject({ total: 5, returned: 2 });
+  });
+
+  it('returns its result inside the untrusted-data envelope', async () => {
+    const { data } = await call(fakeChatsvc(CONVS));
+
+    expect(data?.untrusted_content).toBe(true);
+  });
+
+  it('turns a token-capture failure into the open-a-Teams-tab hint', async () => {
+    const chatsvc = fakeChatsvc([], {
+      listConversations: vi.fn().mockRejectedValue(new Error('could not capture a Teams token from the browser (x).')),
+    });
+
+    const { result } = await call(chatsvc);
 
     expect(result.isError).toBe(true);
-    const text = (result.content?.[0] as { text?: string })?.text ?? '';
-    expect(text).toMatch(/signed-in Teams tab/i);
-    await harness.close();
-  });
-});
-
-describe('teams_get_open_channel_posts', () => {
-  it('returns posts from the client', async () => {
-    const client = fakeClient({
-      getOpenChannelPosts: vi.fn().mockResolvedValue([
-        {
-          sender: 'Alice',
-          subject: 'Deploy freeze',
-          time: 'Tuesday, August 4, 2026 7:50 AM',
-          messageId: 'timestamp-1',
-          text: 'hi',
-        },
-      ]),
-    });
-    const harness = await createTestHarness((server) => registerChannelTools(server, client));
-
-    const result = await harness.callTool('teams_get_open_channel_posts');
-    const data = (parseToolResult(result) as { posts: unknown }).posts;
-
-    expect(data).toEqual([
-      {
-        sender: 'Alice',
-        subject: 'Deploy freeze',
-        time: 'Tuesday, August 4, 2026 7:50 AM',
-        messageId: 'timestamp-1',
-        text: 'hi',
-      },
-    ]);
-    await harness.close();
+    expect((result.content?.[0] as { text?: string })?.text ?? '').toMatch(/click into any chat/i);
   });
 
-  it('says which channel the posts came from', async () => {
-    const client = fakeClient({
-      getOpenChannelPosts: vi.fn().mockResolvedValue([{ sender: 'Alice', text: 'hi' }]),
-      getSelectedConversations: vi.fn().mockResolvedValue([{ title: 'General', conversationKey: '19:def@thread.tacv2', itemType: 'channel' }]),
-    });
-    const harness = await createTestHarness((server) => registerChannelTools(server, client));
-
-    const data = parseToolResult(await harness.callTool('teams_get_open_channel_posts')) as Record<string, unknown>;
-
-    expect(data.conversation).toEqual({ title: 'General', conversationKey: '19:def@thread.tacv2', itemType: 'channel' });
-    expect(String(data.conversation_check)).toMatch(/General/);
-    await harness.close();
-  });
-
-  it('does not report a selected chat row as the open channel', async () => {
-    const client = fakeClient({
-      getOpenChannelPosts: vi.fn().mockResolvedValue([{ sender: 'Alice', text: 'hi' }]),
-      getSelectedConversations: vi
-        .fn()
-        .mockResolvedValue([{ title: 'Bob Smith', conversationKey: '19:abc@thread.v2', itemType: 'chat' }]),
-    });
-    const harness = await createTestHarness((server) => registerChannelTools(server, client));
-
-    const data = parseToolResult(await harness.callTool('teams_get_open_channel_posts')) as Record<string, unknown>;
-
-    expect(data.conversation).toBeNull();
-    expect(String(data.conversation_check)).toMatch(/could not identify/i);
-    await harness.close();
-  });
-
-  it('warns when it cannot identify the open channel', async () => {
-    const client = fakeClient({
-      getOpenChannelPosts: vi.fn().mockResolvedValue([]),
-      getSelectedConversations: vi.fn().mockRejectedValue(new Error('boom')),
-    });
-    const harness = await createTestHarness((server) => registerChannelTools(server, client));
-
-    const result = await harness.callTool('teams_get_open_channel_posts');
-    const data = parseToolResult(result) as Record<string, unknown>;
-
-    expect(result.isError).toBeFalsy();
-    expect(data.conversation).toBeNull();
-    expect(String(data.conversation_check)).toMatch(/could not identify/i);
-    await harness.close();
-  });
-
-  it('tells the model to confirm the channel and warns about multiple Teams tabs', async () => {
-    const harness = await createTestHarness((server) => registerChannelTools(server, fakeClient()));
-    const tool = (await harness.client.listTools()).tools.find((t) => t.name === 'teams_get_open_channel_posts');
-
-    expect(tool?.description).toMatch(/confirm/i);
-    expect(tool?.description).toMatch(/more than one .*tab/i);
-    await harness.close();
-  });
-
-  it('surfaces a not-yet-approved bridge failure with an actionable hint', async () => {
-    const client = fakeClient({
-      getOpenChannelPosts: vi
-        .fn()
-        .mockRejectedValue(new Error('read_dom_list name not in declared set: channelPosts')),
-    });
-    const harness = await createTestHarness((server) => registerChannelTools(server, client));
-
-    const result = await harness.callTool('teams_get_open_channel_posts');
-
-    expect(result.isError).toBe(true);
-    const text = (result.content?.[0] as { text?: string })?.text ?? '';
-    expect(text).toMatch(/ContextMint Bridge/i);
-    await harness.close();
-  });
-
-  it('takes only optional trimming arguments', async () => {
-    const client = fakeClient();
-    const harness = await createTestHarness((server) => registerChannelTools(server, client));
-
-    const tool = (await harness.client.listTools()).tools.find((t) => t.name === 'teams_get_open_channel_posts');
-    const schema = tool?.inputSchema as { properties?: Record<string, unknown>; required?: string[] };
-
-    expect(Object.keys(schema.properties ?? {}).sort()).toEqual(['limit']);
-    expect(schema.required ?? []).toEqual([]);
-    await harness.close();
-  });
-});
-
-describe('channel tools trimming', () => {
-  it('returns the newest posts up to limit', async () => {
-    const posts = Array.from({ length: 4 }, (_, i) => ({ sender: 'A', text: `post ${i}` }));
-    const client = fakeClient({ getOpenChannelPosts: vi.fn().mockResolvedValue(posts) });
-    const harness = await createTestHarness((server) => registerChannelTools(server, client));
-
-    const data = parseToolResult(
-      await harness.callTool('teams_get_open_channel_posts', { limit: 2 }),
-    ) as Record<string, unknown>;
-
-    expect((data.posts as { text: string }[]).map((p) => p.text)).toEqual(['post 2', 'post 3']);
-    expect(data.truncated).toMatchObject({ total: 4, returned: 2 });
-    await harness.close();
-  });
-
-  it('returns the first rows of the teams-and-channels sidebar up to limit', async () => {
-    const rows = Array.from({ length: 4 }, (_, i) => ({ title: `row ${i}`, itemType: 'channel' }));
-    const client = fakeClient({ listTeamsAndChannels: vi.fn().mockResolvedValue(rows) });
-    const harness = await createTestHarness((server) => registerChannelTools(server, client));
-
-    const data = parseToolResult(
-      await harness.callTool('teams_list_teams_and_channels', { limit: 3 }),
-    ) as Record<string, unknown>;
-
-    expect((data.rows as { title: string }[]).map((r) => r.title)).toEqual(['row 0', 'row 1', 'row 2']);
-    await harness.close();
-  });
-});
-
-describe('tool annotations', () => {
-  it('both channel tools are read-only', async () => {
-    const client = fakeClient();
-    const harness = await createTestHarness((server) => registerChannelTools(server, client));
+  it('describes channel coverage, takes only optional filters, and is read-only', async () => {
+    const harness = await createTestHarness((server) => registerChannelTools(server, { chatsvc: fakeChatsvc() }));
     const tools = (await harness.client.listTools()).tools;
+    const tool = tools.find((t) => t.name === 'teams_list_teams_and_channels');
+    const schema = tool?.inputSchema as { properties?: object; required?: string[] };
 
-    for (const name of ['teams_list_teams_and_channels', 'teams_get_open_channel_posts']) {
-      expect(tools.find((t) => t.name === name)?.annotations?.readOnlyHint, name).toBe(true);
-    }
+    expect(tools.map((t) => t.name)).toEqual(['teams_list_teams_and_channels']);
+    expect(tool?.description).toMatch(/every channel/i);
+    expect(tool?.description).toMatch(/teams_read_conversation/);
+    expect(tool?.annotations?.readOnlyHint).toBe(true);
+    expect(Object.keys(schema.properties ?? {}).sort()).toEqual(['limit', 'query', 'unread_only']);
+    expect(schema.required ?? []).toEqual([]);
     await harness.close();
   });
 });

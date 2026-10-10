@@ -76,8 +76,6 @@ describe('built server boots', () => {
       const tools = await handshake(join(dir, 'bundle.js'), dir);
       expect(tools).toEqual([
         'teams_get_activity',
-        'teams_get_open_channel_posts',
-        'teams_get_open_chat_messages',
         'teams_healthcheck',
         'teams_list_chats',
         'teams_list_teams_and_channels',

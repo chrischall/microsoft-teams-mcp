@@ -62,19 +62,11 @@
   "tools": [
     {
       "name": "teams_list_chats",
-      "description": "List the chats in the signed-in user's Teams chat sidebar"
-    },
-    {
-      "name": "teams_get_open_chat_messages",
-      "description": "Read the message thread of whichever Teams chat is currently open"
+      "description": "List every chat the signed-in user is in, with unread state"
     },
     {
       "name": "teams_list_teams_and_channels",
-      "description": "List the Teams the signed-in user belongs to and their channels"
-    },
-    {
-      "name": "teams_get_open_channel_posts",
-      "description": "Read the top-level posts of whichever Teams channel is currently open"
+      "description": "List every channel the signed-in user is in, by team, with unread state"
     },
     {
       "name": "teams_get_activity",

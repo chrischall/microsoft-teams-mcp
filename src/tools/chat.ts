@@ -1,75 +1,55 @@
 /**
- * Chat tools — both read the user's live, signed-in `teams.cloud.microsoft`
- * tab through the fetchproxy bridge. See `client.ts`'s module doc for why
- * there is no way to select a specific chat: the bridge can only READ the
- * DOM, never navigate it, so `teams_get_open_chat_messages` returns whatever
- * conversation is currently displayed.
+ * `teams_list_chats` — every chat the user is in (group, meeting, 1:1), read
+ * from the Teams chat-service API. Unlike the old sidebar read it needs no
+ * particular Teams view open, and it is not limited to what the sidebar has
+ * rendered: the listing is the user's whole conversation set.
  */
 import type { McpServer } from '@modelcontextprotocol/server';
 import { toolAnnotations } from '@chrischall/mcp-utils';
-import type { TeamsClient } from '../client.js';
-import { wrapBridgeError } from './errors.js';
+import type { TeamsDeps } from '../deps.js';
+import type { ConversationSummary } from '../model.js';
+import { wrapApiError } from './errors.js';
 import { untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
-import { OPEN_CONVERSATION_DESCRIPTION, readOpenConversation } from './conversation.js';
-import { filterSince, limitArg, sinceArg, trimRows } from './limit.js';
+import { limitArg, trimRows } from './limit.js';
+import { listSummaries, queryArg, unreadOnlyArg } from './listing.js';
 
-export function registerChatTools(server: McpServer, client: TeamsClient): void {
+/** Up to 10 pages of 200 come back; this bounds one result, not the listing. */
+const MAX_CHATS = 500;
+
+/** Newest activity first; a chat with no messages at all sorts last. */
+function byLastActivityDesc(a: ConversationSummary, b: ConversationSummary): number {
+  return (b.lastActivity ?? '').localeCompare(a.lastActivity ?? '');
+}
+
+export function registerChatTools(server: McpServer, { chatsvc }: Pick<TeamsDeps, 'chatsvc'>): void {
   server.registerTool(
     'teams_list_chats',
     {
       title: 'List Teams chats',
       description:
-        'List the chats in the signed-in user\'s Teams chat sidebar (1:1s, group chats, meeting ' +
-        'chats), each with its title, last-message preview, last-activity time, and a ' +
-        'conversationKey (Teams\' internal thread id — not usable to open the chat, there is no ' +
-        'navigate capability). Reads the currently-rendered list from the user\'s live browser tab.' +
+        'List every chat the signed-in user is in — 1:1s, group chats and meeting chats, not ' +
+        'just the ones visible in the Teams sidebar — most recent activity first. Each has an ' +
+        'id, kind (oneOnOne / group / meeting), title, unread flag, last-activity time (ISO ' +
+        '8601), and a last-message preview and sender. Pass an id (or the title) to ' +
+        'teams_read_conversation to read the messages. Use unread_only to find chats with ' +
+        'messages the user has not read; listing never marks anything read. Channels are ' +
+        'listed by teams_list_teams_and_channels instead.' +
         UNTRUSTED_DESCRIPTION_SUFFIX,
       annotations: toolAnnotations({ readOnly: true, openWorld: true }),
-      inputSchema: { limit: limitArg(200, 'chats') },
+      inputSchema: {
+        unread_only: unreadOnlyArg,
+        query: queryArg('chat title'),
+        limit: limitArg(MAX_CHATS, 'chats', 'most recent activity first kept'),
+      },
     },
-    async ({ limit }) => {
+    async ({ unread_only, query, limit }) => {
       try {
-        const rows = await client.listChats();
-        return untrustedResult(
-          rows.length > 0
-            ? trimRows(rows, limit, 'start', 200)
-            : {
-                rows,
-                empty_hint:
-                  'No chat list is rendered. The Teams tab is probably not on the Chat view — ' +
-                  'ask the user to click Chat in the left nav, then retry.',
-              },
-        );
+        const rows = await listSummaries(chatsvc, { kinds: ['group', 'meeting', 'oneOnOne'], unread_only, query });
+        rows.sort(byLastActivityDesc);
+        const { rows: chats, truncated } = trimRows(rows, limit, 'start', MAX_CHATS, 'most recent');
+        return untrustedResult({ chats, ...(truncated ? { truncated } : {}) });
       } catch (err) {
-        throw wrapBridgeError(err, 'list chats');
-      }
-    },
-  );
-
-  server.registerTool(
-    'teams_get_open_chat_messages',
-    {
-      title: 'Read the currently open Teams chat',
-      description:
-        'Read the message thread of whichever Teams chat is CURRENTLY OPEN in the user\'s ' +
-        'signed-in browser tab — sender, ISO-8601 time, message id, and text for each message. ' +
-        'There is no way to choose a different chat from here (the bridge can only read the DOM, ' +
-        'not navigate it): ask the user to open the chat they mean first, or use ' +
-        'teams_list_chats to show them what is available. A quoted-reply message\'s text may ' +
-        'include the quoted preview concatenated in.' +
-        OPEN_CONVERSATION_DESCRIPTION +
-        UNTRUSTED_DESCRIPTION_SUFFIX,
-      annotations: toolAnnotations({ readOnly: true, openWorld: true }),
-      inputSchema: { limit: limitArg(200, 'messages'), since: sinceArg },
-    },
-    async ({ limit, since }) => {
-      try {
-        const all = await client.getOpenChatMessages();
-        const identity = await readOpenConversation(client, 'chat');
-        const { rows: messages, truncated } = trimRows(filterSince(all, since), limit, 'end', 200);
-        return untrustedResult({ ...identity, messages, ...(truncated ? { truncated } : {}) });
-      } catch (err) {
-        throw wrapBridgeError(err, 'read the open chat');
+        throw wrapApiError(err, 'list chats');
       }
     },
   );

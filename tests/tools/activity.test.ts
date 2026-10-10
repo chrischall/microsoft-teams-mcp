@@ -13,7 +13,7 @@ function fakeClient(overrides: Partial<TeamsClient> = {}): TeamsClient {
 describe('teams_get_activity', () => {
   it('says the Activity view may not be open when nothing is rendered', async () => {
     const client = fakeClient({ getActivity: vi.fn().mockResolvedValue([]) });
-    const harness = await createTestHarness((server) => registerActivityTools(server, client));
+    const harness = await createTestHarness((server) => registerActivityTools(server, { teams: client }));
 
     const data = parseToolResult(await harness.callTool('teams_get_activity')) as Record<string, unknown>;
 
@@ -24,7 +24,7 @@ describe('teams_get_activity', () => {
 
   it('adds no empty_hint when rows were read', async () => {
     const client = fakeClient({ getActivity: vi.fn().mockResolvedValue([{ title: 'mention' }]) });
-    const harness = await createTestHarness((server) => registerActivityTools(server, client));
+    const harness = await createTestHarness((server) => registerActivityTools(server, { teams: client }));
 
     const data = parseToolResult(await harness.callTool('teams_get_activity')) as Record<string, unknown>;
 
@@ -43,7 +43,7 @@ describe('teams_get_activity', () => {
         },
       ]),
     });
-    const harness = await createTestHarness((server) => registerActivityTools(server, client));
+    const harness = await createTestHarness((server) => registerActivityTools(server, { teams: client }));
 
     const result = await harness.callTool('teams_get_activity');
     const data = (parseToolResult(result) as { rows: unknown }).rows;
@@ -63,7 +63,7 @@ describe('teams_get_activity', () => {
     const client = fakeClient({
       getActivity: vi.fn().mockRejectedValue(new Error('could not reach a signed-in Teams tab on teams.cloud.microsoft (…)')),
     });
-    const harness = await createTestHarness((server) => registerActivityTools(server, client));
+    const harness = await createTestHarness((server) => registerActivityTools(server, { teams: client }));
 
     const result = await harness.callTool('teams_get_activity');
 
@@ -77,7 +77,7 @@ describe('teams_get_activity', () => {
   it('returns the first (most recent) rows up to limit', async () => {
     const rows = Array.from({ length: 60 }, (_, i) => ({ title: `item ${i}` }));
     const client = fakeClient({ getActivity: vi.fn().mockResolvedValue(rows) });
-    const harness = await createTestHarness((server) => registerActivityTools(server, client));
+    const harness = await createTestHarness((server) => registerActivityTools(server, { teams: client }));
 
     const all = parseToolResult(await harness.callTool('teams_get_activity')) as Record<string, unknown>;
     const one = parseToolResult(await harness.callTool('teams_get_activity', { limit: 1 })) as Record<string, unknown>;
@@ -90,7 +90,7 @@ describe('teams_get_activity', () => {
 
   it('takes only optional trimming arguments', async () => {
     const client = fakeClient();
-    const harness = await createTestHarness((server) => registerActivityTools(server, client));
+    const harness = await createTestHarness((server) => registerActivityTools(server, { teams: client }));
 
     const tool = (await harness.client.listTools()).tools.find((t) => t.name === 'teams_get_activity');
     const schema = tool?.inputSchema as { properties?: Record<string, unknown>; required?: string[] };
@@ -102,7 +102,7 @@ describe('teams_get_activity', () => {
 
   it('is read-only', async () => {
     const client = fakeClient();
-    const harness = await createTestHarness((server) => registerActivityTools(server, client));
+    const harness = await createTestHarness((server) => registerActivityTools(server, { teams: client }));
     const tools = (await harness.client.listTools()).tools;
 
     expect(tools.find((t) => t.name === 'teams_get_activity')?.annotations?.readOnlyHint).toBe(true);

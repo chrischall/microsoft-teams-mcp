@@ -1,17 +1,17 @@
 /**
- * Activity tool — reads the user's live, signed-in `teams.cloud.microsoft`
- * tab through the fetchproxy bridge. See `client.ts`'s module doc for why
- * there is no way to select a specific activity item: the bridge can only
- * READ the DOM, never navigate it.
+ * Activity tool — the one tool that still reads the user's live, signed-in
+ * `teams.cloud.microsoft` tab through the fetchproxy bridge. See `client.ts`'s
+ * module doc for why: no chat-service equivalent of the feed has been
+ * verified, and the bridge can only READ the DOM, never navigate it.
  */
 import type { McpServer } from '@modelcontextprotocol/server';
 import { toolAnnotations } from '@chrischall/mcp-utils';
-import type { TeamsClient } from '../client.js';
+import type { TeamsDeps } from '../deps.js';
 import { wrapBridgeError } from './errors.js';
 import { untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
 import { limitArg, trimRows } from './limit.js';
 
-export function registerActivityTools(server: McpServer, client: TeamsClient): void {
+export function registerActivityTools(server: McpServer, { teams: client }: Pick<TeamsDeps, 'teams'>): void {
   server.registerTool(
     'teams_get_activity',
     {

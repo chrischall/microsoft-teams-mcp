@@ -2,6 +2,8 @@
 import { runMcp, loadDotenvSafely } from '@chrischall/mcp-utils';
 import { VERSION } from './version.js';
 import { TeamsClient } from './client.js';
+import { ChatServiceClient } from './chatsvc.js';
+import type { TeamsDeps } from './deps.js';
 import { registerChatTools } from './tools/chat.js';
 import { registerChannelTools } from './tools/channels.js';
 import { registerActivityTools } from './tools/activity.js';
@@ -14,15 +16,19 @@ loadDotenvSafely();
  * for the full rationale (`runMcp` builds a server instance per served
  * connection, so anything built inside a registrar would be rebuilt). For
  * this MCP it matters even more: a second `TeamsClient` would mean a second
- * fetchproxy identity/session for the same process.
+ * fetchproxy identity/session for the same process, and a second
+ * `ChatServiceClient` a second token capture.
  */
-const client = new TeamsClient();
+const deps: TeamsDeps = {
+  teams: new TeamsClient(),
+  chatsvc: new ChatServiceClient(),
+};
 
 await runMcp({
   name: 'microsoft-teams-mcp',
   version: VERSION,
   banner:
     '[microsoft-teams-mcp] This project was developed and is maintained by AI. Use at your own discretion.',
-  deps: client,
+  deps,
   tools: [registerChatTools, registerChannelTools, registerActivityTools, registerHealthcheckTool],
 });

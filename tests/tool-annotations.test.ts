@@ -8,13 +8,13 @@ import { servedTools } from './served-tools.js';
  * `destructiveHint` DEFAULTS TO TRUE whenever `readOnlyHint` is not true, so
  * a write that forgets to declare it is published as destructive and nothing
  * fails — a considered `false` and a forgotten one look identical. Every
- * write must therefore choose. This server is read-only today (the bridge can
- * only read the DOM); this pins that the day a write arrives it declares
+ * write must therefore choose. This server is read-only today (the chat-service
+ * client has no write methods and the bridge only reads the DOM); this pins that the day a write arrives it declares
  * itself, and that no read claims otherwise.
  */
 describe('every tool declares what it does', () => {
   it('covers the full served surface (guards against a registrar being dropped)', async () => {
-    expect(await servedTools()).toHaveLength(6);
+    expect(await servedTools()).toHaveLength(4);
   });
 
   it('sets an explicit boolean readOnlyHint and openWorldHint on all of them', async () => {
@@ -24,7 +24,7 @@ describe('every tool declares what it does', () => {
     expect(missing).toEqual([]);
   });
 
-  it('marks every tool open-world (each one reads the live Teams tab through the bridge)', async () => {
+  it('marks every tool open-world (each one reads live Teams data)', async () => {
     const closed = (await servedTools()).filter((t) => t.annotations?.openWorldHint !== true).map((t) => t.name);
     expect(closed).toEqual([]);
   });
