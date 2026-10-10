@@ -285,6 +285,21 @@ describe('getMessages', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
+  it('finishes the page stopAt fired in, so a newer message placed after an older one is not lost', async () => {
+    // The service does not strictly order a newest-first page (seen live
+    // 2026-10-10). Stopping mid-page would drop the newer message after the
+    // boundary; finish the page, skip what stopAt rejects, fetch no more.
+    const fetchImpl: FetchMock = vi.fn(async () =>
+      jsonResponse({
+        messages: [msg(500), msg(300), msg(400), msg(100)],
+        _metadata: { backwardLink: 'https://amer.ng.msg.teams.microsoft.com/v1/users/ME/conversations/x/messages?syncState=older' },
+      }),
+    );
+    const msgs = await client(fetchImpl).getMessages(CONV, { max: 100, stopAt: (m) => Number(m.id) <= 300 });
+    expect(msgs.map((m) => m.id)).toEqual(['500', '400']);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it('stops when max is reached', async () => {
     const fetchImpl = pagedFetch();
     const msgs = await client(fetchImpl).getMessages(CONV, { max: 3 });
