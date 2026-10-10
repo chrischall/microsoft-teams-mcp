@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTestHarness, parseToolResult } from '@chrischall/mcp-utils/test';
-import { McpToolError } from '@chrischall/mcp-utils';
+import { McpToolError, RequestTimeoutError, WriteOutcomeUnknownError } from '@chrischall/mcp-utils';
 import { CHECKMARK_KEY, reactionKey, registerReactTools } from '../../src/tools/react.js';
+import { UNTRUSTED_CONTENT_NOTE } from '../../src/tools/untrusted.js';
 import type { ChatServiceClient, RawMessage } from '../../src/chatsvc.js';
 import { ME, fakeChatsvc, rawConv, rawMsg } from './fake-chatsvc.js';
 
@@ -75,6 +76,15 @@ async function reactConfirmed(chatsvc: ChatServiceClient, args: Record<string, u
   }
 }
 
+/** A confirm-preview field fenced as third-party text; returns what it fences. */
+function fenced(field: unknown): Record<string, unknown> {
+  const f = field as Record<string, unknown> | undefined;
+  expect(f?.untrusted_content).toBe(true);
+  expect(f?.note).toBe(UNTRUSTED_CONTENT_NOTE);
+  const { untrusted_content: _u, note: _n, ...rest } = f ?? {};
+  return rest;
+}
+
 function payload(data: Record<string, unknown> | undefined): Record<string, unknown> {
   expect(data?.untrusted_content).toBe(true);
   const { untrusted_content: _u, note: _n, ...rest } = data ?? {};
@@ -141,6 +151,20 @@ describe('reactionKey', () => {
     expect(e.hint).toMatch(/1f4af_hundredpointssymbol/);
   });
 
+  it('lists every code point of a multi-code-point emoji (a skin tone) instead of guessing a key', () => {
+    let err: unknown;
+    try {
+      reactionKey('👍🏽');
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(McpToolError);
+    const e = err as McpToolError;
+    expect(e.hint).toMatch(/Its code points are U\+1F44D U\+1F3FD\./);
+    expect(e.hint).not.toMatch(/so its key is/);
+    expect(e.hint).toMatch(/1f4af_hundredpointssymbol/);
+  });
+
   it('refuses something that is neither an alias, a key nor an emoji', () => {
     expect(() => reactionKey('thumbs up!')).toThrow(McpToolError);
   });
@@ -159,13 +183,34 @@ describe('teams_react — confirm gate', () => {
       expect(first.preview?.path).toBe(
         `/users/ME/conversations/${encodeURIComponent(GROUP)}/messages/${MSG}/properties?name=emotions`,
       );
-      expect(first.preview?.conversation).toEqual({ id: GROUP, title: 'Project Falcon', kind: 'group' });
-      expect(first.preview?.message).toEqual({ id: MSG, sender: 'Bea Example', preview: 'ship it?' });
+      expect(fenced(first.preview?.conversation)).toEqual({ id: GROUP, title: 'Project Falcon', kind: 'group' });
+      expect(fenced(first.preview?.message)).toEqual({ id: MSG, sender: 'Bea Example', preview: 'ship it?' });
       expect(first.preview?.reaction).toBe('like');
+      expect(first.preview?.already_reacted).toBe(false);
       expect(setReaction).not.toHaveBeenCalled();
     } finally {
       await h.close();
     }
+  });
+
+  it('previews already_reacted: true when the user already has that reaction', async () => {
+    const { chatsvc } = fakeWith({ emotions: [{ key: 'like', users: [{ mri: ME, time: T0 }] }] });
+    const { preview } = await reactConfirmed(chatsvc, { conversation: GROUP, message_id: MSG, reaction: 'like' });
+    expect(preview?.preview?.already_reacted).toBe(true);
+  });
+
+  it('previews already_reacted: false when only someone else has that reaction', async () => {
+    const { chatsvc } = fakeWith({ emotions: [{ key: 'like', users: [{ mri: '8:orgid:someone-else', time: T0 }] }] });
+    const { preview } = await reactConfirmed(chatsvc, { conversation: GROUP, message_id: MSG, reaction: 'like' });
+    expect(preview?.preview?.already_reacted).toBe(false);
+  });
+
+  it('clips the message preview without splitting an emoji in half', async () => {
+    const { chatsvc } = fakeWith({
+      overrides: { getMessage: vi.fn(async () => rawMsg(Number(MSG), { text: `${'x'.repeat(199)}🎉 tail` })) },
+    });
+    const { preview } = await reactConfirmed(chatsvc, { conversation: GROUP, message_id: MSG, reaction: 'like' });
+    expect(fenced(preview?.preview?.message).preview).toBe('x'.repeat(199));
   });
 
   it('phase 2 sets the reaction once and verifies it by reading the message back', async () => {
@@ -196,6 +241,103 @@ describe('teams_react — confirm gate', () => {
     expect(setReaction).not.toHaveBeenCalled();
     expect(removeReaction).toHaveBeenCalledWith(GROUP, MSG, 'heart');
     expect(payload(data)).toMatchObject({ status: 'removed', reaction: 'heart', verified: true });
+  });
+
+  it('remove: a message gone on reading back (404) is verified: null with a warning, not verified: true', async () => {
+    let written = false;
+    const removeReaction = vi.fn(async () => {
+      written = true;
+    });
+    const { chatsvc } = fakeWith({
+      emotions: [{ key: 'heart', users: [{ mri: ME, time: T0 }] }],
+      overrides: {
+        removeReaction,
+        getMessage: vi.fn(async () =>
+          written
+            ? undefined
+            : { ...rawMsg(Number(MSG)), properties: { emotions: JSON.stringify([{ key: 'heart', users: [{ mri: ME, time: T0 }] }]) } },
+        ),
+      },
+    });
+    const { data } = await reactConfirmed(chatsvc, { conversation: GROUP, message_id: MSG, reaction: 'heart', remove: true });
+    expect(removeReaction).toHaveBeenCalledTimes(1);
+    expect(payload(data)).toMatchObject({
+      status: 'removed',
+      verified: null,
+      warning: expect.stringMatching(/not found on reading it back/),
+    });
+  });
+
+  it('add: a message gone on reading back (404) is verified: null too', async () => {
+    let written = false;
+    const { chatsvc } = fakeWith({
+      overrides: {
+        setReaction: vi.fn(async () => {
+          written = true;
+        }),
+        getMessage: vi.fn(async () => (written ? undefined : rawMsg(Number(MSG)))),
+      },
+    });
+    const { data } = await reactConfirmed(chatsvc, { conversation: GROUP, message_id: MSG, reaction: 'like' });
+    expect(payload(data)).toMatchObject({ status: 'reacted', verified: null, warning: expect.any(String) });
+  });
+
+  it('settles an unconfirmed write (a 503) by the read-back: shown means reacted, with a warning', async () => {
+    const { chatsvc, setReaction } = fakeWith();
+    const real = setReaction.getMockImplementation()!;
+    setReaction.mockImplementation(async (...args) => {
+      await real(...args);
+      throw new WriteOutcomeUnknownError('Teams', 'PUT', {
+        cause: new McpToolError('Teams chat service returned HTTP 503.', { status: 503 }),
+      });
+    });
+    const { second, data } = await reactConfirmed(chatsvc, { conversation: GROUP, message_id: MSG, reaction: 'like' });
+    expect(second.isError).toBeFalsy();
+    expect(payload(data)).toMatchObject({
+      status: 'reacted',
+      verified: true,
+      warning: expect.stringMatching(/did not confirm/),
+    });
+  });
+
+  it('reports status "unknown" when an unconfirmed write does not show on reading back', async () => {
+    const { chatsvc } = fakeWith({
+      overrides: {
+        setReaction: vi.fn().mockRejectedValue(
+          new WriteOutcomeUnknownError('Teams', 'PUT', {
+            cause: new McpToolError('Teams chat service returned HTTP 504.', { status: 504 }),
+          }),
+        ),
+      },
+    });
+    const { second, data } = await reactConfirmed(chatsvc, { conversation: GROUP, message_id: MSG, reaction: 'like' });
+    expect(second.isError).toBeFalsy();
+    expect(payload(data)).toMatchObject({
+      status: 'unknown',
+      verified: false,
+      warning: expect.stringMatching(/HTTP 504.*check the message/),
+    });
+  });
+
+  it('reports a timed-out remove as status "unknown" when the reaction is still there', async () => {
+    const { chatsvc } = fakeWith({
+      emotions: [{ key: 'heart', users: [{ mri: ME, time: T0 }] }],
+      overrides: {
+        removeReaction: vi.fn().mockRejectedValue(
+          new WriteOutcomeUnknownError('Teams', 'DELETE', { timeoutMs: 60_000, cause: new RequestTimeoutError('Teams', 60_000) }),
+        ),
+      },
+    });
+    const { data } = await reactConfirmed(chatsvc, { conversation: GROUP, message_id: MSG, reaction: 'heart', remove: true });
+    expect(payload(data)).toMatchObject({ status: 'unknown', warning: expect.stringMatching(/did not answer in time/) });
+  });
+
+  it('still fails plainly on a 4xx refusal', async () => {
+    const { chatsvc } = fakeWith({
+      overrides: { setReaction: vi.fn().mockRejectedValue(new McpToolError('Teams chat service returned HTTP 403.', { status: 403 })) },
+    });
+    const { second } = await reactConfirmed(chatsvc, { conversation: GROUP, message_id: MSG, reaction: 'like' });
+    expect(second.isError).toBe(true);
   });
 
   it('reports verified: false with a warning when the read-back does not show the change', async () => {

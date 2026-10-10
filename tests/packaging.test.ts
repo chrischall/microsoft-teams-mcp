@@ -121,11 +121,17 @@ describe('publish scaffold', () => {
  * source, cache, capture deadline and API base. `FETCHPROXY_WS_HOST` and
  * `FETCHPROXY_IDENTITY_DIR` are read by the bundled `@fetchproxy/server`
  * because this server never passes `host` / `identityDir`. It always passes
- * `port`, so `FETCHPROXY_WS_PORT` is NOT honoured and is not declared.
+ * `port`, so `FETCHPROXY_WS_PORT` is NOT honoured and is not declared. The
+ * `MCP_CONFIRM_*` keys are mcp-utils' `confirmWrite` settings for the two
+ * write tools, as the README's confirmation table documents them.
  */
 const ENV = [
   'FETCHPROXY_IDENTITY_DIR',
   'FETCHPROXY_WS_HOST',
+  'MCP_CONFIRM_ELICITATION',
+  'MCP_CONFIRM_MODE',
+  'MCP_CONFIRM_SECRET',
+  'MCP_CONFIRM_TTL_SECONDS',
   'TEAMS_ACCESS_TOKEN',
   'TEAMS_CAPTURE_TIMEOUT',
   'TEAMS_CHATSVC_BASE',
@@ -214,15 +220,22 @@ describe('install surfaces pass every honoured env key', () => {
     expect(vars.every((v) => v.isRequired === false)).toBe(true);
   });
 
-  it('marks the access token secret on both surfaces, and nothing else', () => {
+  it('marks the access token and the confirm signing key secret on both surfaces, and nothing else', () => {
+    const SECRET = ['MCP_CONFIRM_SECRET', 'TEAMS_ACCESS_TOKEN'];
     const vars = read('server.json').packages[0].environmentVariables as { name: string; isSecret: boolean }[];
-    expect(vars.filter((v) => v.isSecret).map((v) => v.name)).toEqual(['TEAMS_ACCESS_TOKEN']);
+    expect(vars.filter((v) => v.isSecret).map((v) => v.name).sort()).toEqual(SECRET);
 
     const m = read('manifest.json');
-    const ref = /^\$\{user_config\.([^}]+)\}$/.exec(m.server.mcp_config.env.TEAMS_ACCESS_TOKEN)![1];
+    const refs = SECRET.map((k) => /^\$\{user_config\.([^}]+)\}$/.exec(m.server.mcp_config.env[k])![1]).sort();
     const sensitive = Object.entries(m.user_config as Record<string, { sensitive?: boolean }>)
       .filter(([, c]) => c.sensitive === true)
-      .map(([k]) => k);
-    expect(sensitive).toEqual([ref]);
+      .map(([k]) => k)
+      .sort();
+    expect(sensitive).toEqual(refs);
+  });
+
+  it('documents in the README every MCP_CONFIRM_* key it passes', () => {
+    const readme = readFileSync(join(root, 'README.md'), 'utf8');
+    for (const k of ENV.filter((e) => e.startsWith('MCP_CONFIRM_'))) expect(readme, k).toContain(`\`${k}\``);
   });
 });

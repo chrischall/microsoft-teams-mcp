@@ -42,7 +42,11 @@
         "TEAMS_CHATSVC_BASE": "${user_config.chatsvc_base}",
         "TEAMS_CAPTURE_TIMEOUT": "${user_config.capture_timeout}",
         "TEAMS_TOKEN_CACHE": "${user_config.token_cache}",
-        "TEAMS_TOKEN_FILE": "${user_config.token_file}"
+        "TEAMS_TOKEN_FILE": "${user_config.token_file}",
+        "MCP_CONFIRM_MODE": "${user_config.confirm_mode}",
+        "MCP_CONFIRM_ELICITATION": "${user_config.confirm_elicitation}",
+        "MCP_CONFIRM_TTL_SECONDS": "${user_config.confirm_ttl_seconds}",
+        "MCP_CONFIRM_SECRET": "${user_config.confirm_secret}"
       }
     }
   },
@@ -107,6 +111,31 @@
       "title": "Token cache file (optional)",
       "description": "Optional. Where the captured token is cached. Defaults to ~/.microsoft-teams-mcp/token.json.",
       "required": false
+    },
+    "confirm_mode": {
+      "type": "string",
+      "title": "Write confirmation mode (optional)",
+      "description": "Optional. What teams_send_message and teams_react do on a client that cannot show a confirmation prompt (claude.ai, Claude Desktop): \"ask-user\" (default: the first call returns a preview and a confirmToken, and the model must get your approval in chat before using it), \"auto\" (the model may use the token after reviewing the preview itself) or \"refuse\". An unrecognised value is treated as refuse. Leave blank for the default.",
+      "required": false
+    },
+    "confirm_elicitation": {
+      "type": "string",
+      "title": "Confirmation prompts (optional)",
+      "description": "Optional. \"off\" never shows a confirmation prompt, so every client gets the MCP_CONFIRM_MODE flow. Set it for a client that says it can show prompts but never does. Defaults to on. Leave blank for the default.",
+      "required": false
+    },
+    "confirm_ttl_seconds": {
+      "type": "string",
+      "title": "Confirmation token lifetime (optional)",
+      "description": "Optional. How long a confirmToken stays valid, in seconds. Defaults to 600. Leave blank for the default.",
+      "required": false
+    },
+    "confirm_secret": {
+      "type": "string",
+      "title": "Confirmation signing key (optional)",
+      "description": "Optional. Signing key for confirmTokens. Random per process by default; set it only if tokens must survive a server restart. Leave blank for the default.",
+      "required": false,
+      "sensitive": true
     }
   },
   "tools": [

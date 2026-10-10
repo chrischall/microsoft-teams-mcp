@@ -98,16 +98,29 @@ const IMAGE_HOST_SUFFIX = '.asm.skype.com';
  * leaves the outcome unknown; an `McpToolError` raised before anything was
  * sent (an oversized body cap, a bad URL) is a real failure and passes through.
  */
-function outcomeUnknown(method: string, e: unknown): unknown {
+function outcomeUnknown(method: string, e: unknown, hint: string): unknown {
   if (e instanceof RequestTimeoutError) {
-    return new WriteOutcomeUnknownError('Teams', method, { timeoutMs: e.timeoutMs, cause: e, hint: WRITE_OUTCOME_HINT });
+    return new WriteOutcomeUnknownError('Teams', method, { timeoutMs: e.timeoutMs, cause: e, hint });
   }
   if (e instanceof McpToolError) return e;
-  return new WriteOutcomeUnknownError('Teams', method, { cause: e, hint: WRITE_OUTCOME_HINT });
+  return new WriteOutcomeUnknownError('Teams', method, { cause: e, hint });
 }
 
-const WRITE_OUTCOME_HINT =
+const SEND_OUTCOME_HINT =
   'The message may already have been posted — check the conversation (teams_read_conversation) before retrying; do not resend blindly.';
+
+const REACTION_OUTCOME_HINT =
+  'The reaction change may already have been applied — check the message (teams_read_conversation) before retrying.';
+
+/**
+ * The HTTP status behind a {@link WriteOutcomeUnknownError} that Teams
+ * answered with a 5xx, or `undefined` when it timed out or the connection
+ * dropped instead.
+ */
+export function outcomeUnknownStatus(e: WriteOutcomeUnknownError): number | undefined {
+  const status = (e.cause as { status?: unknown } | undefined)?.status;
+  return typeof status === 'number' ? status : undefined;
+}
 
 function toBearerTokens(accessToken: string): BearerTokens {
   let expiresAt: number;
@@ -375,16 +388,17 @@ export class ChatServiceClient {
    * `Location` header when the service sends one.
    *
    * Not idempotent, so a request that was SENT but got no usable answer (a
-   * timeout, a dropped connection) is a `WriteOutcomeUnknownError` — the post
-   * may already be in the chat, and a blind retry would post it twice. A 401
-   * is still replayed once after a re-capture: Teams refused that request, so
-   * nothing was posted.
+   * timeout, a dropped connection, a 5xx from a gateway or a failing backend)
+   * is a `WriteOutcomeUnknownError` — the post may already be in the chat,
+   * and a blind retry would post it twice. A 4xx is a refusal and stays a
+   * plain error. A 401 is still replayed once after a re-capture: Teams
+   * refused that request, so nothing was posted.
    */
   async sendMessage(conversationId: string, body: unknown): Promise<{ id?: string }> {
     this.#requireConfigured();
     const url = `${this.#baseUrl}/users/ME/conversations/${encodeURIComponent(conversationId)}/messages`;
-    const { status, headers } = await this.#send(url, 'text', undefined, { method: 'POST', body });
-    this.#checkStatus(status);
+    const { status, headers } = await this.#send(url, 'text', undefined, { method: 'POST', body, hint: SEND_OUTCOME_HINT });
+    this.#checkWriteStatus('POST', status, SEND_OUTCOME_HINT);
     const id = /\/messages\/([^/?#]+)\/?(?:[?#].*)?$/.exec(headers.get('location') ?? '')?.[1];
     return id !== undefined ? { id: decodeURIComponent(id) } : {};
   }
@@ -395,8 +409,11 @@ export class ChatServiceClient {
    * message's `emotions` property is written — never the user's
    * `recentReactions` preference, which Teams updates as a UI nicety.
    *
-   * Idempotent (the same key twice is still one reaction), so a timeout or a
-   * dropped connection is an ordinary error: retrying is safe.
+   * A timeout, a dropped connection or a 5xx after the request was sent is a
+   * `WriteOutcomeUnknownError`, as for a post: the change may have landed.
+   * Repeating it is harmless (the same key twice is still one reaction), but
+   * the tool reads the message back rather than reporting a plain failure for
+   * a change that may well be visible already.
    */
   async setReaction(conversationId: string, messageId: string, key: string, at: number = Date.now()): Promise<void> {
     await this.#writeEmotions('PUT', conversationId, messageId, { key, value: at });
@@ -417,8 +434,8 @@ export class ChatServiceClient {
     const url =
       `${this.#baseUrl}/users/ME/conversations/${encodeURIComponent(conversationId)}` +
       `/messages/${encodeURIComponent(messageId)}/properties?name=emotions`;
-    const { status } = await this.#send(url, 'text', undefined, { method, body: { emotions }, idempotent: true });
-    this.#checkStatus(status);
+    const { status } = await this.#send(url, 'text', undefined, { method, body: { emotions }, hint: REACTION_OUTCOME_HINT });
+    this.#checkWriteStatus(method, status, REACTION_OUTCOME_HINT);
   }
 
   /**
@@ -520,8 +537,8 @@ export class ChatServiceClient {
     url: string,
     read: 'text' | 'bytes',
     maxBytes?: number,
-    /** `idempotent` writes are safe to repeat, so a lost answer is a plain error, not an unknown outcome. */
-    write?: { method: 'POST' | 'PUT' | 'DELETE'; body: unknown; idempotent?: boolean },
+    /** A write: a lost answer is a `WriteOutcomeUnknownError` carrying `hint`. */
+    write?: { method: 'POST' | 'PUT' | 'DELETE'; body: unknown; hint: string },
   ): Promise<{ status: number; headers: Headers; body: string | Uint8Array }> {
     let body: string | Uint8Array = '';
     const method = write?.method ?? 'GET';
@@ -545,7 +562,7 @@ export class ChatServiceClient {
       try {
         r = await fetchBounded(url, init, opts);
       } catch (e) {
-        throw write && !write.idempotent ? outcomeUnknown(method, e) : e;
+        throw write ? outcomeUnknown(method, e, write.hint) : e;
       }
       body = r.body as string | Uint8Array;
       return r.res;
@@ -569,6 +586,23 @@ export class ChatServiceClient {
         kind: 'http',
       });
     }
+  }
+
+  /**
+   * A write's status: a 5xx means the request reached Teams and failed
+   * somewhere past the front door — a gateway that lost the backend's answer
+   * (502/504) or a backend that may have committed before failing — so the
+   * outcome is unknown, never a plain "retry shortly". Anything else maps as
+   * for a read.
+   */
+  #checkWriteStatus(method: string, status: number, hint: string): void {
+    if (status >= 500 && status < 600) {
+      throw new WriteOutcomeUnknownError('Teams', method, {
+        cause: new McpToolError(`Teams chat service returned HTTP ${status}.`, { status, kind: 'http' }),
+        hint,
+      });
+    }
+    this.#checkStatus(status);
   }
 
   /**

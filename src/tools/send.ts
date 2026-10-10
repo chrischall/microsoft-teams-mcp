@@ -22,10 +22,11 @@ import {
   toolAnnotations,
   WriteOutcomeUnknownError,
 } from '@chrischall/mcp-utils';
-import type { ChatServiceClient } from '../chatsvc.js';
+import { outcomeUnknownStatus, type ChatServiceClient } from '../chatsvc.js';
 import type { TeamsDeps } from '../deps.js';
 import {
   buildSendBody,
+  clipText,
   mentionsProperty,
   newClientMessageId,
   qtdMsgsProperty,
@@ -34,10 +35,15 @@ import {
   type MentionTarget,
   type QuotedMessage,
 } from '../compose.js';
-import { conversationSummary, htmlToText, isUserMessage, senderMri } from '../model.js';
+import { conversationSummary, htmlToText, isUserMessage, normaliseMessage, senderMri } from '../model.js';
 import { resolveConversation } from './conversation.js';
 import { wrapApiError } from './errors.js';
-import { untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
+import {
+  THIRD_PARTY_NAMES_NOTE,
+  untrustedField,
+  untrustedResult,
+  UNTRUSTED_DESCRIPTION_SUFFIX,
+} from './untrusted.js';
 
 const TOOL = 'teams_send_message';
 
@@ -54,6 +60,9 @@ const READBACK_MESSAGES = 50;
 
 /** Candidates a mention error lists. */
 const MAX_CANDIDATES = 10;
+
+/** Previewed text of a quoted message. */
+const PREVIEW_CHARS = 200;
 
 /** An MRI such as `8:orgid:<oid>` (a person) or `28:<id>` (a bot). */
 const MRI = /^\d+:\S+$/;
@@ -135,16 +144,25 @@ async function resolveMentions(
     const exact = known.filter((k) => k.name.toLowerCase() === q);
     const found = exact.length > 0 ? exact : known.filter((k) => k.name.toLowerCase().includes(q));
     if (found.length === 1) return { target: { text: name_in_text, mri: found[0].mri }, person: found[0].name };
+    // Candidate names are other people's display names: JSON-quoted and
+    // flagged as data, as a read tool's envelope would.
     if (found.length > 1) {
-      const named = found.slice(0, MAX_CANDIDATES).map((k) => `"${k.name}" (${k.mri})`).join('; ');
-      throw new McpToolError(`"${person}" matches ${found.length} people in this conversation: ${named}.`, {
-        hint: 'Pass the MRI of the one to mention as person.',
-      });
+      const named = found
+        .slice(0, MAX_CANDIDATES)
+        .map((k) => `${JSON.stringify(k.name)} (${k.mri})`)
+        .join('; ');
+      throw new McpToolError(
+        `"${person}" matches ${found.length} people in this conversation: ${named}. ${THIRD_PARTY_NAMES_NOTE}`,
+        { hint: 'Pass the MRI of the one to mention as person.' },
+      );
     }
-    const some = known.slice(0, MAX_CANDIDATES).map((k) => `"${k.name}"`).join(', ');
+    const some = known
+      .slice(0, MAX_CANDIDATES)
+      .map((k) => JSON.stringify(k.name))
+      .join(', ');
     throw new McpToolError(`No recent sender in this conversation is called "${person}".`, {
       hint:
-        (some ? `Recent senders: ${some}. ` : '') +
+        (some ? `Recent senders: ${some}. ${THIRD_PARTY_NAMES_NOTE} ` : '') +
         'Pass an exact display name, or the person\'s MRI (8:orgid:…) as person.',
     });
   });
@@ -163,6 +181,26 @@ async function quoted(chatsvc: ChatServiceClient, conversationId: string, id: st
 }
 
 /**
+ * The channel root post a threaded reply goes under, read to prove it is one:
+ * it must exist in this channel and not itself be a reply (Teams threads are
+ * one level deep, so a reply cannot itself be replied under).
+ */
+async function threadRoot(chatsvc: ChatServiceClient, channelId: string, id: string, me: string): Promise<void> {
+  const m = await chatsvc.getMessage(channelId, id);
+  if (m === undefined) {
+    throw new McpToolError(`There is no post ${id} in this channel to reply under.`, {
+      hint: 'Take the root post\'s id from teams_read_conversation.',
+    });
+  }
+  const replyTo = normaliseMessage(m, me).replyTo;
+  if (replyTo !== undefined) {
+    throw new McpToolError(`Message ${id} is itself a reply in this channel, not a root post.`, {
+      hint: `Reply under its root post instead: reply_to "${replyTo}".`,
+    });
+  }
+}
+
+/**
  * A send that may or may not have landed becomes a `status: "unknown"`
  * result, never an error: an error invites a fresh preview and a second post.
  * Any other failure is a real failure and still throws.
@@ -175,13 +213,19 @@ async function writeOrUnknown<T>(
     return { ok: true, value: await run() };
   } catch (e) {
     if (!(e instanceof WriteOutcomeUnknownError)) throw e;
+    const status = outcomeUnknownStatus(e);
+    const why = e.timedOut
+      ? 'it did not answer in time'
+      : status !== undefined
+        ? `it answered HTTP ${status} after the post was sent`
+        : 'the connection dropped';
     return {
       ok: false,
       result: untrustedResult({
         status: 'unknown',
         conversation,
         warning:
-          `Teams did not confirm this post (${e.timedOut ? 'it did not answer in time' : 'the connection dropped'}), ` +
+          `Teams did not confirm this post (${why}), ` +
           'so it may already be in the conversation. Check the conversation before retrying ' +
           '(teams_read_conversation); do not resend blindly.',
       }),
@@ -246,6 +290,7 @@ export function registerSendTools(server: McpServer, { chatsvc }: Pick<TeamsDeps
         // A threaded channel reply posts to "<channelId>;messageid=<rootId>" (unverified live; see the plan).
         const postTo = inChannel && reply_to !== undefined ? `${target.id};messageid=${reply_to}` : target.id;
 
+        if (inChannel && reply_to !== undefined) await threadRoot(chatsvc, target.id, reply_to, me);
         const q = quoteId !== undefined ? await quoted(chatsvc, target.id, quoteId) : undefined;
         const people = await resolveMentions(chatsvc, target.id, mentions ?? []);
         const rendered = renderMessageHtml(
@@ -269,25 +314,33 @@ export function registerSendTools(server: McpServer, { chatsvc }: Pick<TeamsDeps
           tool: TOOL,
           action: 'chat.send_message',
           message: 'Review and confirm this Teams message before it is posted:',
-          summary: `Post a message to ${target.kind} "${target.title}"`,
+          // The title is someone else's text: JSON-quoted so it cannot break out of its quotes.
+          summary: `Post a message to ${target.kind} ${JSON.stringify(target.title)}`,
           // The signed-in user, so an approval minted under one account never posts as another.
           account: me,
           target: postTo,
           request: { method: 'POST', path, body: bound },
+          // The conversation title, the quoted message and the resolved names
+          // are written by other people, so each is fenced as a read tool's
+          // result is; `text` is the caller's own.
           preview: {
-            conversation: target,
+            conversation: untrustedField(target),
             text,
             ...(inChannel && reply_to !== undefined ? { thread_root: reply_to } : {}),
             ...(people.length > 0
               ? {
-                  mentions: people.map((p, i) => ({
-                    name_in_text: mentions![i].name_in_text,
-                    person: p.person,
-                    mri: p.target.mri,
-                  })),
+                  mentions: untrustedField(
+                    people.map((p, i) => ({
+                      name_in_text: mentions![i].name_in_text,
+                      person: p.person,
+                      mri: p.target.mri,
+                    })),
+                  ),
                 }
               : {}),
-            ...(q ? { quoting: { id: q.id, sender: q.senderName, preview: q.text.slice(0, 200) } } : {}),
+            ...(q
+              ? { quoting: untrustedField({ id: q.id, sender: q.senderName, preview: clipText(q.text, PREVIEW_CHARS) }) }
+              : {}),
             note: 'clientmessageid and the timestamps are filled in when the message is posted.',
           },
           confirmToken,

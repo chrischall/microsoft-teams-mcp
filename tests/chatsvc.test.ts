@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { McpToolError, RequestTimeoutError, WriteOutcomeUnknownError } from '@chrischall/mcp-utils';
-import { ChatServiceClient, DEFAULT_REGION, chatServiceBase } from '../src/chatsvc.js';
+import { ChatServiceClient, DEFAULT_REGION, chatServiceBase, outcomeUnknownStatus } from '../src/chatsvc.js';
 
 /** A hand-written fixture from `tests/fixtures/` — invented names and text only. */
 function fixture(name: string): unknown {
@@ -472,11 +472,46 @@ describe('sendMessage', () => {
     });
   });
 
-  it('maps an HTTP failure to a plain McpToolError with its status', async () => {
-    const fetchImpl: FetchMock = vi.fn(async () => jsonResponse({}, 403));
+  it.each([400, 403, 404, 429])('maps a %i refusal to a plain McpToolError with its status', async (status) => {
+    const fetchImpl: FetchMock = vi.fn(async () => jsonResponse({}, status));
     const p = client(fetchImpl).sendMessage('c', BODY);
-    await expect(p).rejects.toMatchObject({ status: 403 });
+    await expect(p).rejects.toMatchObject({ status });
     await expect(p).rejects.not.toBeInstanceOf(WriteOutcomeUnknownError);
+  });
+
+  it.each([500, 502, 503, 504])('reports a %i after sending as an unknown outcome, never a plain error', async (status) => {
+    const fetchImpl: FetchMock = vi.fn(async () => jsonResponse({}, status));
+    let err: unknown;
+    try {
+      await client(fetchImpl).sendMessage('c', BODY);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(WriteOutcomeUnknownError);
+    const e = err as WriteOutcomeUnknownError;
+    expect(e).toMatchObject({ outcomeUnknown: true, timedOut: false, method: 'POST' });
+    expect(outcomeUnknownStatus(e)).toBe(status);
+    expect(e.hint).toMatch(/check the conversation/i);
+    // Exactly one POST: a 5xx is never replayed.
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a 5xx on the post-401 replay as an unknown outcome too', async () => {
+    let n = 0;
+    const fetchImpl: FetchMock = vi.fn(async () => jsonResponse({}, n++ === 0 ? 401 : 503));
+    const p = client(fetchImpl).sendMessage('c', BODY);
+    await expect(p).rejects.toBeInstanceOf(WriteOutcomeUnknownError);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('has no status on an unknown outcome caused by a dropped connection', async () => {
+    const fetchImpl: FetchMock = vi.fn(async () => {
+      throw new TypeError('fetch failed');
+    });
+    const err = await client(fetchImpl)
+      .sendMessage('c', BODY)
+      .catch((e: unknown) => e);
+    expect(outcomeUnknownStatus(err as WriteOutcomeUnknownError)).toBeUndefined();
   });
 });
 
@@ -503,17 +538,32 @@ describe('setReaction / removeReaction', () => {
     expect(JSON.parse(String(init?.body))).toEqual({ emotions: { key: 'heart' } });
   });
 
-  it('maps an HTTP failure to an McpToolError with its status', async () => {
+  it('maps a 4xx to a plain McpToolError with its status', async () => {
     const fetchImpl: FetchMock = vi.fn(async () => jsonResponse({}, 404));
-    await expect(client(fetchImpl).setReaction(CONV, '1', 'like')).rejects.toMatchObject({ status: 404 });
+    const p = client(fetchImpl).setReaction(CONV, '1', 'like');
+    await expect(p).rejects.toMatchObject({ status: 404 });
+    await expect(p).rejects.not.toBeInstanceOf(WriteOutcomeUnknownError);
   });
 
-  it('reports a timeout as a plain error, not an unknown outcome — setting a reaction twice is harmless', async () => {
+  it.each([
+    ['PUT', (c: ChatServiceClient) => c.setReaction(CONV, '1', 'like')],
+    ['DELETE', (c: ChatServiceClient) => c.removeReaction(CONV, '1', 'like')],
+  ] as const)('reports a 503 on the %s as an unknown outcome pointing at the message', async (method, call) => {
+    const fetchImpl: FetchMock = vi.fn(async () => jsonResponse({}, 503));
+    const err = await call(client(fetchImpl)).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(WriteOutcomeUnknownError);
+    expect(err).toMatchObject({ method });
+    expect(outcomeUnknownStatus(err as WriteOutcomeUnknownError)).toBe(503);
+    expect((err as WriteOutcomeUnknownError).hint).toMatch(/check the message/i);
+  });
+
+  it('reports a timeout as an unknown outcome too — the change may have landed', async () => {
     const fetchImpl: FetchMock = vi.fn(async () => {
       throw new RequestTimeoutError('Teams', 60_000);
     });
-    const p = client(fetchImpl).setReaction(CONV, '1', 'like');
-    await expect(p).rejects.toBeInstanceOf(RequestTimeoutError);
-    await expect(p).rejects.not.toBeInstanceOf(WriteOutcomeUnknownError);
+    await expect(client(fetchImpl).setReaction(CONV, '1', 'like')).rejects.toMatchObject({
+      outcomeUnknown: true,
+      timedOut: true,
+    });
   });
 });

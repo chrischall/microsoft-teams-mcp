@@ -81,15 +81,23 @@ export function emojiSpan(key: string): string | undefined {
   );
 }
 
-/** Plain text → escaped HTML, newlines as `<br>`, known `:key:` shortcodes as emoji spans. */
+/**
+ * Plain text → escaped HTML, newlines as `<br>`, known `:key:` shortcodes as
+ * emoji spans. A `:key:` that cannot be rendered gives its closing colon back,
+ * so in "a:b:smile:" the ":b:" miss still leaves ":smile:" to render.
+ */
 function renderPlain(text: string): string {
   let out = '';
   let at = 0;
-  for (const m of text.matchAll(/:([a-z0-9_-]+):/g)) {
+  const shortcode = /:([a-z0-9_-]+):/g;
+  for (let m = shortcode.exec(text); m !== null; m = shortcode.exec(text)) {
     const span = emojiSpan(m[1]);
-    if (span === undefined) continue;
+    if (span === undefined) {
+      shortcode.lastIndex = m.index + m[0].length - 1;
+      continue;
+    }
     out += escapeLines(text.slice(at, m.index)) + span;
-    at = m.index + m[0].length;
+    at = shortcode.lastIndex;
   }
   return out + escapeLines(text.slice(at));
 }
@@ -114,15 +122,17 @@ const isWordChar = (c: string | undefined): boolean => c !== undefined && /[\p{L
 /**
  * Where `name` first occurs in `text` outside `taken`: `@name` (exactly, then
  * ignoring case) wins, else the bare name as a whole word, ignoring case.
+ * Either way the name must END at a word boundary, so "@Sam" is never found
+ * inside "@Samantha".
  */
 function locate(text: string, name: string, taken: readonly [number, number][]): [number, number] | undefined {
   const free = (s: number, e: number) => taken.every(([ts, te]) => e <= ts || s >= te);
-  const find = (needle: string, ci: boolean, whole: boolean): [number, number] | undefined => {
+  const find = (needle: string, ci: boolean, wordStart: boolean): [number, number] | undefined => {
     const hay = ci ? text.toLowerCase() : text;
     const n = ci ? needle.toLowerCase() : needle;
     for (let i = hay.indexOf(n); i >= 0; i = hay.indexOf(n, i + 1)) {
       const end = i + n.length;
-      if (whole && (isWordChar(text[i - 1]) || isWordChar(text[end]))) continue;
+      if (isWordChar(text[end]) || (wordStart && isWordChar(text[i - 1]))) continue;
       if (free(i, end)) return [i, end];
     }
     return undefined;
@@ -193,9 +203,22 @@ export interface QuotedMessage {
 /** Longest quoted-message preview Teams' own quote block carries. */
 const QUOTE_PREVIEW_CHARS = 200;
 
+/**
+ * `s` cut to at most `max` UTF-16 units, ending in `ellipsis` when cut. Never
+ * splits a surrogate pair, so an emoji at the cut is dropped whole rather than
+ * leaving a lone half (invalid UTF-16 that renders as �).
+ */
+export function clipText(s: string, max: number, ellipsis = ''): string {
+  if (s.length <= max) return s;
+  let end = Math.max(0, max - ellipsis.length);
+  const last = s.charCodeAt(end - 1);
+  if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+  return s.slice(0, end) + ellipsis;
+}
+
 /** The captured quote-reply block, placed before the reply's own paragraph. */
 export function quoteHtml(q: QuotedMessage): string {
-  const preview = q.text.length <= QUOTE_PREVIEW_CHARS ? q.text : `${q.text.slice(0, QUOTE_PREVIEW_CHARS - 1)}…`;
+  const preview = clipText(q.text, QUOTE_PREVIEW_CHARS, '…');
   const id = escapeHtml(q.id);
   return (
     `<blockquote itemscope itemtype="http://schema.skype.com/Reply" itemid="${id}">` +

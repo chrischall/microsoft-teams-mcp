@@ -136,8 +136,8 @@ Everything is optional — by default the token is captured from your browser.
 - `teams_send_message` — post as you to any chat or channel, by id or name.
   `text` is plain text: it is escaped, newlines are kept, and `:key:`
   shortcodes (`:smile:`, `:1f389_partypopper:`) become Teams emoji.
-  `reply_to` posts into a channel post's thread (in a chat it quote-replies
-  that message); `quote` quote-replies a message anywhere; `mentions`
+  `reply_to` posts into a channel post's thread — it must be a root post in
+  that channel, not a reply (in a chat it quote-replies that message); `quote` quote-replies a message anywhere; `mentions`
   @-mentions people by MRI or by a display name matched among the
   conversation's recent senders (an ambiguous name is refused with the
   candidates). The result says whether the post was found again by reading
@@ -146,7 +146,7 @@ Everything is optional — by default the token is captured from your browser.
   message: an emoji or name (`thumbsup`/👍, `heart`/❤️, `laugh`/😆,
   `surprised`/😮, `sad`/😢, `angry`/😡, `checkmark`/✅) or any raw Teams
   reaction key (`fire`, `1f389_partypopper`). The message is read back to
-  verify the change. It writes only that message's reaction — never your
+  verify the change (`verified: null` when it is not found again). It writes only that message's reaction — never your
   recent-reactions list or any other preference.
 
 Every other tool is read-only, and none of them marks anything read.
@@ -157,7 +157,8 @@ Both writes are visible to everyone in the conversation, so each asks you
 first. A client that can show a confirmation prompt (Claude Code) shows one.
 On a client that cannot, the first call posts nothing and returns a
 `confirmation-required` preview — the conversation, the exact text, any
-mentions, the quoted message or the reaction — plus a `confirmToken`; only a
+mentions, the quoted message or the reaction, with everything other people
+wrote (titles, names, quoted text) fenced as untrusted — plus a `confirmToken`; only a
 repeat call with that token posts. The token is single-use, expires, and is
 bound to the exact arguments: change anything between the two calls and it
 is refused with a fresh preview.
@@ -178,10 +179,12 @@ self-chat ("notes to self"): both writes accept it, nobody else sees it, and
 it is the safe place to see what a message or reaction will look like. Every
 other `48:` system conversation (calendar and the like) is refused.
 
-**A send that times out is not retried.** If Teams does not answer a post (a
-timeout or a dropped connection after the request went out), the result is
-`status: "unknown"` — the message may already be there, so read the
-conversation before sending again. Threaded channel replies, @mentions,
+**A send that times out is not retried.** If Teams does not confirm a post (a
+timeout, a dropped connection or a 5xx after the request went out), the
+result is `status: "unknown"` — the message may already be there, so read the
+conversation before sending again. A 4xx is a refusal and stays an error. A
+reaction Teams does not confirm is settled by reading the message back, and
+is `status: "unknown"` only when that does not show the change. Threaded channel replies, @mentions,
 removing a reaction and the ✅ reaction's key follow Teams' documented or
 inferred shapes but have not been verified against a live tenant yet.
 

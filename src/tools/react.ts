@@ -12,7 +12,11 @@
  * nicety and this tool never touches the user's preferences.
  *
  * After the write the message is read back and the reaction looked for (or,
- * on removal, looked for and not found) among the user's own.
+ * on removal, looked for and not found) among the user's own. A message that
+ * is gone on reading back proves nothing either way (`verified: null`). A
+ * write Teams did not confirm (a timeout, a dropped connection, a 5xx) is
+ * settled by the same read-back: `status: "unknown"` unless it shows the
+ * change landed.
  */
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
@@ -23,13 +27,15 @@ import {
   confirmWrite,
   McpToolError,
   toolAnnotations,
+  WriteOutcomeUnknownError,
 } from '@chrischall/mcp-utils';
-import type { ChatServiceClient } from '../chatsvc.js';
+import { outcomeUnknownStatus, type ChatServiceClient } from '../chatsvc.js';
+import { clipText } from '../compose.js';
 import type { TeamsDeps } from '../deps.js';
 import { htmlToText, normaliseMessage, senderMri } from '../model.js';
 import { wrapApiError } from './errors.js';
 import { resolveTarget, SELF_CHAT } from './send.js';
-import { untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
+import { untrustedField, untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
 
 const TOOL = 'teams_react';
 
@@ -96,16 +102,20 @@ export function reactionKey(input: string): string {
   });
 }
 
-/** Whether the user's own reaction `key` is on the message, read fresh. */
+/**
+ * Whether the user's own reaction `key` is on the message, read fresh —
+ * `undefined` when the message is not there to read (404), which proves
+ * nothing either way.
+ */
 async function hasMyReaction(
   chatsvc: ChatServiceClient,
   conversationId: string,
   messageId: string,
   key: string,
   me: string,
-): Promise<boolean> {
+): Promise<boolean | undefined> {
   const m = await chatsvc.getMessage(conversationId, messageId);
-  if (m === undefined) return false;
+  if (m === undefined) return undefined;
   return normaliseMessage(m, me).reactions?.some((r) => r.key === key && r.byMe) ?? false;
 }
 
@@ -122,7 +132,8 @@ export function registerReactTools(server: McpServer, { chatsvc }: Pick<TeamsDep
         '1f389_partypopper); an emoji without a known key is refused with the rule for spelling its key. ' +
         `conversation "${SELF_CHAT}" is the user's own notes self-chat — use it to try this tool. Everyone ` +
         'in the conversation sees the reaction. The result says whether reading the message back showed the ' +
-        'change (verified). ' +
+        'change (verified; null when the message was not found again); status "unknown" means Teams did not ' +
+        'confirm the change and the read-back did not show it — check the message before retrying. ' +
         CONFIRM_FLOW_SENTENCE +
         ' The preview shows the conversation, the message and the reaction. ' +
         CONFIRM_INJECTION_RULE +
@@ -161,19 +172,22 @@ export function registerReactTools(server: McpServer, { chatsvc }: Pick<TeamsDep
           tool: TOOL,
           action: remove ? 'chat.remove_reaction' : 'chat.react',
           message: `Review and confirm this Teams reaction before it is ${remove ? 'removed' : 'added'}:`,
-          summary: `${remove ? 'Remove' : 'Add'} reaction "${key}" on a message in ${target.kind} "${target.title}"`,
+          // The title is someone else's text: JSON-quoted so it cannot break out of its quotes.
+          summary: `${remove ? 'Remove' : 'Add'} reaction "${key}" on a message in ${target.kind} ${JSON.stringify(target.title)}`,
           // The signed-in user, so an approval minted under one account never reacts as another.
           account: me,
           target: `${target.id}/${message_id}`,
           // The reaction time is minted when the reaction is set, so it is not bound.
           request: { method, path, body: { emotions: { key } } },
+          // The title and the message are written by other people, so each is
+          // fenced as a read tool's result is.
           preview: {
-            conversation: target,
-            message: {
+            conversation: untrustedField(target),
+            message: untrustedField({
               id: m.id,
               sender: m.imdisplayname?.trim() || senderMri(m.from) || 'unknown',
-              preview: htmlToText(m.content ?? '').slice(0, PREVIEW_CHARS),
-            },
+              preview: clipText(htmlToText(m.content ?? ''), PREVIEW_CHARS),
+            }),
             reaction: key,
             already_reacted: already,
           },
@@ -181,16 +195,58 @@ export function registerReactTools(server: McpServer, { chatsvc }: Pick<TeamsDep
         });
         if (gate) return gate;
 
-        if (remove) await chatsvc.removeReaction(target.id, message_id, key);
-        else await chatsvc.setReaction(target.id, message_id, key);
+        let unconfirmed: WriteOutcomeUnknownError | undefined;
+        try {
+          if (remove) await chatsvc.removeReaction(target.id, message_id, key);
+          else await chatsvc.setReaction(target.id, message_id, key);
+        } catch (e) {
+          if (!(e instanceof WriteOutcomeUnknownError)) throw e;
+          unconfirmed = e;
+        }
 
-        let verified = false;
+        // true / false: the read-back shows the change / does not; null: the
+        // message is gone (404), so it shows nothing either way.
+        let verified: boolean | null = false;
         let readBackFailed = false;
         try {
           const present = await hasMyReaction(chatsvc, target.id, message_id, key, me);
-          verified = remove ? !present : present;
+          verified = present === undefined ? null : remove ? !present : present;
         } catch {
           readBackFailed = true;
+        }
+        const shown = remove ? 'gone' : 'present';
+
+        if (unconfirmed !== undefined && verified !== true) {
+          const status = outcomeUnknownStatus(unconfirmed);
+          const why = unconfirmed.timedOut
+            ? 'it did not answer in time'
+            : status !== undefined
+              ? `it answered HTTP ${status}`
+              : 'the connection dropped';
+          return untrustedResult({
+            status: 'unknown',
+            conversation: target,
+            message_id,
+            reaction: key,
+            verified,
+            warning:
+              `Teams did not confirm this change (${why}), and reading the message back ` +
+              `${readBackFailed ? 'failed' : verified === null ? 'did not find it' : `did not show the reaction ${shown}`} — ` +
+              'check the message (teams_read_conversation) before retrying.',
+          });
+        }
+
+        let warning: string | undefined;
+        if (unconfirmed !== undefined) {
+          warning = `Teams did not confirm this change, but reading the message back shows the reaction ${shown}.`;
+        } else if (readBackFailed) {
+          warning = 'Teams accepted the change, but reading the message back failed — check the message (teams_read_conversation).';
+        } else if (verified === null) {
+          warning =
+            'Teams accepted the change, but the message was not found on reading it back (it may have been deleted) — ' +
+            'check the conversation (teams_read_conversation).';
+        } else if (!verified) {
+          warning = `Teams accepted the change, but reading the message back did not show the reaction ${shown} — check the message (teams_read_conversation); the key may not be one Teams knows.`;
         }
         return untrustedResult({
           status: remove ? 'removed' : 'reacted',
@@ -198,13 +254,7 @@ export function registerReactTools(server: McpServer, { chatsvc }: Pick<TeamsDep
           message_id,
           reaction: key,
           verified,
-          ...(verified
-            ? {}
-            : {
-                warning: readBackFailed
-                  ? 'Teams accepted the change, but reading the message back failed — check the message (teams_read_conversation).'
-                  : `Teams accepted the change, but reading the message back did not show the reaction ${remove ? 'gone' : 'present'} — check the message (teams_read_conversation); the key may not be one Teams knows.`,
-              }),
+          ...(warning !== undefined ? { warning } : {}),
         });
       } catch (err) {
         throw wrapApiError(err, 'react to the message');

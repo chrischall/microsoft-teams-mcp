@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { McpToolError } from '@chrischall/mcp-utils';
 import {
   buildSendBody,
+  clipText,
   emojiSpan,
   escapeHtml,
   mentionsProperty,
@@ -63,6 +64,28 @@ describe('renderMessageHtml', () => {
     expect(html).toContain('itemid="smile"');
     expect(html).toContain('at 10:30:45 :nope:');
     expect(htmlToText(html)).toBe('done 🙂 at 10:30:45 :nope:');
+  });
+
+  it('gives an unrenderable :key: its closing colon back, so the next shortcode still renders', () => {
+    const { html } = renderMessageHtml('a:b:smile:', []);
+    expect(html).toContain('itemid="smile"');
+    expect(htmlToText(html)).toBe('a:b🙂');
+    expect(htmlToText(renderMessageHtml(':smile:fire:', []).html)).toBe('🙂fire:');
+    expect(htmlToText(renderMessageHtml('at 10:30:smile: ok', []).html)).toBe('at 10:30🙂 ok');
+  });
+
+  it('never matches @name inside a longer name: "@Sam" skips "@Samantha"', () => {
+    const { html, mentions } = renderMessageHtml('@Samantha and @Sam', [{ text: 'Sam', mri: OTHER }]);
+    expect(html).toBe(
+      '<p>@Samantha and <span itemscope itemtype="http://schema.skype.com/Mention" itemid="0">Sam</span></p>',
+    );
+    expect(mentions).toEqual([{ itemid: '0', mri: OTHER, displayName: 'Sam' }]);
+  });
+
+  it('applies the trailing boundary to the case-insensitive @name search too', () => {
+    const { html } = renderMessageHtml('@samantha, @sam!', [{ text: 'Sam', mri: OTHER }]);
+    expect(html).toContain('@samantha, <span');
+    expect(html).toContain('itemid="0">sam</span>!');
   });
 
   it('replaces the first @name with a mention span, numbering mentions in order of appearance', () => {
@@ -148,6 +171,14 @@ describe('quoteHtml / qtdMsgsProperty', () => {
     expect(preview.length).toBeLessThanOrEqual(200);
   });
 
+  it('never splits a surrogate pair at the cut', () => {
+    // 198 x's then an emoji straddling the 199th/200th unit: cut before it, whole.
+    const html = quoteHtml({ ...quoted, text: `${'x'.repeat(198)}🎉🎉 tail` });
+    const preview = /<p itemprop="preview">([^<]*)<\/p>/.exec(html)![1];
+    expect(preview).toBe(`${'x'.repeat(198)}…`);
+    expect(preview).not.toMatch(/[\ud800-\udbff](?![\udc00-\udfff])/);
+  });
+
   it('lists the quoted message as a JSON string', () => {
     expect(JSON.parse(qtdMsgsProperty(quoted))).toEqual([
       { messageId: '1760000000000', sender: OTHER, time: 1760000000000 },
@@ -221,5 +252,22 @@ describe('buildSendBody', () => {
     });
     expect(body.properties.mentions).toBe('[{"x":1}]');
     expect(body.properties.qtdMsgs).toBe('[{"y":2}]');
+  });
+});
+
+describe('clipText', () => {
+  it('returns short text unchanged', () => {
+    expect(clipText('hello', 200)).toBe('hello');
+  });
+
+  it('cuts at max units, with the ellipsis inside the limit', () => {
+    expect(clipText('abcdef', 4)).toBe('abcd');
+    expect(clipText('abcdef', 4, '…')).toBe('abc…');
+  });
+
+  it('drops a whole emoji rather than leaving half a surrogate pair', () => {
+    expect(clipText('ab🎉cd', 3)).toBe('ab');
+    expect(clipText('ab🎉cd', 4)).toBe('ab🎉');
+    expect(clipText('ab🎉cd', 4, '…')).toBe('ab…');
   });
 });
