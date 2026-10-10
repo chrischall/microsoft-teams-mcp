@@ -1,340 +1,352 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { createTestHarness, parseToolResult } from '@chrischall/mcp-utils/test';
+import { McpToolError } from '@chrischall/mcp-utils';
 import { registerChatTools } from '../../src/tools/chat.js';
-import type { TeamsClient } from '../../src/client.js';
+import type { ChatServiceClient, GetMessagesOptions, RawMessage } from '../../src/chatsvc.js';
+import { DAY, fakeChatsvc, messagesFrom, pinClock, rawConv, rawMsg } from './fake-chatsvc.js';
 
-function fakeClient(overrides: Partial<TeamsClient> = {}): TeamsClient {
-  return {
-    listChats: vi.fn().mockResolvedValue([]),
-    getOpenChatMessages: vi.fn().mockResolvedValue([]),
-    getSelectedConversations: vi.fn().mockResolvedValue([]),
-    ...overrides,
-  } as unknown as TeamsClient;
+const T0 = 1_760_000_000_000;
+const MIN = 60_000;
+/** "Now" for the since_days window: an hour after every fixture's activity. */
+const NOW = T0 + 60 * MIN;
+
+beforeEach(() => pinClock(NOW));
+afterEach(() => vi.useRealTimers());
+
+const GROUP = '19:group0001@thread.v2';
+const MEETING = '19:meeting_abc0001@thread.v2';
+const DM = '19:aaaa_bbbb@unq.gbl.spaces';
+const CHANNEL = '19:chan0001@thread.tacv2';
+
+/** Unread group (newest), read meeting, unread 1:1 (oldest), and a channel that must not appear. */
+const CONVS = [
+  rawConv(GROUP, { topic: 'Project Falcon', at: T0 + 30 * MIN, horizon: T0 }),
+  rawConv(MEETING, { topic: 'Weekly sync', at: T0 + 20 * MIN }),
+  rawConv(DM, { at: T0 + 10 * MIN, horizon: T0, sender: 'Pat Example' }),
+  rawConv(CHANNEL, { topic: 'General', at: T0 + 40 * MIN, horizon: T0 }),
+];
+
+/** What a read past each horizon finds: GROUP and DM hold real unread messages. */
+const MESSAGES: Record<string, RawMessage[]> = {
+  [GROUP]: [rawMsg(T0), rawMsg(T0 + 30 * MIN, { text: 'group unread' })],
+  [DM]: [rawMsg(T0, { conv: DM }), rawMsg(T0 + 5 * MIN, { conv: DM }), rawMsg(T0 + 10 * MIN, { conv: DM })],
+};
+
+/** A `getMessages` that serves each conversation's own messages; an `Error`-valued entry is thrown instead. */
+function perConversation(byId: Record<string, RawMessage[] | Error> = MESSAGES) {
+  return vi.fn(async (id: string, opts: GetMessagesOptions) => {
+    const v = byId[id] ?? [];
+    if (v instanceof Error) throw v;
+    return messagesFrom(v)(id, opts);
+  });
 }
 
+function chatsvcWith(convs = CONVS, byId: Record<string, RawMessage[] | Error> = MESSAGES): ChatServiceClient {
+  return fakeChatsvc(convs, { getMessages: perConversation(byId) });
+}
+
+async function call(chatsvc: ChatServiceClient, args: Record<string, unknown> = {}) {
+  const harness = await createTestHarness((server) => registerChatTools(server, { chatsvc }));
+  try {
+    const result = await harness.callTool('teams_list_chats', args);
+    return { result, data: result.isError ? undefined : (parseToolResult(result) as Record<string, unknown>) };
+  } finally {
+    await harness.close();
+  }
+}
+
+type Row = { id: string; kind: string; title: string; unread: boolean; unread_confirmed: boolean; unread_count?: number };
+
 describe('teams_list_chats', () => {
-  it('says the Chat view may not be open when nothing is rendered', async () => {
-    const client = fakeClient({ listChats: vi.fn().mockResolvedValue([]) });
-    const harness = await createTestHarness((server) => registerChatTools(server, client));
+  it('lists every chat (group, meeting, 1:1) from the API, newest activity first, without channels', async () => {
+    const { data } = await call(fakeChatsvc(CONVS));
+    const chats = data?.chats as Row[];
 
-    const data = parseToolResult(await harness.callTool('teams_list_chats')) as Record<string, unknown>;
-
-    expect(data.rows).toEqual([]);
-    expect(String(data.empty_hint)).toMatch(/Chat view/);
-    await harness.close();
+    expect(chats.map((c) => c.id)).toEqual([GROUP, MEETING, DM]);
+    expect(chats.map((c) => c.kind)).toEqual(['group', 'meeting', 'oneOnOne']);
+    expect(chats.find((c) => c.id === DM)?.title).toBe('Pat Example');
+    expect(chats.map((c) => c.unread)).toEqual([true, false, true]);
   });
 
-  it('adds no empty_hint when rows were read', async () => {
-    const client = fakeClient({ listChats: vi.fn().mockResolvedValue([{ title: 'Standup' }]) });
-    const harness = await createTestHarness((server) => registerChatTools(server, client));
+  it('marks every row\'s unread flag as an unconfirmed hint without unread_only, and reads no messages', async () => {
+    const chatsvc = chatsvcWith();
+    const { data } = await call(chatsvc);
 
-    const data = parseToolResult(await harness.callTool('teams_list_chats')) as Record<string, unknown>;
-
-    expect(data).not.toHaveProperty('empty_hint');
-    await harness.close();
+    expect((data?.chats as Row[]).every((c) => c.unread_confirmed === false)).toBe(true);
+    expect((data?.chats as Row[]).some((c) => 'unread_count' in c)).toBe(false);
+    expect(data).not.toHaveProperty('skipped_unreachable');
+    expect(chatsvc.getMessages).not.toHaveBeenCalled();
   });
 
-  it('returns the chats from the client', async () => {
-    const client = fakeClient({
-      listChats: vi.fn().mockResolvedValue([
-        { title: 'Standup', preview: 'hi', time: '9:00 AM', conversationKey: 'k', itemType: 'chat' },
-      ]),
+  it('keeps only chats a read confirms unread with unread_only, with their unread_count', async () => {
+    const chatsvc = chatsvcWith();
+    const { data } = await call(chatsvc, { unread_only: true });
+    const chats = data?.chats as Row[];
+
+    expect(chats.map((c) => c.id)).toEqual([GROUP, DM]);
+    expect(chats.map((c) => c.unread_count)).toEqual([1, 2]);
+    expect(chats.every((c) => c.unread && c.unread_confirmed)).toBe(true);
+    expect(data?.skipped_unreachable).toBe(0);
+    // Only the candidates are read, each down to its own horizon, one small page at most.
+    const calls = vi.mocked(chatsvc.getMessages).mock.calls;
+    expect(calls.map((c) => c[0]).sort()).toEqual([DM, GROUP].sort());
+    expect(calls.every((c) => (c[1] as GetMessagesOptions).max === 50)).toBe(true);
+    expect((calls[0][1] as GetMessagesOptions).stopAt?.(rawMsg(T0))).toBe(true);
+  });
+
+  it('drops a recording-only meeting chat whose lastimreceivedtime equals the recording (live fact)', async () => {
+    const REC = '19:meeting_rec0001@thread.v2';
+    const recorded = rawConv(REC, {
+      topic: 'Recorded sync',
+      at: T0 + 50 * MIN,
+      horizon: T0 + 45 * MIN,
+      lastIm: T0 + 50 * MIN,
+      type: 'RichText/Media_CallRecording',
     });
-    const harness = await createTestHarness((server) => registerChatTools(server, client));
+    const msgs = {
+      ...MESSAGES,
+      [REC]: [
+        rawMsg(T0 + 45 * MIN, { conv: REC }),
+        rawMsg(T0 + 48 * MIN, { conv: REC, type: 'Event/Call' }),
+        rawMsg(T0 + 50 * MIN, { conv: REC, type: 'RichText/Media_CallRecording' }),
+      ],
+    };
+    const chatsvc = chatsvcWith([...CONVS, recorded], msgs);
+    const plain = await call(chatsvc);
+    const { data } = await call(chatsvc, { unread_only: true });
 
-    const result = await harness.callTool('teams_list_chats');
-    const data = (parseToolResult(result) as { rows: unknown }).rows;
-
-    expect(data).toEqual([
-      { title: 'Standup', preview: 'hi', time: '9:00 AM', conversationKey: 'k', itemType: 'chat' },
-    ]);
-    await harness.close();
+    // The listing alone flags it — a hint only.
+    expect((plain.data?.chats as Row[]).find((c) => c.id === REC)).toMatchObject({ unread: true, unread_confirmed: false });
+    expect((data?.chats as Row[]).map((c) => c.id)).toEqual([GROUP, DM]);
   });
 
-  it('surfaces a no-tab failure with an actionable hint', async () => {
-    const client = fakeClient({
-      listChats: vi.fn().mockRejectedValue(new Error('could not reach a signed-in Teams tab on any of […]')),
+  it('drops a chat whose stale lastMessage is real but everything after the horizon is a system event (live fact)', async () => {
+    const STALE = '19:stale0001@thread.v2';
+    const stale = rawConv(STALE, {
+      topic: 'Stale',
+      at: T0 + 25 * MIN,
+      horizon: T0 + 30 * MIN,
+      lastIm: T0 + 35 * MIN,
+      type: 'RichText/Html',
     });
-    const harness = await createTestHarness((server) => registerChatTools(server, client));
+    const msgs = {
+      ...MESSAGES,
+      [STALE]: [
+        rawMsg(T0 + 25 * MIN, { conv: STALE, type: 'RichText/Html' }),
+        rawMsg(T0 + 30 * MIN, { conv: STALE }),
+        rawMsg(T0 + 33 * MIN, { conv: STALE, type: 'Event/Call' }),
+        rawMsg(T0 + 35 * MIN, { conv: STALE, type: 'ThreadActivity/DeleteMember' }),
+      ],
+    };
+    const { data } = await call(chatsvcWith([...CONVS, stale], msgs), { unread_only: true });
 
-    const result = await harness.callTool('teams_list_chats');
-
-    expect(result.isError).toBe(true);
-    const text = (result.content?.[0] as { text?: string })?.text ?? '';
-    expect(text).toMatch(/signed-in Teams tab/i);
-    expect(text).toMatch(/teams.cloud.microsoft/i);
-    await harness.close();
-  });
-});
-
-describe('teams_get_open_chat_messages', () => {
-  it('returns messages from the client', async () => {
-    const client = fakeClient({
-      getOpenChatMessages: vi.fn().mockResolvedValue([
-        { sender: 'Alice', time: '2026-09-21T10:00:00.000Z', messageId: 'timestamp-1', text: 'hi' },
-      ]),
-    });
-    const harness = await createTestHarness((server) => registerChatTools(server, client));
-
-    const result = await harness.callTool('teams_get_open_chat_messages');
-    const data = (parseToolResult(result) as { messages: unknown }).messages;
-
-    expect(data).toEqual([
-      { sender: 'Alice', time: '2026-09-21T10:00:00.000Z', messageId: 'timestamp-1', text: 'hi' },
-    ]);
-    await harness.close();
+    expect((data?.chats as Row[]).map((c) => c.id)).toEqual([GROUP, DM]);
   });
 
-  it('says which conversation the messages came from', async () => {
-    const client = fakeClient({
-      getOpenChatMessages: vi.fn().mockResolvedValue([{ sender: 'Bob', text: 'hi' }]),
-      getSelectedConversations: vi.fn().mockResolvedValue([{ title: 'Bob Smith', conversationKey: '19:abc@thread.v2', itemType: 'chat' }]),
-    });
-    const harness = await createTestHarness((server) => registerChatTools(server, client));
+  it('confirms a never-opened chat (no read horizon) holding a real message from someone else', async () => {
+    const NEW = '19:meeting_new0001@thread.v2';
+    const never = rawConv(NEW, { topic: 'Never opened', at: T0 + 60 * MIN, type: 'Event/Call' });
+    delete never.properties!.consumptionhorizon;
+    const msgs = {
+      ...MESSAGES,
+      [NEW]: [
+        rawMsg(T0 + 55 * MIN, { conv: NEW, type: 'ThreadActivity/AddMember' }),
+        rawMsg(T0 + 58 * MIN, { conv: NEW, text: 'welcome' }),
+        rawMsg(T0 + 60 * MIN, { conv: NEW, type: 'Event/Call' }),
+      ],
+    };
+    const { data } = await call(chatsvcWith([...CONVS, never], msgs), { unread_only: true });
 
-    const data = parseToolResult(await harness.callTool('teams_get_open_chat_messages')) as Record<string, unknown>;
-
-    expect(data.conversation).toEqual({ title: 'Bob Smith', conversationKey: '19:abc@thread.v2', itemType: 'chat' });
-    expect(String(data.conversation_check)).toMatch(/Bob Smith/);
-    expect(String(data.conversation_check)).toMatch(/confirm/i);
-    await harness.close();
+    expect((data?.chats as Row[]).map((c) => c.id)).toEqual([NEW, GROUP, DM]);
+    expect((data?.chats as Row[])[0]).toMatchObject({ unread_count: 1, unread_confirmed: true });
   });
 
-  it('warns when it cannot identify the open conversation', async () => {
-    const client = fakeClient({
-      getOpenChatMessages: vi.fn().mockResolvedValue([{ sender: 'Bob', text: 'hi' }]),
-      getSelectedConversations: vi.fn().mockResolvedValue([]),
-    });
-    const harness = await createTestHarness((server) => registerChatTools(server, client));
+  it('drops a never-opened chat holding only system events and the user\'s own messages', async () => {
+    const NEW = '19:meeting_new0002@thread.v2';
+    const never = rawConv(NEW, { topic: 'Never opened', at: T0 + 60 * MIN, type: 'Event/Call' });
+    delete never.properties!.consumptionhorizon;
+    const msgs = {
+      ...MESSAGES,
+      [NEW]: [rawMsg(T0 + 58 * MIN, { conv: NEW, fromMe: true }), rawMsg(T0 + 60 * MIN, { conv: NEW, type: 'Event/Call' })],
+    };
+    const { data } = await call(chatsvcWith([...CONVS, never], msgs), { unread_only: true });
 
-    const data = parseToolResult(await harness.callTool('teams_get_open_chat_messages')) as Record<string, unknown>;
-
-    expect(data.conversation).toBeNull();
-    expect(String(data.conversation_check)).toMatch(/could not identify/i);
-    expect(data.messages).toEqual([{ sender: 'Bob', text: 'hi' }]);
-    await harness.close();
+    expect((data?.chats as Row[]).map((c) => c.id)).toEqual([GROUP, DM]);
   });
 
-  it('does not report a selected channel row as the open chat', async () => {
-    const client = fakeClient({
-      getOpenChatMessages: vi.fn().mockResolvedValue([{ sender: 'Bob', text: 'hi' }]),
-      getSelectedConversations: vi
-        .fn()
-        .mockResolvedValue([{ title: 'General', conversationKey: '19:def@thread.tacv2', itemType: 'channel' }]),
+  it('skips a candidate that answers 404 or 403 silently, counting it in skipped_unreachable', async () => {
+    const gone = new McpToolError('Teams chat service returned HTTP 404.', { status: 404, kind: 'http' });
+    const denied = new McpToolError('Teams chat service returned HTTP 403.', { status: 403, kind: 'http' });
+    const { result, data } = await call(chatsvcWith(CONVS, { ...MESSAGES, [GROUP]: gone, [DM]: denied }), {
+      unread_only: true,
     });
-    const harness = await createTestHarness((server) => registerChatTools(server, client));
-
-    const data = parseToolResult(await harness.callTool('teams_get_open_chat_messages')) as Record<string, unknown>;
-
-    expect(data.conversation).toBeNull();
-    expect(String(data.conversation_check)).toMatch(/could not identify/i);
-    expect(String(data.conversation_check)).not.toMatch(/General/);
-    await harness.close();
-  });
-
-  it('picks the chat row when a channel row is also marked selected', async () => {
-    const client = fakeClient({
-      getSelectedConversations: vi.fn().mockResolvedValue([
-        { title: 'General', conversationKey: '19:def@thread.tacv2', itemType: 'channel' },
-        { title: 'Bob Smith', conversationKey: '19:abc@thread.v2', itemType: 'chat' },
-      ]),
-    });
-    const harness = await createTestHarness((server) => registerChatTools(server, client));
-
-    const data = parseToolResult(await harness.callTool('teams_get_open_chat_messages')) as Record<string, unknown>;
-
-    expect(data.conversation).toEqual({ title: 'Bob Smith', conversationKey: '19:abc@thread.v2', itemType: 'chat' });
-    expect(String(data.conversation_check)).toMatch(/Bob Smith/);
-    await harness.close();
-  });
-
-  it('cannot identify the chat when several chat rows are marked selected', async () => {
-    const client = fakeClient({
-      getSelectedConversations: vi.fn().mockResolvedValue([
-        { title: 'Alice', conversationKey: '19:a@thread.v2', itemType: 'chat' },
-        { title: 'Bob Smith', conversationKey: '19:abc@thread.v2', itemType: 'chat' },
-      ]),
-    });
-    const harness = await createTestHarness((server) => registerChatTools(server, client));
-
-    const data = parseToolResult(await harness.callTool('teams_get_open_chat_messages')) as Record<string, unknown>;
-
-    expect(data.conversation).toBeNull();
-    expect(String(data.conversation_check)).toMatch(/could not identify/i);
-    await harness.close();
-  });
-
-  it('cannot identify the chat when the selected row carries no itemType', async () => {
-    const client = fakeClient({
-      getSelectedConversations: vi.fn().mockResolvedValue([{ title: 'Bob Smith', conversationKey: '19:abc@thread.v2' }]),
-    });
-    const harness = await createTestHarness((server) => registerChatTools(server, client));
-
-    const data = parseToolResult(await harness.callTool('teams_get_open_chat_messages')) as Record<string, unknown>;
-
-    expect(data.conversation).toBeNull();
-    expect(String(data.conversation_check)).toMatch(/could not identify/i);
-    await harness.close();
-  });
-
-  it('still returns the messages when reading the conversation identity fails', async () => {
-    const client = fakeClient({
-      getOpenChatMessages: vi.fn().mockResolvedValue([{ sender: 'Bob', text: 'hi' }]),
-      getSelectedConversations: vi.fn().mockRejectedValue(new Error('read_dom_list name not in declared set: openConversation')),
-    });
-    const harness = await createTestHarness((server) => registerChatTools(server, client));
-
-    const result = await harness.callTool('teams_get_open_chat_messages');
-    const data = parseToolResult(result) as Record<string, unknown>;
 
     expect(result.isError).toBeFalsy();
-    expect(data.conversation).toBeNull();
-    expect(data.messages).toEqual([{ sender: 'Bob', text: 'hi' }]);
-    await harness.close();
+    expect(data).toMatchObject({ chats: [], skipped_unreachable: 2 });
+    expect(data).not.toHaveProperty('errors');
   });
 
-  it('tells the model to confirm the conversation and warns about multiple Teams tabs', async () => {
-    const harness = await createTestHarness((server) => registerChatTools(server, fakeClient()));
-    const tool = (await harness.client.listTools()).tools.find((t) => t.name === 'teams_get_open_chat_messages');
+  it('reports a candidate whose read failed otherwise in errors and keeps the rest', async () => {
+    const limited = new McpToolError('Teams chat service is rate-limiting requests (429).', { status: 429 });
+    const { data } = await call(chatsvcWith(CONVS, { ...MESSAGES, [GROUP]: limited }), { unread_only: true });
 
-    expect(tool?.description).toMatch(/confirm/i);
-    expect(tool?.description).toMatch(/more than one .*tab/i);
-    await harness.close();
+    expect((data?.chats as Row[]).map((c) => c.id)).toEqual([DM]);
+    expect(data?.errors).toEqual([
+      { conversation: { id: GROUP, title: 'Project Falcon' }, error: expect.stringMatching(/rate-limiting/) },
+    ]);
   });
 
-  it('surfaces a not-yet-approved bridge failure with an actionable hint', async () => {
-    const client = fakeClient({
-      getOpenChatMessages: vi
-        .fn()
-        .mockRejectedValue(new Error('read_dom_list name not in declared set: chatMessages')),
-    });
-    const harness = await createTestHarness((server) => registerChatTools(server, client));
-
-    const result = await harness.callTool('teams_get_open_chat_messages');
+  it('fails the call when every candidate read failed', async () => {
+    const limited = new McpToolError('Teams chat service is rate-limiting requests (429).', { status: 429 });
+    const { result } = await call(chatsvcWith(CONVS, { [GROUP]: limited, [DM]: limited }), { unread_only: true });
 
     expect(result.isError).toBe(true);
-    const text = (result.content?.[0] as { text?: string })?.text ?? '';
-    expect(text).toMatch(/ContextMint Bridge/i);
-    await harness.close();
+    expect((result.content?.[0] as { text?: string })?.text).toMatch(/rate-limiting/);
   });
 
-  it('takes only optional trimming arguments', async () => {
-    const client = fakeClient();
-    const harness = await createTestHarness((server) => registerChatTools(server, client));
+  it('says unread_count is a lower bound when more than one page past the horizon exists', async () => {
+    const busy = Array.from({ length: 60 }, (_, i) => rawMsg(T0 + (i + 1) * 1000));
+    const { data } = await call(chatsvcWith(CONVS, { ...MESSAGES, [GROUP]: busy }), { unread_only: true });
+    const group = (data?.chats as (Row & { unread_count_exact?: boolean })[]).find((c) => c.id === GROUP);
 
-    const tool = (await harness.client.listTools()).tools.find((t) => t.name === 'teams_get_open_chat_messages');
-    const schema = tool?.inputSchema as { properties?: Record<string, unknown>; required?: string[] };
-
-    expect(Object.keys(schema.properties ?? {}).sort()).toEqual(['limit', 'since']);
-    expect(schema.required ?? []).toEqual([]);
-    await harness.close();
-  });
-});
-
-const messages = (n: number) =>
-  Array.from({ length: n }, (_, i) => ({
-    sender: 'Alice',
-    time: new Date(Date.UTC(2026, 8, 1, 0, i)).toISOString(),
-    messageId: `m${i}`,
-    text: `msg ${i}`,
-  }));
-
-describe('teams_get_open_chat_messages trimming', () => {
-  it('returns the newest 50 messages by default and says how many were left out', async () => {
-    const client = fakeClient({ getOpenChatMessages: vi.fn().mockResolvedValue(messages(60)) });
-    const harness = await createTestHarness((server) => registerChatTools(server, client));
-
-    const data = parseToolResult(await harness.callTool('teams_get_open_chat_messages')) as Record<string, unknown>;
-    const rows = data.messages as { messageId: string }[];
-
-    expect(rows).toHaveLength(50);
-    expect(rows[0].messageId).toBe('m10');
-    expect(rows[49].messageId).toBe('m59');
-    expect(data.truncated).toMatchObject({ total: 60, returned: 50 });
-    await harness.close();
+    expect(group).toMatchObject({ unread_count: 50, unread_count_exact: false });
   });
 
-  it('honours an explicit limit', async () => {
-    const client = fakeClient({ getOpenChatMessages: vi.fn().mockResolvedValue(messages(10)) });
-    const harness = await createTestHarness((server) => registerChatTools(server, client));
+  it('filters by a case-insensitive title substring with query', async () => {
+    const { data } = await call(fakeChatsvc(CONVS), { query: 'falcon' });
 
-    const data = parseToolResult(
-      await harness.callTool('teams_get_open_chat_messages', { limit: 3 }),
-    ) as Record<string, unknown>;
+    expect((data?.chats as Row[]).map((c) => c.id)).toEqual([GROUP]);
+  });
 
-    expect((data.messages as { messageId: string }[]).map((m) => m.messageId)).toEqual(['m7', 'm8', 'm9']);
-    await harness.close();
+  it('matches an exact conversation id with query', async () => {
+    const { data } = await call(fakeChatsvc(CONVS), { query: MEETING });
+
+    expect((data?.chats as Row[]).map((c) => c.id)).toEqual([MEETING]);
+  });
+
+  it('sorts a chat with no messages last', async () => {
+    const empty = { id: '19:empty0001@thread.v2', threadProperties: { topic: 'Quiet' } };
+    const { data } = await call(fakeChatsvc([empty, ...CONVS]));
+
+    expect((data?.chats as Row[]).at(-1)?.id).toBe('19:empty0001@thread.v2');
+  });
+
+  it('returns the 50 most recent by default and honours limit, saying what was left out', async () => {
+    const many = Array.from({ length: 60 }, (_, i) => rawConv(`19:g${i}@thread.v2`, { topic: `chat ${i}`, at: T0 + i * MIN }));
+
+    const all = (await call(fakeChatsvc(many))).data!;
+    const two = (await call(fakeChatsvc(many), { limit: 2 })).data!;
+
+    expect(all.chats).toHaveLength(50);
+    expect((all.chats as Row[])[0].title).toBe('chat 59');
+    expect(all.truncated).toMatchObject({ total: 60, returned: 50 });
+    expect((two.chats as Row[]).map((c) => c.title)).toEqual(['chat 59', 'chat 58']);
   });
 
   it('adds no truncated field when everything fits', async () => {
-    const client = fakeClient({ getOpenChatMessages: vi.fn().mockResolvedValue(messages(3)) });
-    const harness = await createTestHarness((server) => registerChatTools(server, client));
+    const { data } = await call(fakeChatsvc(CONVS));
 
-    const data = parseToolResult(await harness.callTool('teams_get_open_chat_messages')) as Record<string, unknown>;
-
-    expect(data.messages).toHaveLength(3);
     expect(data).not.toHaveProperty('truncated');
-    await harness.close();
   });
 
-  it('drops messages older than since, keeping ones whose time cannot be read', async () => {
-    const rows = [...messages(5), { sender: 'Bob', text: 'no time' }];
-    const client = fakeClient({ getOpenChatMessages: vi.fn().mockResolvedValue(rows) });
-    const harness = await createTestHarness((server) => registerChatTools(server, client));
+  it('returns its result inside the untrusted-data envelope', async () => {
+    const { data } = await call(fakeChatsvc(CONVS));
 
-    const data = parseToolResult(
-      await harness.callTool('teams_get_open_chat_messages', { since: '2026-09-01T00:03:00Z' }),
-    ) as Record<string, unknown>;
-
-    expect((data.messages as { text: string }[]).map((m) => m.text)).toEqual(['msg 3', 'msg 4', 'no time']);
-    await harness.close();
+    expect(data?.untrusted_content).toBe(true);
   });
 
-  it('rejects a since that is not a date-time', async () => {
-    const harness = await createTestHarness((server) => registerChatTools(server, fakeClient()));
+  it('turns a token-capture failure into the open-a-Teams-tab hint', async () => {
+    const chatsvc = fakeChatsvc([], {
+      listConversations: vi
+        .fn()
+        .mockRejectedValue(new Error('could not capture a Teams token from the browser (timed out). Open a signed-in …')),
+    });
 
-    const result = await harness.callTool('teams_get_open_chat_messages', { since: 'yesterday' });
+    const { result } = await call(chatsvc);
 
     expect(result.isError).toBe(true);
+    const text = (result.content?.[0] as { text?: string })?.text ?? '';
+    expect(text).toMatch(/teams\.cloud\.microsoft/i);
+    expect(text).toMatch(/click into any chat/i);
+  });
+
+  it('passes an already-actionable API error through unchanged', async () => {
+    const chatsvc = fakeChatsvc([], {
+      listConversations: vi.fn().mockRejectedValue(
+        new McpToolError('Teams chat service is rate-limiting requests (429).', { status: 429, hint: 'Wait a minute before retrying.' }),
+      ),
+    });
+
+    const { result } = await call(chatsvc);
+
+    const text = (result.content?.[0] as { text?: string })?.text ?? '';
+    expect(text).toMatch(/rate-limiting/);
+    expect(text).toMatch(/Wait a minute/);
+  });
+
+  describe('since_days (with unread_only)', () => {
+    const OLD = '19:old0001@thread.v2';
+    const DORMANT = '19:dormant0001@thread.v2';
+    const old = rawConv(OLD, { topic: 'Old news', at: NOW - 20 * DAY, horizon: NOW - 30 * DAY, lastIm: NOW - 1 * MIN });
+    const dormant = rawConv(DORMANT, { topic: 'Dormant', at: NOW - 400 * DAY, horizon: NOW - 500 * DAY });
+    const msgs = {
+      ...MESSAGES,
+      [OLD]: [rawMsg(NOW - 20 * DAY, { conv: OLD }), rawMsg(NOW - 1 * MIN, { conv: OLD, type: 'Event/Call' })],
+      [DORMANT]: [rawMsg(NOW - 400 * DAY, { conv: DORMANT })],
+    };
+    const convs = [...CONVS, old, dormant];
+
+    it('defaults to 14 days, counting what it left out and never reading a dormant chat', async () => {
+      const chatsvc = chatsvcWith(convs, msgs);
+      const { data } = await call(chatsvc, { unread_only: true });
+
+      expect((data?.chats as Row[]).map((c) => c.id)).toEqual([GROUP, DM]);
+      expect(data?.older_unread_skipped).toBe(2);
+      expect(String(data?.older_unread_hint)).toMatch(/since_days/);
+      expect(vi.mocked(chatsvc.getMessages).mock.calls.map((c) => c[0])).not.toContain(DORMANT);
+    });
+
+    it('a larger since_days brings older unread chats back', async () => {
+      const { data } = await call(chatsvcWith(convs, msgs), { unread_only: true, since_days: 3650 });
+
+      expect((data?.chats as Row[]).map((c) => c.id)).toEqual([GROUP, DM, OLD, DORMANT]);
+      expect(data?.older_unread_skipped).toBe(0);
+      expect(data).not.toHaveProperty('older_unread_hint');
+    });
+
+    it('changes nothing without unread_only', async () => {
+      const chatsvc = chatsvcWith(convs, msgs);
+      const { data } = await call(chatsvc, { since_days: 1 });
+
+      expect((data?.chats as Row[]).map((c) => c.id)).toContain(DORMANT);
+      expect(data).not.toHaveProperty('older_unread_skipped');
+      expect(chatsvc.getMessages).not.toHaveBeenCalled();
+    });
+  });
+
+  it('says it covers every chat and that ids feed teams_read_conversation', async () => {
+    const harness = await createTestHarness((server) => registerChatTools(server, { chatsvc: fakeChatsvc() }));
+    const tool = (await harness.client.listTools()).tools.find((t) => t.name === 'teams_list_chats');
+
+    expect(tool?.description).toMatch(/every chat/i);
+    expect(tool?.description).toMatch(/teams_read_conversation/);
+    expect(tool?.description).toMatch(/unread_confirmed: false/);
+    expect(tool?.description).toMatch(/teams_get_unread/);
+    expect(tool?.annotations?.readOnlyHint).toBe(true);
+    expect(Object.keys((tool?.inputSchema as { properties?: object }).properties ?? {}).sort()).toEqual([
+      'limit',
+      'query',
+      'since_days',
+      'unread_only',
+    ]);
+    expect(tool?.description).toMatch(/since_days/);
     await harness.close();
   });
 
-  it('rejects a limit above the 200 rows the tab can return', async () => {
-    const harness = await createTestHarness((server) => registerChatTools(server, fakeClient()));
+  it('registers only teams_list_chats (the open-chat DOM reader is gone)', async () => {
+    const harness = await createTestHarness((server) => registerChatTools(server, { chatsvc: fakeChatsvc() }));
 
-    const result = await harness.callTool('teams_get_open_chat_messages', { limit: 201 });
-
-    expect(result.isError).toBe(true);
-    await harness.close();
-  });
-});
-
-describe('teams_list_chats trimming', () => {
-  it('returns the first (most recent) 50 sidebar rows by default, and honours limit', async () => {
-    const rows = Array.from({ length: 60 }, (_, i) => ({ title: `chat ${i}` }));
-    const client = fakeClient({ listChats: vi.fn().mockResolvedValue(rows) });
-    const harness = await createTestHarness((server) => registerChatTools(server, client));
-
-    const all = parseToolResult(await harness.callTool('teams_list_chats')) as Record<string, unknown>;
-    const two = parseToolResult(await harness.callTool('teams_list_chats', { limit: 2 })) as Record<string, unknown>;
-
-    expect((all.rows as unknown[]).length).toBe(50);
-    expect((all.rows as { title: string }[])[0].title).toBe('chat 0');
-    expect(all.truncated).toMatchObject({ total: 60, returned: 50 });
-    expect(two.rows).toEqual([{ title: 'chat 0' }, { title: 'chat 1' }]);
-    await harness.close();
-  });
-});
-
-describe('tool annotations', () => {
-  it('both chat tools are read-only', async () => {
-    const client = fakeClient();
-    const harness = await createTestHarness((server) => registerChatTools(server, client));
-    const tools = (await harness.client.listTools()).tools;
-
-    for (const name of ['teams_list_chats', 'teams_get_open_chat_messages']) {
-      expect(tools.find((t) => t.name === name)?.annotations?.readOnlyHint, name).toBe(true);
-    }
+    expect((await harness.client.listTools()).tools.map((t) => t.name)).toEqual(['teams_list_chats']);
     await harness.close();
   });
 });

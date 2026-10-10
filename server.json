@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.chrischall/microsoft-teams-mcp",
-  "description": "Microsoft Teams for Claude — read your chats, teams, channels, and open messages, via your browser",
+  "description": "Microsoft Teams for Claude — read any chat or channel and its unread messages; send and react",
   "repository": {
     "url": "https://github.com/chrischall/microsoft-teams-mcp",
     "source": "github"
@@ -36,6 +36,83 @@
           "isRequired": false,
           "format": "string",
           "isSecret": false
+        },
+        {
+          "name": "TEAMS_ACCESS_TOKEN",
+          "description": "A pre-obtained Teams chat-service bearer token (the JWT itself). Leave blank to capture one from your signed-in Teams browser tab via the ContextMint Bridge extension.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
+        },
+        {
+          "name": "TEAMS_DISABLE_FETCHPROXY",
+          "description": "Set to true to never capture a token from the browser; then TEAMS_ACCESS_TOKEN is required. Leave blank.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "TEAMS_CHATSVC_REGION",
+          "description": "The Teams chat-service region in the API path. Defaults to amer. Leave blank unless your tenant lives elsewhere.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "TEAMS_CHATSVC_BASE",
+          "description": "Full override for the chat-service API base (default https://teams.cloud.microsoft/api/chatsvc/<region>/v1). Leave blank.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "TEAMS_CAPTURE_TIMEOUT",
+          "description": "Seconds to wait for the Teams tab to issue a chat-service request when capturing a token. Defaults to 30.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "TEAMS_TOKEN_CACHE",
+          "description": "Set to false to keep the captured token in memory only. Defaults to on: it is cached so a restart within its ~23h lifetime needs no browser.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "TEAMS_TOKEN_FILE",
+          "description": "Where the captured token is cached. Defaults to ~/.microsoft-teams-mcp/token.json.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "MCP_CONFIRM_MODE",
+          "description": "What teams_send_message and teams_react do on a client that cannot show a confirmation prompt (claude.ai, Claude Desktop): \"ask-user\" (default: the first call returns a preview and a confirmToken, and the model must get your approval in chat before using it), \"auto\" (the model may use the token after reviewing the preview itself) or \"refuse\". An unrecognised value is treated as refuse.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "MCP_CONFIRM_ELICITATION",
+          "description": "\"off\" never shows a confirmation prompt, so every client gets the MCP_CONFIRM_MODE flow. Set it for a client that says it can show prompts but never does. Defaults to on.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "MCP_CONFIRM_TTL_SECONDS",
+          "description": "How long a confirmToken stays valid, in seconds. Defaults to 600.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "MCP_CONFIRM_SECRET",
+          "description": "Signing key for confirmTokens. Random per process by default; set it only if tokens must survive a server restart.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
         }
       ]
     }

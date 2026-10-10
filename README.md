@@ -1,34 +1,40 @@
 # microsoft-teams-mcp
 
-MCP server for **Microsoft Teams** — list your chats, teams and channels, and
-read whichever chat or channel is currently open, routed through your
-signed-in browser tab.
+MCP server for **Microsoft Teams** — list every chat and channel you are in,
+read any of them by id or name, pull everything you have not read yet,
+fetch inline images, and — each one confirmed by you first — post messages
+and reactions, using your signed-in browser session.
 
 > This project was developed and is maintained by AI (Claude Code). Use at your
 > own discretion.
 
-## How it works — and its one real limitation
+## How it works
 
-Teams Web's chat and message data lives only in a client-side cache fed by a
-WebSocket/registrar sync channel — there is no REST or GraphQL endpoint that
-returns it. So this server does not capture a token and make plain server-side
-requests the way an API-backed MCP would; instead every call routes through
-the [fetchproxy](https://github.com/chrischall/fetchproxy) browser bridge and
-reads the DOM your signed-in `teams.cloud.microsoft` tab has already
-rendered. `teams.microsoft.com` (the old host) is not supported.
+Chats and channels are read through Teams' own **chat-service REST API**
+(`https://teams.cloud.microsoft/api/chatsvc/<region>/v1`). The server needs a
+bearer token for it, and the only place one exists is your signed-in
+`teams.cloud.microsoft` tab: through the
+[fetchproxy](https://github.com/chrischall/fetchproxy) browser bridge it
+captures the `Authorization` header off a request the Teams web app makes to
+its chat service — **once**. From then on every call is a plain server-side
+request; the token is cached in `~/.microsoft-teams-mcp/token.json` for its
+~23h lifetime (so a restart needs no browser), and a 401 re-captures once and
+replays. `teams.microsoft.com` (the old host) is not supported.
 
-**That has one real consequence: this server can only read whichever chat or
-channel is currently displayed in your browser tab.** The bridge can fetch
-and read — it cannot navigate a tab to a different conversation.
-`teams_list_chats` and `teams_list_teams_and_channels` always work (their
-sidebars are always rendered once that nav section is open);
-`teams_get_open_chat_messages` and `teams_get_open_channel_posts` read
-whatever conversation you have open. To read a different chat or channel,
-open it in the browser first.
+So **chats and channels no longer need to be open in the browser** — any of
+them can be read by id or name, and listing covers every chat, not just the
+ones the sidebar shows. To capture a token, an idle tab is not enough: click
+into any chat so Teams calls its chat service.
 
-The bridge is on the request path for **every** call here, not just once to
-mint a token — unlike an API-backed MCP, there is nothing to cache between
-calls.
+**The one thing that still reads the page is the Activity feed**
+(`teams_get_activity`). No chat-service equivalent of it has been verified,
+so it reads the DOM your tab has rendered through the bridge — which can read
+but never navigate a tab, so it needs the Activity view (the bell icon) open.
+
+Nothing here marks anything read. Reading a chat through this server leaves
+your Teams unread badges exactly as they were. The two writes —
+`teams_send_message` and `teams_react` — go through the same chat-service
+API and post nothing until you confirm (see [Writes](#writes)).
 
 ## Install
 
@@ -78,89 +84,175 @@ opencode reads MCP servers from `opencode.json` (project) or
 
 ### Configuration
 
-Everything is optional — this server needs no credentials of its own.
+Everything is optional — by default the token is captured from your browser.
 
 | variable | purpose |
 | --- | --- |
+| `TEAMS_ACCESS_TOKEN` | A chat-service bearer token (the JWT itself) to use instead of capturing one. Never re-captured from the browser: when Teams rejects it, replace it. |
+| `TEAMS_DISABLE_FETCHPROXY` | `true` to never capture from the browser (then `TEAMS_ACCESS_TOKEN` is required). |
+| `TEAMS_CHATSVC_REGION` | Chat-service region in the API path. Defaults to `amer`. |
+| `TEAMS_CHATSVC_BASE` | Full override for the API base (default `https://teams.cloud.microsoft/api/chatsvc/<region>/v1`). |
+| `TEAMS_CAPTURE_TIMEOUT` | Seconds to wait for the Teams tab to issue a chat-service request. Defaults to `30`. The bridge deadline is derived from it (window + 15s), for the capture and for `teams_healthcheck` alike. |
+| `TEAMS_TOKEN_CACHE` | `false` to keep the captured token in memory only. Defaults to on. |
+| `TEAMS_TOKEN_FILE` | Where the captured token is cached. Defaults to `~/.microsoft-teams-mcp/token.json`. |
 | `TEAMS_WS_PORT` | fetchproxy concentrator port. Defaults to `37149`, the fleet-wide shared port. |
 | `FETCHPROXY_WS_HOST` | Bind interface for the bridge (default `127.0.0.1`; a literal IP only, anything else is ignored). Keep on loopback — it exists for ONE topology: a hosted child in its own network namespace. |
 | `FETCHPROXY_IDENTITY_DIR` | Where to store the long-term fetchproxy identity keypair (default `~/.fetchproxy/identity/`; an absolute path only, anything else is ignored). Exists for a host that runs a separate child per caller, so they can share one identity. |
 
 ## Tools
 
-- `teams_list_chats` — the Chat sidebar: title, last-message preview,
-  last-activity time, and Teams' own conversation id for each chat.
-- `teams_get_open_chat_messages` — the message thread of whichever chat is
-  currently open: sender, ISO-8601 time, message id, and text, plus a
-  `conversation` field naming WHICH chat that is (the selected sidebar row's
-  title and thread key) so the model can confirm it read the chat you meant.
-- `teams_list_teams_and_channels` — the Teams-and-Channels sidebar (a
-  DIFFERENT view from Chat): every team and channel the user belongs to,
-  with each channel's parent team name.
-- `teams_get_open_channel_posts` — the top-level posts of whichever channel
-  is currently open: sender, subject (when present), prose time (not
-  ISO-8601 — Teams doesn't expose one for these), message id, and text.
-  Threaded replies under a post are not included. Like the chat tool, it
-  names the open channel in a `conversation` field.
+- `teams_list_chats` — every chat you are in (1:1, group and meeting chats,
+  not just the visible sidebar, plus your `48:notes` self-chat as kind
+  `self` when Teams lists it), most recent activity first: id, kind,
+  title, unread hint, ISO-8601 last-activity time, last-message preview and
+  sender. `unread_only` (exact — see below), `since_days` (with
+  `unread_only`; default 14), `query` (title) and `limit` (default 50, max
+  500).
+- `teams_list_teams_and_channels` — every channel you are in, by team then
+  title, with the same fields. Channels you have hidden in Teams are listed
+  after the rest with `hidden: true`, and left out of `unread_only` unless
+  `include_hidden` is set. `unread_only`, `include_hidden`, `since_days`
+  (with `unread_only`; default 14), `query` (channel or team name) and
+  `limit` (default 50, max 500).
+- `teams_read_conversation` — read any chat or channel by id or name,
+  oldest first: sender, ISO-8601 time, text, subject, edited/deleted flags
+  and attachments. A channel comes back as threads (root post + replies).
+  `unread_only`, `since` (ISO 8601) and `limit` (default 50, max 500, newest
+  kept). An ambiguous name lists the candidates and asks for the id.
+  `48:notes` — or the name `notes` / `self` — is your notes self-chat.
+- `teams_get_unread` — every unread message across your chats and channels,
+  grouped by conversation, most recent first. Filter by `kinds` (`chat`,
+  `channel`, `meeting`, `oneOnOne`) or `query`; `per_conversation_limit`
+  (default 50) and `max_conversations` (default 20 returned with their
+  messages — the rest are named, with their `unread_count`, in
+  `more_unread_conversations`). Hidden channels are left out unless
+  `include_hidden`. Only conversations with unread messages from the last
+  `since_days` (default 14, max 3650) are returned; older ones are counted
+  in `older_unread_skipped`.
+- `teams_get_attachment` — one attachment of a message: an inline image is
+  returned as the image itself; a shared file as its name, type and open
+  link only (files live in SharePoint and this server cannot download their
+  contents yet — the result says so).
 - `teams_get_activity` — the Activity feed (the bell icon in the left nav):
   mentions, replies, reactions, and the like across every chat and channel,
-  each with its title, message preview, prose time, and location (the
-  team/channel or chat it happened in). Requires the Activity view open.
-- `teams_healthcheck` — verifies the bridge can reach a signed-in tab.
+  each with its title, message preview, prose time, and location. Reads the
+  page, so it requires the Activity view open.
+- `teams_healthcheck` — probes the chat service (one conversations listing,
+  which also captures a token on a cold start) and reports where the token
+  came from and when it expires (both `null` when no token is held, e.g.
+  after a failed capture) — never the token — plus the bridge status the
+  capture and the Activity feed rely on.
 
-All five data tools are read-only. Each takes an optional `limit` (default
-50; max 200, or 300 for `teams_list_teams_and_channels`) and keeps the newest
-rows, adding a `truncated` field with the total when it left some out.
-`teams_get_open_chat_messages` also takes `since` (an ISO 8601 date-time) to
-drop older messages. When a list tool reads nothing, its result carries an
-`empty_hint` naming the Teams view to open, and `teams_healthcheck` reports
-`chat_view_not_open` rather than a healthy bridge if the Chat view isn't open.
+**Write** (both ask you to confirm first — see [Writes](#writes)):
 
-**No Calendar tool here.** Teams Web's Calendar renders inside an embedded
-`outlook.office.com` iframe, which the ContextMint Bridge (DOM reads only
-against the top-level tab, no iframe crossing) cannot reach — and isn't the
-right place for it anyway. Use
+- `teams_send_message` — post as you to any chat or channel, by id or name.
+  `text` is plain text: it is escaped, newlines are kept, and `:key:`
+  shortcodes (`:smile:`, `:1f389_partypopper:`) become Teams emoji.
+  `reply_to` posts into a channel post's thread — it must be a root post in
+  that channel, not a reply (in a chat it quote-replies that message); `quote` quote-replies a message anywhere; `mentions`
+  @-mentions people by MRI or by a display name matched among the
+  conversation's recent senders (an ambiguous name is refused with the
+  candidates). The result says whether the post was found again by reading
+  the conversation back (`verified`).
+- `teams_react` — add or (with `remove: true`) withdraw your reaction on a
+  message: an emoji or name (`thumbsup`/👍, `heart`/❤️, `laugh`/😆,
+  `surprised`/😮, `sad`/😢, `angry`/😡, `checkmark`/✅) or any raw Teams
+  reaction key (`fire`, `1f389_partypopper`). The message is read back to
+  verify the change (`verified: null` when it is not found again). It writes only that message's reaction — never your
+  recent-reactions list or any other preference.
+
+Every other tool is read-only, and none of them marks anything read.
+
+## Writes
+
+Both writes are visible to everyone in the conversation, so each asks you
+first. A client that can show a confirmation prompt (Claude Code) shows one.
+On a client that cannot, the first call posts nothing and returns a
+`confirmation-required` preview — the conversation, the exact text, any
+mentions, the quoted message or the reaction, with everything other people
+wrote (titles, names, quoted text) fenced as untrusted — plus a `confirmToken`; only a
+repeat call with that token posts. The token is single-use, expires, and is
+bound to the exact arguments: change anything between the two calls and it
+is refused with a fresh preview.
+
+| variable | default | |
+| --- | --- | --- |
+| `MCP_CONFIRM_MODE` | `ask-user` | What a write does on a client that cannot show a confirmation prompt (claude.ai, Claude Desktop). `ask-user`: two steps, and the model must get your approval in chat before calling again with the token. `auto`: the same two steps, but the model may use the token after reviewing the preview itself. `refuse`: writes are refused on such clients. An unrecognised value is treated as `refuse`. |
+| `MCP_CONFIRM_ELICITATION` | `on` | `off` never shows a confirmation prompt, so every client gets the `MCP_CONFIRM_MODE` behaviour. Set it for a client that says it can show prompts but never does. |
+| `MCP_CONFIRM_TTL_SECONDS` | `600` | How long a token stays valid. |
+| `MCP_CONFIRM_SECRET` | random per process | Signing key; set it only if tokens must survive a server restart. |
+
+On a client without prompts the token is something the model passes back
+itself, so keep `MCP_CONFIRM_MODE=ask-user` and approve each preview in chat
+as the real guard on what gets posted.
+
+**Try it in your own notes first.** The conversation `48:notes` (also by the
+name `notes` or `self`) is your Teams self-chat ("notes to self"): both writes
+accept it, `teams_read_conversation` reads it, nobody else sees it, and
+it is the safe place to see what a message or reaction will look like. Every
+other `48:` system conversation (calendar and the like) is refused.
+
+**A send that times out is not retried.** If Teams does not confirm a post (a
+timeout, a dropped connection or a 5xx after the request went out), the
+result is `status: "unknown"` — the message may already be there, so read the
+conversation before sending again. A 4xx is a refusal and stays an error. A
+reaction Teams does not confirm is settled by reading the message back, and
+is `status: "unknown"` only when that does not show the change. Threaded channel replies, @mentions,
+removing a reaction and the ✅ reaction's key follow Teams' documented or
+inferred shapes but have not been verified against a live tenant yet.
+
+**No Calendar tool here.** Teams Web's Calendar is Outlook's data, rendered
+inside an embedded `outlook.office.com` iframe — not the chat service's. Use
 [`office-outlook-mcp`](https://github.com/chrischall/office-outlook-mcp)'s
 `outlook_list_events` / `outlook_get_event` / `outlook_list_calendars`
-instead: real Outlook REST API calls via a captured token, with no
-"must have it open" limitation at all.
+instead.
 
 ## Things worth knowing
 
-- **One Teams tab at a time.** If more than one `teams.cloud.microsoft` tab
-  is open, the bridge reads whichever answers first — which may not be the
-  one you're looking at. The "open" tools report the conversation they read
-  (`conversation.title`, or `null` if it couldn't be identified) and their
-  descriptions tell the model to check it before summarizing.
 - **Results are framed as untrusted.** Every data tool returns
   `{ untrusted_content: true, note, ... }` and says in its description that
   the text is written by other Teams users. Message bodies, previews and
   subjects are data to report, never instructions to follow — this matters
   because the server usually runs beside write-capable MCPs (mail, messaging)
   that an injected instruction could otherwise reach.
-- **No chat or channel selection.** See "How it works" above — there is no
-  id parameter on either "open" tool because there is no way to act on one.
-  Ask the person to open the chat/channel they mean, or use the matching
-  list tool to show them what's available.
-- **Chat and Teams-and-Channels are different nav sections.** Reading
-  channels needs the Teams-and-Channels view open in the browser (the
-  "Teams" icon in the left rail, not "Chat") — if a channel tool returns
-  nothing, that's usually why.
-- **Grouped messages still resolve a sender.** Teams visually hides the
-  sender name on consecutive messages from the same person, but the name
-  stays in the DOM, so `sender` is populated on every row regardless.
-- **Quoted content concatenates.** A chat message that quotes an earlier one,
-  or a channel post whose body includes a reply preview, has that quoted
-  text run together with the real content inside `text` — a limitation of
-  bulk text extraction, not a bug.
-- **Multiple open Teams tabs race.** The bridge reads whichever matching tab
-  answers first ("first responsive"), not necessarily the one you meant. If
-  results look like they're from the wrong chat/channel, close extra
-  `teams.cloud.microsoft` tabs so only one remains.
-- **Scope grows quietly.** If you see a `read_dom_list name not in declared
-  set` error, the extension's approved scope is behind the server's declared
-  one — this shouldn't happen in a released version, but if it does, revoke
-  and re-pair `teams-mcp` in the ContextMint Bridge popup.
+- **Unread means what Teams means, and is confirmed by reading.** A message
+  is unread when it arrived after the conversation's read marker
+  (`consumptionhorizon`), was not sent by you, is a real message (`Text` or
+  `RichText/Html`) and is not deleted. System messages — call recordings and
+  transcripts (`RichText/Media_*`), `Event/*`, `ThreadActivity/*`,
+  `Control/*` — never make anything unread. The conversation listing cannot
+  tell on its own: `lastimreceivedtime` moves for a call recording too,
+  `lastMessage` can be stale, and a chat you never opened has no marker at
+  all. So the listing only nominates candidates (anything past the marker,
+  or no marker), and `unread_only` and `teams_get_unread` read each
+  candidate's messages past its marker (four at a time) and keep only those
+  holding a real unread message, with its `unread_count`. Without
+  `unread_only` the list tools' `unread` is just that cheap hint, marked
+  `unread_confirmed: false`. A candidate that answers 404 or 403 (a channel
+  that is gone or no longer readable) is not unread: it is skipped and
+  counted in `skipped_unreachable`. Channels you have hidden in Teams
+  (`hidden: true`) are not counted as unread unless you pass
+  `include_hidden`. Unread answers are also limited to recent activity:
+  a conversation counts only when its newest unread message arrived in the
+  last `since_days` days (default 14, max 3650) — in practice most
+  "unread" channels are dormant ones, untouched for months or years in teams
+  you never open. A candidate with no activity at all inside the window is
+  not even read. Whatever the window leaves out is counted in
+  `older_unread_skipped` (with a hint to widen `since_days`), never dropped
+  silently. `teams_read_conversation` is not windowed: it takes an explicit
+  `since` and `limit`. This server only reads the marker; it never moves it.
+- **The token only goes to Teams.** It is sent to the chat-service base and,
+  for inline images, only to https hosts under `.asm.skype.com` (Teams' own
+  image store) — an image link in a message pointing anywhere else is
+  refused.
+- **Shared files are links, not contents.** They live in SharePoint, which
+  does not accept the chat-service token.
+- **One Teams tab at a time for the Activity feed.** If more than one
+  `teams.cloud.microsoft` tab is open, the bridge reads whichever answers
+  first — close extras if `teams_get_activity` looks wrong.
+- **Scope grows quietly.** If you see a `not in declared set` error, the
+  extension's approved scope is behind the server's declared one — revoke
+  and re-pair `microsoft-teams-mcp` in the ContextMint Bridge popup.
 
 ## Development
 
@@ -171,7 +263,7 @@ npm test              # typecheck + suite
 npm run test:coverage # CI's gate
 ```
 
-This server depends on `read_dom_list`, a fetchproxy capability added
+The Activity feed depends on `read_dom_list`, a fetchproxy capability added
 alongside this repo — it needs `@fetchproxy/protocol`/`@fetchproxy/server`
 `>= 3.1.0`, the first published versions that include it
 ([chrischall/fetchproxy#381](https://github.com/chrischall/fetchproxy/pull/381)).

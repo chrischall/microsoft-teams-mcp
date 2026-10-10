@@ -4,7 +4,7 @@
   "name": "microsoft-teams-mcp",
   "display_name": "Microsoft Teams",
   "version": "0.3.0",
-  "description": "Microsoft Teams for Claude — read your chats, teams, channels, and their currently open messages, via your browser",
+  "description": "Microsoft Teams for Claude — read any chat or channel, your unread messages, and their attachments, and send messages and reactions (each confirmed first), via your signed-in browser",
   "author": {
     "name": "Chris Hall",
     "email": "chris.c.hall@gmail.com",
@@ -35,7 +35,18 @@
       "env": {
         "TEAMS_WS_PORT": "${user_config.ws_port}",
         "FETCHPROXY_WS_HOST": "${user_config.fetchproxy_ws_host}",
-        "FETCHPROXY_IDENTITY_DIR": "${user_config.fetchproxy_identity_dir}"
+        "FETCHPROXY_IDENTITY_DIR": "${user_config.fetchproxy_identity_dir}",
+        "TEAMS_ACCESS_TOKEN": "${user_config.access_token}",
+        "TEAMS_DISABLE_FETCHPROXY": "${user_config.disable_fetchproxy}",
+        "TEAMS_CHATSVC_REGION": "${user_config.chatsvc_region}",
+        "TEAMS_CHATSVC_BASE": "${user_config.chatsvc_base}",
+        "TEAMS_CAPTURE_TIMEOUT": "${user_config.capture_timeout}",
+        "TEAMS_TOKEN_CACHE": "${user_config.token_cache}",
+        "TEAMS_TOKEN_FILE": "${user_config.token_file}",
+        "MCP_CONFIRM_MODE": "${user_config.confirm_mode}",
+        "MCP_CONFIRM_ELICITATION": "${user_config.confirm_elicitation}",
+        "MCP_CONFIRM_TTL_SECONDS": "${user_config.confirm_ttl_seconds}",
+        "MCP_CONFIRM_SECRET": "${user_config.confirm_secret}"
       }
     }
   },
@@ -57,24 +68,104 @@
       "title": "Bridge identity directory (optional, hosted only)",
       "description": "Optional. Where to store the long-term fetchproxy identity keypair (default ~/.fetchproxy/identity/; an absolute path only, anything else is ignored). Exists for a host that runs a separate child per caller, so they can share one identity. Leave blank.",
       "required": false
+    },
+    "access_token": {
+      "type": "string",
+      "title": "Teams access token (optional)",
+      "description": "Optional. A pre-obtained Teams chat-service bearer token (the JWT itself). Leave blank to capture one from your signed-in Teams browser tab via the ContextMint Bridge extension.",
+      "required": false,
+      "sensitive": true
+    },
+    "disable_fetchproxy": {
+      "type": "string",
+      "title": "Disable browser token capture (optional)",
+      "description": "Optional. Set to true to never capture a token from the browser; then TEAMS_ACCESS_TOKEN is required. Leave blank.",
+      "required": false
+    },
+    "chatsvc_region": {
+      "type": "string",
+      "title": "Chat-service region (optional)",
+      "description": "Optional. The Teams chat-service region in the API path. Defaults to amer. Leave blank unless your tenant lives elsewhere.",
+      "required": false
+    },
+    "chatsvc_base": {
+      "type": "string",
+      "title": "Chat-service base URL (optional)",
+      "description": "Optional. Full override for the chat-service API base (default https://teams.cloud.microsoft/api/chatsvc/<region>/v1). Leave blank.",
+      "required": false
+    },
+    "capture_timeout": {
+      "type": "string",
+      "title": "Token capture timeout (optional)",
+      "description": "Optional. Seconds to wait for the Teams tab to issue a chat-service request when capturing a token. Defaults to 30.",
+      "required": false
+    },
+    "token_cache": {
+      "type": "string",
+      "title": "Token cache (optional)",
+      "description": "Optional. Set to false to keep the captured token in memory only. Defaults to on: it is cached so a restart within its ~23h lifetime needs no browser.",
+      "required": false
+    },
+    "token_file": {
+      "type": "string",
+      "title": "Token cache file (optional)",
+      "description": "Optional. Where the captured token is cached. Defaults to ~/.microsoft-teams-mcp/token.json.",
+      "required": false
+    },
+    "confirm_mode": {
+      "type": "string",
+      "title": "Write confirmation mode (optional)",
+      "description": "Optional. What teams_send_message and teams_react do on a client that cannot show a confirmation prompt (claude.ai, Claude Desktop): \"ask-user\" (default: the first call returns a preview and a confirmToken, and the model must get your approval in chat before using it), \"auto\" (the model may use the token after reviewing the preview itself) or \"refuse\". An unrecognised value is treated as refuse. Leave blank for the default.",
+      "required": false
+    },
+    "confirm_elicitation": {
+      "type": "string",
+      "title": "Confirmation prompts (optional)",
+      "description": "Optional. \"off\" never shows a confirmation prompt, so every client gets the MCP_CONFIRM_MODE flow. Set it for a client that says it can show prompts but never does. Defaults to on. Leave blank for the default.",
+      "required": false
+    },
+    "confirm_ttl_seconds": {
+      "type": "string",
+      "title": "Confirmation token lifetime (optional)",
+      "description": "Optional. How long a confirmToken stays valid, in seconds. Defaults to 600. Leave blank for the default.",
+      "required": false
+    },
+    "confirm_secret": {
+      "type": "string",
+      "title": "Confirmation signing key (optional)",
+      "description": "Optional. Signing key for confirmTokens. Random per process by default; set it only if tokens must survive a server restart. Leave blank for the default.",
+      "required": false,
+      "sensitive": true
     }
   },
   "tools": [
     {
       "name": "teams_list_chats",
-      "description": "List the chats in the signed-in user's Teams chat sidebar"
-    },
-    {
-      "name": "teams_get_open_chat_messages",
-      "description": "Read the message thread of whichever Teams chat is currently open"
+      "description": "List every chat (group, meeting, 1:1) the signed-in user is in, with unread state"
     },
     {
       "name": "teams_list_teams_and_channels",
-      "description": "List the Teams the signed-in user belongs to and their channels"
+      "description": "List every channel the signed-in user is in, by team, with unread state"
     },
     {
-      "name": "teams_get_open_channel_posts",
-      "description": "Read the top-level posts of whichever Teams channel is currently open"
+      "name": "teams_read_conversation",
+      "description": "Read any chat or channel by id or name, without marking it read"
+    },
+    {
+      "name": "teams_get_unread",
+      "description": "Get every unread message across chats and channels, without marking anything read"
+    },
+    {
+      "name": "teams_get_attachment",
+      "description": "Fetch a message's inline image, or a shared file's metadata and open link"
+    },
+    {
+      "name": "teams_send_message",
+      "description": "Post a message (with quote-replies, @mentions and emoji) to any chat or channel — asks you to confirm first"
+    },
+    {
+      "name": "teams_react",
+      "description": "Add or remove your reaction on any message — asks you to confirm first"
     },
     {
       "name": "teams_get_activity",
@@ -82,7 +173,7 @@
     },
     {
       "name": "teams_healthcheck",
-      "description": "Verify the browser bridge can reach a signed-in Teams tab"
+      "description": "Verify the Teams chat-service token and the browser bridge, end-to-end"
     }
   ],
   "compatibility": {

@@ -1,40 +1,94 @@
 /**
- * Bridge healthcheck. Every real tool rides the fetchproxy bridge — there is
- * no credential to check independently of it — so this probes the same way
- * `teams_list_chats` does rather than a separate HTTP round-trip.
+ * Healthcheck. Chats and channels are read through the chat-service API, so
+ * the probe is one conversations listing — which also exercises the token
+ * capture on a cold start. The bridge status section still matters: the token
+ * is captured through it, and the Activity feed reads the page through it.
+ *
+ * The bridge envelope is mcp-utils' `runBridgeHealthcheck` verbatim; this adds
+ * a `chat_service` block beside it — where the token came from, when it
+ * expires, and how many conversations the probe listed. A SOURCE LABEL and
+ * non-secret detail only, never the token: this result is what people paste
+ * into a chat when something is broken.
  */
 import type { McpServer } from '@modelcontextprotocol/server';
-import { registerBridgeHealthcheckTool } from '@chrischall/mcp-utils/fetchproxy';
-import type { TeamsClient } from '../client.js';
+import { toolAnnotations } from '@chrischall/mcp-utils';
+import { bridgeHealthcheckDescription, runBridgeHealthcheck } from '@chrischall/mcp-utils/fetchproxy';
+import type { TeamsDeps } from '../deps.js';
 
-export function registerHealthcheckTool(server: McpServer, client: TeamsClient): void {
-  registerBridgeHealthcheckTool({
-    server,
-    prefix: 'teams',
-    hostLabel: 'teams.cloud.microsoft',
-    transport: client.transport,
-    probePath: 'chat list (read_dom_list against the currently open Teams tab)',
-    probeFn: async () => {
-      const rows = await client.listChats();
-      // The chat list renders only while the Chat view is open, and on any
-      // other view (Teams, Activity, Calendar…) the read returns [] rather
-      // than throwing — so an empty read means "wrong view", not "healthy".
-      if (rows.length === 0) throw new ChatViewNotOpenError();
-      return `${rows.length} chat(s) visible in the sidebar`;
+const HOST_LABEL = 'teams.cloud.microsoft';
+const PROBE_PATH = 'chat-service conversation listing (GET /users/ME/conversations)';
+const TITLE = 'Verify the Teams chat service and ContextMint Bridge end-to-end';
+
+export function registerHealthcheckTool(server: McpServer, { teams, chatsvc }: TeamsDeps): void {
+  server.registerTool(
+    'teams_healthcheck',
+    {
+      title: TITLE,
+      description:
+        `${bridgeHealthcheckDescription(HOST_LABEL, PROBE_PATH)} Also reports the Teams ` +
+        'chat-service token behind every chat and channel tool — its source (browser capture or ' +
+        'TEAMS_ACCESS_TOKEN), its expiry, and how many conversations one listing returned — ' +
+        'never the token itself. Call this when a real tool fails and you want to know which hop broke.',
+      annotations: toolAnnotations({ title: TITLE, readOnly: true, idempotent: true, openWorld: true }),
+      inputSchema: {},
     },
-    classifyThrown: (err) =>
-      err instanceof ChatViewNotOpenError ? { kind: 'chat_view_not_open', hint: CHAT_VIEW_NOT_OPEN_HINT } : undefined,
-  });
+    async () => {
+      // Set only by a probe that got as far as a listing.
+      let conversations: number | null = null;
+      const result = await runBridgeHealthcheck({
+        server,
+        prefix: 'teams',
+        hostLabel: HOST_LABEL,
+        transport: teams.transport,
+        probePath: PROBE_PATH,
+        probeFn: async () => {
+          conversations = (await chatsvc.listConversations()).length;
+          return `${conversations} conversation(s) listed`;
+        },
+        classifyThrown: (err) =>
+          /could not capture a Teams token/i.test(err instanceof Error ? err.message : String(err))
+            ? { kind: 'token_capture', hint: TOKEN_CAPTURE_HINT }
+            : undefined,
+      });
+
+      // Read after the probe, which is what resolves (or captures) the token.
+      const expiresAt = chatsvc.tokenExpiresAt();
+      const chatService = {
+        api_base: chatsvc.apiBase,
+        token_source: chatsvc.tokenSource,
+        token_expires_at: expiresAt === null ? null : new Date(expiresAt).toISOString(),
+        token_minutes_remaining: expiresAt === null ? null : Math.round((expiresAt - Date.now()) / 60_000),
+        conversations,
+      };
+
+      const first = result.content[0];
+      if (first?.type !== 'text') return result;
+      let body: unknown;
+      try {
+        body = JSON.parse(first.text);
+      } catch {
+        body = undefined;
+      }
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+        // Not the JSON envelope this expects: keep the bridge's text as-is and
+        // report the chat service beside it rather than failing the healthcheck.
+        return {
+          ...result,
+          content: [
+            ...result.content,
+            { type: 'text' as const, text: JSON.stringify({ chat_service: chatService }, null, 2) },
+          ],
+        };
+      }
+      return {
+        ...result,
+        content: [{ type: 'text' as const, text: JSON.stringify({ ...body, chat_service: chatService }, null, 2) }],
+      };
+    },
+  );
 }
 
-const CHAT_VIEW_NOT_OPEN_HINT =
-  'The bridge reached the teams.cloud.microsoft tab, but no chat list is rendered: the Chat view ' +
-  'is not open (the tab is probably on Teams, Activity or Calendar). Ask the user to click Chat ' +
-  'in the left nav, then retry.';
-
-class ChatViewNotOpenError extends Error {
-  constructor() {
-    super('bridge OK but no chat list rendered — is the Chat view open?');
-    this.name = 'ChatViewNotOpenError';
-  }
-}
+const TOKEN_CAPTURE_HINT =
+  'No Teams access token could be captured. Open a signed-in teams.cloud.microsoft tab and click ' +
+  'into any chat (that is what makes Teams call its chat service, where the token is read from), ' +
+  'then retry.';

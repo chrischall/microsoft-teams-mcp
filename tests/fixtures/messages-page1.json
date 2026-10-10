@@ -1,0 +1,45 @@
+{
+  "messages": [
+    {
+      "id": "1760000300000",
+      "clientmessageid": "1111",
+      "composetime": "2026-10-09T12:05:00.000Z",
+      "originalarrivaltime": "2026-10-09T12:05:00.000Z",
+      "content": "<p>Newest example message</p>",
+      "contenttype": "text",
+      "messagetype": "RichText/Html",
+      "from": "https://teams.cloud.microsoft/api/chatsvc/amer/v1/users/ME/contacts/8:orgid:00000000-0000-0000-0000-0000000000b2",
+      "imdisplayname": "Example Person",
+      "conversationLink": "https://teams.cloud.microsoft/api/chatsvc/amer/v1/users/ME/conversations/19:aaaa1111@thread.v2",
+      "conversationid": "19:aaaa1111@thread.v2",
+      "properties": {},
+      "sequenceId": 44,
+      "version": "1760000300000",
+      "type": "Message"
+    },
+    {
+      "id": "1760000200000",
+      "clientmessageid": "2222",
+      "composetime": "2026-10-09T12:03:20.000Z",
+      "originalarrivaltime": "2026-10-09T12:03:20.000Z",
+      "content": "Middle example message",
+      "contenttype": "text",
+      "messagetype": "Text",
+      "from": "https://teams.cloud.microsoft/api/chatsvc/amer/v1/users/ME/contacts/8:orgid:00000000-0000-0000-0000-0000000000a1",
+      "imdisplayname": "Test User",
+      "conversationLink": "https://teams.cloud.microsoft/api/chatsvc/amer/v1/users/ME/conversations/19:aaaa1111@thread.v2",
+      "conversationid": "19:aaaa1111@thread.v2",
+      "properties": {},
+      "sequenceId": 43,
+      "version": "1760000200000",
+      "type": "Message"
+    }
+  ],
+  "_metadata": {
+    "backwardLink": "https://teams.cloud.microsoft/api/chatsvc/amer/v1/users/ME/conversations/19%3Aaaaa1111%40thread.v2/messages?view=msnp24Equivalent%7CsupportsMessageProperties&pageSize=200&startTime=1&syncState=older",
+    "lastCompleteSegmentStartTime": 1,
+    "lastCompleteSegmentEndTime": 1760000300000,
+    "syncState": "newest"
+  },
+  "tenantId": "00000000-0000-0000-0000-0000000000ff"
+}

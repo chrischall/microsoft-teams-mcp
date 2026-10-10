@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { TeamsClient, DOMAINS, DOM_LIST_SELECTORS, OPEN_CONVERSATION_SELECTOR } from '../src/client.js';
+import { TeamsClient, DOMAINS, DOM_LIST_SELECTORS, ACTIVITY_FEED_SELECTOR } from '../src/client.js';
 import type { FetchproxyTransport } from '@chrischall/mcp-utils/fetchproxy';
 
 function mockTransport(opts: {
@@ -16,19 +16,29 @@ function mockTransport(opts: {
   } as unknown as FetchproxyTransport;
 }
 
-describe('TeamsClient.listChats', () => {
-  it('reads the chatList selector off the first domain that has a tab', async () => {
+describe('TeamsClient.getActivity', () => {
+  it('reads the activityFeed selector off the first domain that has a tab', async () => {
     const readDomList = vi.fn().mockResolvedValue([
-      { title: 'Standup', preview: 'hi', time: '9:00 AM', conversationKey: 'k1', itemType: 'chat' },
+      {
+        title: 'Example Person mentioned Example Channel',
+        preview: 'Example Channel can someone take a look at this?',
+        time: '1:19 PM',
+        location: 'Example Team > Example Channel',
+      },
     ]);
     const client = new TeamsClient({ transport: mockTransport({ readDomList }) });
 
-    const rows = await client.listChats();
+    const rows = await client.getActivity();
 
     expect(rows).toEqual([
-      { title: 'Standup', preview: 'hi', time: '9:00 AM', conversationKey: 'k1', itemType: 'chat' },
+      {
+        title: 'Example Person mentioned Example Channel',
+        preview: 'Example Channel can someone take a look at this?',
+        time: '1:19 PM',
+        location: 'Example Team > Example Channel',
+      },
     ]);
-    expect(readDomList).toHaveBeenCalledWith({ name: 'chatList', domain: DOMAINS[0] });
+    expect(readDomList).toHaveBeenCalledWith({ name: 'activityFeed', domain: DOMAINS[0] });
   });
 
   it('starts the transport lazily, once', async () => {
@@ -36,8 +46,8 @@ describe('TeamsClient.listChats', () => {
     const transport = mockTransport({ readDomList });
     const client = new TeamsClient({ transport });
 
-    await client.listChats();
-    await client.listChats();
+    await client.getActivity();
+    await client.getActivity();
 
     expect(transport.start).toHaveBeenCalledTimes(1);
   });
@@ -51,7 +61,7 @@ describe('TeamsClient.listChats', () => {
     );
     const client = new TeamsClient({ transport });
 
-    const calls = Promise.all([client.listChats(), client.getOpenChatMessages(), client.getActivity()]);
+    const calls = Promise.all([client.getActivity(), client.getActivity(), client.getActivity()]);
     await Promise.resolve();
     release();
     await calls;
@@ -68,108 +78,20 @@ describe('TeamsClient.listChats', () => {
       .mockResolvedValue(undefined);
     const client = new TeamsClient({ transport });
 
-    await expect(client.listChats()).rejects.toThrow(/identity load failed/);
-    await client.listChats();
+    await expect(client.getActivity()).rejects.toThrow(/identity load failed/);
+    await client.getActivity();
 
     expect(transport.start).toHaveBeenCalledTimes(2);
     expect(readDomList).toHaveBeenCalledTimes(1);
   });
 });
 
-describe('TeamsClient.getOpenChatMessages', () => {
-  it('returns rows from the chatMessages selector', async () => {
-    const readDomList = vi.fn().mockResolvedValue([
-      { sender: 'Alice', time: '2026-09-21T10:00:00.000Z', messageId: 'timestamp-1', text: 'hi' },
-    ]);
-    const client = new TeamsClient({ transport: mockTransport({ readDomList }) });
-
-    const rows = await client.getOpenChatMessages();
-
-    expect(rows).toEqual([
-      { sender: 'Alice', time: '2026-09-21T10:00:00.000Z', messageId: 'timestamp-1', text: 'hi' },
-    ]);
-    expect(readDomList).toHaveBeenCalledWith({ name: 'chatMessages', domain: DOMAINS[0] });
-  });
-});
-
-describe('TeamsClient.listTeamsAndChannels', () => {
-  it('reads the teamsAndChannels selector off the first domain that has a tab', async () => {
-    const readDomList = vi.fn().mockResolvedValue([
-      { title: 'General', teamName: 'TruAudience', time: '9/18', conversationKey: 'k1', itemType: 'channel' },
-      { title: 'TruAudience', time: '', conversationKey: 'k2', itemType: 'team' },
-    ]);
-    const client = new TeamsClient({ transport: mockTransport({ readDomList }) });
-
-    const rows = await client.listTeamsAndChannels();
-
-    expect(rows).toEqual([
-      { title: 'General', teamName: 'TruAudience', time: '9/18', conversationKey: 'k1', itemType: 'channel' },
-      { title: 'TruAudience', time: '', conversationKey: 'k2', itemType: 'team' },
-    ]);
-    expect(readDomList).toHaveBeenCalledWith({ name: 'teamsAndChannels', domain: DOMAINS[0] });
-  });
-});
-
-describe('TeamsClient.getActivity', () => {
-  it('reads the activityFeed selector off the first domain that has a tab', async () => {
-    const readDomList = vi.fn().mockResolvedValue([
-      {
-        title: 'Sanderson, Xi mentioned MS DevOps',
-        preview: 'MS DevOps can someone please help with this harness deployment job?',
-        time: '1:19 PM',
-        location: 'NS_MS Product CE > MS DevOps',
-      },
-    ]);
-    const client = new TeamsClient({ transport: mockTransport({ readDomList }) });
-
-    const rows = await client.getActivity();
-
-    expect(rows).toEqual([
-      {
-        title: 'Sanderson, Xi mentioned MS DevOps',
-        preview: 'MS DevOps can someone please help with this harness deployment job?',
-        time: '1:19 PM',
-        location: 'NS_MS Product CE > MS DevOps',
-      },
-    ]);
-    expect(readDomList).toHaveBeenCalledWith({ name: 'activityFeed', domain: DOMAINS[0] });
-  });
-});
-
-describe('TeamsClient.getOpenChannelPosts', () => {
-  it('returns rows from the channelPosts selector', async () => {
-    const readDomList = vi.fn().mockResolvedValue([
-      {
-        sender: 'Alice',
-        subject: 'Deploy freeze',
-        time: 'Tuesday, August 4, 2026 7:50 AM',
-        messageId: 'timestamp-1',
-        text: 'hi',
-      },
-    ]);
-    const client = new TeamsClient({ transport: mockTransport({ readDomList }) });
-
-    const rows = await client.getOpenChannelPosts();
-
-    expect(rows).toEqual([
-      {
-        sender: 'Alice',
-        subject: 'Deploy freeze',
-        time: 'Tuesday, August 4, 2026 7:50 AM',
-        messageId: 'timestamp-1',
-        text: 'hi',
-      },
-    ]);
-    expect(readDomList).toHaveBeenCalledWith({ name: 'channelPosts', domain: DOMAINS[0] });
-  });
-});
-
 describe('TeamsClient error handling', () => {
   it('propagates a non-"no tab" failure unchanged', async () => {
-    const readDomList = vi.fn().mockRejectedValue(new Error('read_dom_list name not in declared set: chatList'));
+    const readDomList = vi.fn().mockRejectedValue(new Error('read_dom_list name not in declared set: activityFeed'));
     const client = new TeamsClient({ transport: mockTransport({ readDomList }) });
 
-    await expect(client.listChats()).rejects.toThrow(/not in declared set/);
+    await expect(client.getActivity()).rejects.toThrow(/not in declared set/);
     expect(readDomList).toHaveBeenCalledTimes(1);
   });
 
@@ -177,7 +99,7 @@ describe('TeamsClient error handling', () => {
     const readDomList = vi.fn().mockRejectedValue(new Error('no tab matching https://x/'));
     const client = new TeamsClient({ transport: mockTransport({ readDomList }) });
 
-    await expect(client.listChats()).rejects.toThrow(
+    await expect(client.getActivity()).rejects.toThrow(
       /could not reach a signed-in Teams tab on teams\.cloud\.microsoft/,
     );
     expect(readDomList).toHaveBeenCalledTimes(1);
@@ -190,50 +112,26 @@ describe('TeamsClient.close', () => {
     const transport = mockTransport({ readDomList });
     const client = new TeamsClient({ transport });
 
-    await client.listChats();
+    await client.getActivity();
     await client.close();
-    await client.listChats();
+    await client.getActivity();
 
     expect(transport.close).toHaveBeenCalledTimes(1);
     expect(transport.start).toHaveBeenCalledTimes(2);
   });
 });
 
-describe('TeamsClient.getSelectedConversations', () => {
-  it('reads the openConversation selector and returns every selected sidebar row', async () => {
-    const readDomList = vi.fn().mockResolvedValue([
-      { title: 'General', conversationKey: '19:def@thread.tacv2', itemType: 'channel' },
-      { title: 'Bob Smith', conversationKey: '19:abc@thread.v2', itemType: 'chat' },
-    ]);
-    const client = new TeamsClient({ transport: mockTransport({ readDomList }) });
-
-    expect(await client.getSelectedConversations()).toEqual([
-      { title: 'General', conversationKey: '19:def@thread.tacv2', itemType: 'channel' },
-      { title: 'Bob Smith', conversationKey: '19:abc@thread.v2', itemType: 'chat' },
-    ]);
-    expect(readDomList).toHaveBeenCalledWith({ name: 'openConversation', domain: DOMAINS[0] });
-  });
-
-  it('returns no rows when no sidebar row is marked selected', async () => {
-    const readDomList = vi.fn().mockResolvedValue([]);
-    const client = new TeamsClient({ transport: mockTransport({ readDomList }) });
-
-    expect(await client.getSelectedConversations()).toEqual([]);
-  });
-});
-
 describe('declared DOM-list selectors', () => {
-  it('declares openConversation, reading the selected sidebar item (title + thread key)', () => {
-    const decl = DOM_LIST_SELECTORS.find((s) => s.name === 'openConversation');
-
-    expect(decl).toBe(OPEN_CONVERSATION_SELECTOR);
-    expect(decl?.itemSelector).toMatch(/aria-selected="true"/);
-    expect(decl?.fields.map((f) => f.name)).toEqual(['title', 'conversationKey', 'itemType']);
+  it('declares only the Activity feed — chats and channels are read through the chat-service API', () => {
+    expect(DOM_LIST_SELECTORS).toEqual([ACTIVITY_FEED_SELECTOR]);
+    expect(DOM_LIST_SELECTORS.map((s) => s.name)).toEqual(['activityFeed']);
   });
 
-  it('declares every selector a client method reads', () => {
-    expect(DOM_LIST_SELECTORS.map((s) => s.name).sort()).toEqual(
-      ['activityFeed', 'channelPosts', 'chatList', 'chatMessages', 'openConversation', 'teamsAndChannels'],
-    );
+  it('no longer exposes the chat/channel DOM readers', () => {
+    const client = new TeamsClient({ transport: mockTransport({ readDomList: vi.fn() }) }) as unknown as Record<string, unknown>;
+
+    for (const gone of ['listChats', 'getOpenChatMessages', 'listTeamsAndChannels', 'getOpenChannelPosts', 'getSelectedConversations']) {
+      expect(client[gone], gone).toBeUndefined();
+    }
   });
 });

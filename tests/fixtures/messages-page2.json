@@ -1,0 +1,38 @@
+{
+  "messages": [
+    {
+      "id": "1760000100000",
+      "clientmessageid": "3333",
+      "composetime": "2026-10-09T12:01:40.000Z",
+      "originalarrivaltime": "2026-10-09T12:01:40.000Z",
+      "content": "Older example message",
+      "contenttype": "text",
+      "messagetype": "Text",
+      "from": "https://teams.cloud.microsoft/api/chatsvc/amer/v1/users/ME/contacts/8:orgid:00000000-0000-0000-0000-0000000000b2",
+      "imdisplayname": "Example Person",
+      "conversationid": "19:aaaa1111@thread.v2",
+      "properties": {},
+      "sequenceId": 42,
+      "type": "Message"
+    },
+    {
+      "id": "1760000000000",
+      "clientmessageid": "4444",
+      "composetime": "2026-10-09T11:58:20.000Z",
+      "originalarrivaltime": "2026-10-09T11:58:20.000Z",
+      "content": "Oldest example message",
+      "contenttype": "text",
+      "messagetype": "Text",
+      "from": "https://teams.cloud.microsoft/api/chatsvc/amer/v1/users/ME/contacts/8:orgid:00000000-0000-0000-0000-0000000000b2",
+      "imdisplayname": "Example Person",
+      "conversationid": "19:aaaa1111@thread.v2",
+      "properties": {},
+      "sequenceId": 41,
+      "type": "Message"
+    }
+  ],
+  "_metadata": {
+    "syncState": "oldest"
+  },
+  "tenantId": "00000000-0000-0000-0000-0000000000ff"
+}

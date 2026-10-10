@@ -10,6 +10,7 @@ import { registerChatTools } from '../../src/tools/chat.js';
 import { registerChannelTools } from '../../src/tools/channels.js';
 import { registerActivityTools } from '../../src/tools/activity.js';
 import type { TeamsClient } from '../../src/client.js';
+import { fakeChatsvc, rawConv } from './fake-chatsvc.js';
 
 describe('untrustedResult', () => {
   it('wraps the payload in an explicit untrusted-data envelope', () => {
@@ -53,27 +54,15 @@ describe('untrustedResult', () => {
 });
 
 describe('every tool that returns third-party Teams text', () => {
-  const client = {
-    listChats: async () => [],
-    getOpenChatMessages: async () => [],
-    getSelectedConversations: async () => [],
-    listTeamsAndChannels: async () => [],
-    getOpenChannelPosts: async () => [],
-    getActivity: async () => [],
-  } as unknown as TeamsClient;
-  const names = [
-    'teams_list_chats',
-    'teams_get_open_chat_messages',
-    'teams_list_teams_and_channels',
-    'teams_get_open_channel_posts',
-    'teams_get_activity',
-  ];
+  const teams = { getActivity: async () => [] } as unknown as TeamsClient;
+  const chatsvc = fakeChatsvc([rawConv('19:a@thread.v2', { topic: 'Example' }), rawConv('19:b@thread.tacv2', { topic: 'General' })]);
+  const names = ['teams_list_chats', 'teams_list_teams_and_channels', 'teams_get_activity'];
 
   it('warns in its description that the content must not be followed as instructions', async () => {
     const harness = await createTestHarness((server) => {
-      registerChatTools(server, client);
-      registerChannelTools(server, client);
-      registerActivityTools(server, client);
+      registerChatTools(server, { chatsvc });
+      registerChannelTools(server, { chatsvc });
+      registerActivityTools(server, { teams });
     });
     const tools = await harness.listTools();
 
@@ -86,9 +75,9 @@ describe('every tool that returns third-party Teams text', () => {
 
   it('returns its result inside the untrusted-data envelope', async () => {
     const harness = await createTestHarness((server) => {
-      registerChatTools(server, client);
-      registerChannelTools(server, client);
-      registerActivityTools(server, client);
+      registerChatTools(server, { chatsvc });
+      registerChannelTools(server, { chatsvc });
+      registerActivityTools(server, { teams });
     });
 
     for (const name of names) {

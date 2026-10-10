@@ -1,76 +1,79 @@
 /**
- * Teams/channel tools — both read the user's live, signed-in
- * `teams.cloud.microsoft` tab through the fetchproxy bridge. See `client.ts`'s
- * module doc for why there is no way to select a specific channel: the
- * bridge can only READ the DOM, never navigate it.
+ * `teams_list_teams_and_channels` — every channel the user is in, read from
+ * the Teams chat-service API, so no Teams view has to be open. A channel's
+ * team is named only when the team's own thread is in the listing (see
+ * `conversationSummary`); otherwise `team` is absent and it sorts last.
  */
 import type { McpServer } from '@modelcontextprotocol/server';
 import { toolAnnotations } from '@chrischall/mcp-utils';
-import type { TeamsClient } from '../client.js';
-import { wrapBridgeError } from './errors.js';
+import type { TeamsDeps } from '../deps.js';
+import type { ConversationSummary } from '../model.js';
+import { wrapApiError } from './errors.js';
 import { untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
-import { OPEN_CONVERSATION_DESCRIPTION, readOpenConversation } from './conversation.js';
 import { limitArg, trimRows } from './limit.js';
+import { includeHiddenArg, listSinceDaysArg, listSummaries, queryArg, UNREAD_HINT_DESCRIPTION, unreadOnlyArg } from './listing.js';
 
-export function registerChannelTools(server: McpServer, client: TeamsClient): void {
+/** Up to 10 pages of 200 come back; this bounds one result, not the listing. */
+const MAX_CHANNELS = 500;
+
+/**
+ * Visible channels first, then those hidden in Teams; within each, by team,
+ * then channel title, a channel whose team is unknown after every named team.
+ */
+function byTeamThenTitle(a: ConversationSummary, b: ConversationSummary): number {
+  if ((a.hidden === true) !== (b.hidden === true)) return a.hidden ? 1 : -1;
+  if (a.team !== b.team) {
+    if (a.team === undefined) return 1;
+    if (b.team === undefined) return -1;
+    const byTeam = a.team.localeCompare(b.team, undefined, { sensitivity: 'base' });
+    if (byTeam !== 0) return byTeam;
+  }
+  return a.title.localeCompare(b.title, undefined, { sensitivity: 'base' });
+}
+
+export function registerChannelTools(server: McpServer, { chatsvc }: Pick<TeamsDeps, 'chatsvc'>): void {
   server.registerTool(
     'teams_list_teams_and_channels',
     {
-      title: 'List Teams and their channels',
+      title: 'List Teams channels',
       description:
-        'List the Teams the signed-in user belongs to and their channels, from the ' +
-        '"Teams" nav section\'s sidebar (a DIFFERENT view from Chat). Each row is a team or ' +
-        'a channel — itemType distinguishes them; a channel row\'s teamName names its parent ' +
-        'team. Requires the user\'s browser to have the Teams-and-Channels view open (not ' +
-        'Chat) — if it returns nothing, ask them to click "Teams" in the left nav.' +
+        'List every channel the signed-in user is in, across all their teams, sorted by team ' +
+        'name then channel title. Each has an id, title, team (when Teams makes it ' +
+        'determinable), unread hint, last-activity time (ISO 8601), and a last-message preview ' +
+        'and sender. Channels the user has hidden in Teams are listed after the rest with ' +
+        'hidden: true. Pass an id (or the channel name) to teams_read_conversation to read its ' +
+        'posts and replies. Use unread_only for channels with real posts the user has not read, ' +
+        'each confirmed by reading past the read marker (a channel that is gone or no longer ' +
+        'readable is skipped and counted in skipped_unreachable); hidden channels are left out ' +
+        'of it unless include_hidden is set, as Teams shows them no badge. By default unread_only ' +
+        'keeps only channels whose newest unread post is from the last 14 days (since_days widens ' +
+        'it); older ones are counted in older_unread_skipped, not listed. ' +
+        UNREAD_HINT_DESCRIPTION +
+        ' Listing never marks anything read. query matches the channel title or team name.' +
         UNTRUSTED_DESCRIPTION_SUFFIX,
       annotations: toolAnnotations({ readOnly: true, openWorld: true }),
-      inputSchema: { limit: limitArg(300, 'team and channel rows') },
+      inputSchema: {
+        unread_only: unreadOnlyArg,
+        since_days: listSinceDaysArg,
+        include_hidden: includeHiddenArg,
+        query: queryArg('channel title or team name'),
+        limit: limitArg(MAX_CHANNELS, 'channels', 'first by team and title kept'),
+      },
     },
-    async ({ limit }) => {
+    async ({ unread_only, include_hidden, since_days, query, limit }) => {
       try {
-        const rows = await client.listTeamsAndChannels();
-        return untrustedResult(
-          rows.length > 0
-            ? trimRows(rows, limit, 'start', 300)
-            : {
-                rows,
-                empty_hint:
-                  'No teams or channels are rendered. The Teams tab is probably not on the Teams view — ' +
-                  'ask the user to click Teams in the left nav, then retry.',
-              },
-        );
+        const { rows, ...unreadInfo } = await listSummaries(chatsvc, {
+          kinds: ['channel'],
+          unread_only,
+          include_hidden,
+          since_days,
+          query,
+        });
+        rows.sort(byTeamThenTitle);
+        const { rows: channels, truncated } = trimRows(rows, limit, 'start', MAX_CHANNELS, 'first');
+        return untrustedResult({ channels, ...unreadInfo, ...(truncated ? { truncated } : {}) });
       } catch (err) {
-        throw wrapBridgeError(err, 'list teams and channels');
-      }
-    },
-  );
-
-  server.registerTool(
-    'teams_get_open_channel_posts',
-    {
-      title: 'Read the currently open channel',
-      description:
-        'Read the top-level posts in whichever Teams CHANNEL is CURRENTLY OPEN in the ' +
-        'user\'s signed-in browser tab — sender, time (prose, e.g. "Tuesday, August 4, 2026 ' +
-        '7:50 AM" — not ISO 8601), subject (when the post has a title), and text. Threaded ' +
-        'replies under a post are not included, only the top-level posts. There is no way ' +
-        'to choose a different channel from here: ask the user to open the channel they ' +
-        'mean first (the Teams-and-Channels view, not Chat), or use ' +
-        'teams_list_teams_and_channels to show them what is available.' +
-        OPEN_CONVERSATION_DESCRIPTION +
-        UNTRUSTED_DESCRIPTION_SUFFIX,
-      annotations: toolAnnotations({ readOnly: true, openWorld: true }),
-      inputSchema: { limit: limitArg(200, 'posts') },
-    },
-    async ({ limit }) => {
-      try {
-        const all = await client.getOpenChannelPosts();
-        const identity = await readOpenConversation(client, 'channel');
-        const { rows: posts, truncated } = trimRows(all, limit, 'end', 200);
-        return untrustedResult({ ...identity, posts, ...(truncated ? { truncated } : {}) });
-      } catch (err) {
-        throw wrapBridgeError(err, 'read the open channel');
+        throw wrapApiError(err, 'list channels');
       }
     },
   );

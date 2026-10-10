@@ -1,22 +1,14 @@
 /**
- * Full-bridge Teams client.
+ * DOM-reading Teams client — now used for the Activity feed ONLY.
  *
- * Unlike Outlook's bootstrap-capture archetype, this one touches the bridge
- * on every call. Teams Web's message data lives only in a client-side sync
- * cache fed by a WebSocket/registrar channel — there is no REST or GraphQL
- * endpoint that returns it, so the only way to read it is to read the DOM the
- * page has already rendered. That rules out a captured-token-then-plain-fetch
- * design: every read here goes through `read_dom_list` against the user's
- * live, signed-in `teams.cloud.microsoft` tab.
- *
- * Consequence: this MCP can only read whichever chat or channel is
- * CURRENTLY DISPLAYED in that tab. `@fetchproxy/server` has no capability to
- * navigate a tab to a different conversation — every declared capability is
- * a fetch or a read, never a page interaction — so there is no way to ask
- * for "chat X's messages" or "channel Y's posts" on demand.
- * `listChats()`/`listTeamsAndChannels()` read their sidebars (always
- * visible once that nav section is open); `getOpenChatMessages()`/
- * `getOpenChannelPosts()` read whatever conversation the user has open.
+ * Chats and channels are read through the Teams chat-service REST API
+ * (`chatsvc.ts`), authenticated by a token captured once from the signed-in
+ * tab. The Activity feed has no chat-service equivalent we have verified, so
+ * it is still read off the page: every call here goes through `read_dom_list`
+ * against the user's live, signed-in `teams.cloud.microsoft` tab, and returns
+ * only what that tab has rendered (the Activity view must be open).
+ * `@fetchproxy/server` has no capability to navigate a tab — every declared
+ * capability is a fetch or a read, never a page interaction.
  * Verified live 2026-09-21 against a real Teams tenant.
  */
 import {
@@ -25,6 +17,7 @@ import {
 } from '@chrischall/mcp-utils/fetchproxy';
 import { readPortEnv } from '@chrischall/mcp-utils';
 import type { DomListSelectorDecl } from '@fetchproxy/protocol';
+import { bridgeDeadlineMs, captureWindowMs } from './capture-window.js';
 import { PACKAGE_NAME, VERSION } from './version.js';
 
 /**
@@ -45,105 +38,13 @@ export function getWsPort(): number {
 }
 
 /**
- * The currently-open chat's message thread. `.fui-ChatMessage` (others'
- * messages) and `.fui-ChatMyMessage` (the signed-in user's own) are Teams
- * v2's two message-row classes; both carry the same `message-author-name` /
- * `time` / `chat-pane-message` structure. `sender` reads back even for a
- * grouped/consecutive message Teams visually hides the name on — it stays
- * in the DOM, just visually collapsed. A quoted-reply message's `text`
- * includes the quoted preview concatenated in (a known limitation of bulk
- * `.textContent` extraction, not fixable without a second, narrower field).
- */
-export const CHAT_MESSAGES_SELECTOR: DomListSelectorDecl = {
-  name: 'chatMessages',
-  itemSelector: '.fui-ChatMessage, .fui-ChatMyMessage',
-  fields: [
-    { name: 'sender', selector: '[data-tid="message-author-name"]' },
-    { name: 'time', selector: 'time', attribute: 'datetime' },
-    { name: 'messageId', selector: 'time', attribute: 'id' },
-    { name: 'text', selector: '[data-tid="chat-pane-message"]' },
-  ],
-  maxItems: 200,
-};
-
-/**
- * The chat-list sidebar (always rendered, regardless of which chat is
- * open). `conversationKey` is Teams' own compound tree-item value — it
- * embeds the real thread id (e.g. `19:<id>@thread.v2`) but is NOT usable to
- * open that chat from here; there is no navigate capability. It is exposed
- * so a caller can at least correlate a list entry with the currently-open
- * chat's messages.
- */
-export const CHAT_LIST_SELECTOR: DomListSelectorDecl = {
-  name: 'chatList',
-  itemSelector: '[data-testid="list-item"]',
-  fields: [
-    { name: 'title', selector: '[id^="title-chat-list-item_"]' },
-    { name: 'preview', selector: '[data-testid="comfy-message"]' },
-    { name: 'time', selector: '[id^="time-chat-list-item_"]' },
-    { name: 'conversationKey', attribute: 'data-fui-tree-item-value' },
-    { name: 'itemType', attribute: 'data-item-type' },
-  ],
-  maxItems: 200,
-};
-
-/**
- * The Teams-and-Channels sidebar (the left rail under the "Teams" nav icon,
- * a DIFFERENT view from Chat — always rendered once that view is open,
- * regardless of which channel is open). Team and channel rows share one
- * item selector; `title-*`/`time-*` use a compound attribute selector
- * (`[id^="title-"][id*="-list-item-"]`) rather than a comma-joined pair of
- * prefixes, because a channel and a team item use different id prefixes
- * (`title-channel-list-item-*` / `title-team-list-item-*`) and this reads
- * either without needing two alternatives. `teamName` is the parent team's
- * display name shown under a channel row (absent on a team row itself).
- */
-export const TEAMS_AND_CHANNELS_SELECTOR: DomListSelectorDecl = {
-  name: 'teamsAndChannels',
-  itemSelector: '[data-item-type="team"], [data-item-type="channel"]',
-  fields: [
-    { name: 'title', selector: '[id^="title-"][id*="-list-item-"]' },
-    { name: 'teamName', selector: '[id^="preview-channel-list-item-"]' },
-    { name: 'time', selector: '[id^="time-"][id*="-list-item-"]' },
-    { name: 'conversationKey', attribute: 'data-fui-tree-item-value' },
-    { name: 'itemType', attribute: 'data-item-type' },
-  ],
-  maxItems: 300,
-};
-
-/**
- * Top-level posts in whichever CHANNEL is currently open (same "reads only
- * what's displayed" constraint as chat messages — see module doc). Channel
- * posts use a different renderer than chat messages (`channel-pane-message`,
- * not `.fui-ChatMessage`), and their `<time>` element carries no ISO
- * `datetime` attribute — only a human-readable `aria-label` — so `time` here
- * is prose ("Tuesday, August 4, 2026 7:50 AM"), not ISO 8601 like
- * `ChatMessageRow.time`. `subject` is present only on a post that has a
- * title; a reply-shaped post has none. Threaded REPLIES under a post are not
- * captured — only the top-level posts a channel's "Posts" tab lists.
- */
-export const CHANNEL_POSTS_SELECTOR: DomListSelectorDecl = {
-  name: 'channelPosts',
-  itemSelector: '[data-tid="channel-pane-message"]',
-  fields: [
-    { name: 'sender', selector: '[id^="author-"]' },
-    { name: 'subject', selector: '[id^="subject-line-"]' },
-    { name: 'time', selector: 'time[data-tid="timestamp"]', attribute: 'aria-label' },
-    { name: 'messageId', selector: 'time[data-tid="timestamp"]', attribute: 'id' },
-    { name: 'text', selector: '[id^="content-"]' },
-  ],
-  maxItems: 200,
-};
-
-/**
  * Top-level rows in the Activity feed (the bell icon in the left nav) —
  * mentions, replies, reactions, and the like across every chat and channel.
  * Always rendered once that nav section is open, regardless of which item
- * is selected — same "sidebar, not detail pane" shape as `CHAT_LIST_SELECTOR`
- * and `TEAMS_AND_CHANNELS_SELECTOR`. `location` is the team/channel or chat
- * the activity happened in, prose-joined by Teams itself (e.g. "NS_MS
- * Product CE > MS DevOps"). `time` is prose (e.g. "1:19 PM"), not ISO 8601 —
- * Teams renders it that way here, unlike `chatMessages.time`.
+ * is selected (a list, not a detail pane). `location` is the team/channel or
+ * chat the activity happened in, prose-joined by Teams itself (e.g. "Example
+ * Team > Example Channel"). `time` is prose (e.g. "1:19 PM"), not ISO 8601 —
+ * Teams renders it that way here.
  */
 export const ACTIVITY_FEED_SELECTOR: DomListSelectorDecl = {
   name: 'activityFeed',
@@ -157,77 +58,8 @@ export const ACTIVITY_FEED_SELECTOR: DomListSelectorDecl = {
   maxItems: 200,
 };
 
-/**
- * WHICH conversation is open — the sidebar row Teams marks as selected. Read
- * alongside `chatMessages`/`channelPosts` so the "open" tools can say which
- * chat or channel their rows came from; without it the model gets bare rows
- * and can misattribute another conversation's messages to the one the user
- * asked about. The chat-list and channel-list rows are Fluent UI tree items
- * (`data-fui-tree-item-value`, the same attribute `CHAT_LIST_SELECTOR` /
- * `TEAMS_AND_CHANNELS_SELECTOR` read `conversationKey` from), and a Fluent
- * tree item carries `aria-selected="true"` (or `aria-current`) when it is the
- * open one. `title` matches both the chat (`title-chat-list-item_*`) and
- * channel (`title-channel-list-item-*`) title ids. `conversationKey` embeds
- * the real thread id. Not yet re-verified against a live tenant — the tools
- * treat an empty read as "could not identify" rather than failing.
- */
-export const OPEN_CONVERSATION_SELECTOR: DomListSelectorDecl = {
-  name: 'openConversation',
-  itemSelector:
-    '[data-fui-tree-item-value][aria-selected="true"], ' +
-    '[data-fui-tree-item-value][aria-current="true"], ' +
-    '[data-fui-tree-item-value][aria-current="page"]',
-  fields: [
-    { name: 'title', selector: '[id^="title-"][id*="list-item"]' },
-    { name: 'conversationKey', attribute: 'data-fui-tree-item-value' },
-    { name: 'itemType', attribute: 'data-item-type' },
-  ],
-  maxItems: 5,
-};
-
 /** Every selector the client declares to the bridge (the pair-popup scope). */
-export const DOM_LIST_SELECTORS: readonly DomListSelectorDecl[] = [
-  CHAT_MESSAGES_SELECTOR,
-  CHAT_LIST_SELECTOR,
-  TEAMS_AND_CHANNELS_SELECTOR,
-  CHANNEL_POSTS_SELECTOR,
-  ACTIVITY_FEED_SELECTOR,
-  OPEN_CONVERSATION_SELECTOR,
-];
-
-export interface OpenConversationRow {
-  title?: string;
-  /** Teams' compound tree-item value; embeds the thread id. */
-  conversationKey?: string;
-  /** `'chat'`, `'channel'`, … as Teams labels the sidebar row. */
-  itemType?: string;
-}
-
-export interface ChatMessageRow {
-  sender?: string;
-  /** ISO 8601 (the `<time datetime>` attribute). */
-  time?: string;
-  messageId?: string;
-  text?: string;
-}
-
-export interface ChatListRow {
-  title?: string;
-  preview?: string;
-  time?: string;
-  conversationKey?: string;
-  itemType?: string;
-}
-
-export interface TeamOrChannelRow {
-  title?: string;
-  /** The parent team's display name. Present on a channel row, absent on a team row. */
-  teamName?: string;
-  time?: string;
-  conversationKey?: string;
-  /** `'team'` or `'channel'`. */
-  itemType?: string;
-}
+export const DOM_LIST_SELECTORS: readonly DomListSelectorDecl[] = [ACTIVITY_FEED_SELECTOR];
 
 export interface ActivityFeedRow {
   title?: string;
@@ -236,15 +68,6 @@ export interface ActivityFeedRow {
   time?: string;
   /** The team/channel or chat the activity happened in, prose-joined by Teams. */
   location?: string;
-}
-
-export interface ChannelPostRow {
-  sender?: string;
-  subject?: string;
-  /** Prose, e.g. "Tuesday, August 4, 2026 7:50 AM" — NOT ISO 8601. */
-  time?: string;
-  messageId?: string;
-  text?: string;
 }
 
 export interface TeamsClientOptions {
@@ -272,6 +95,12 @@ export class TeamsClient {
         capabilities: ['read_dom_list'],
         domListSelectors: [...DOM_LIST_SELECTORS],
         port: getWsPort(),
+        // The same deadline the token capture runs under. This transport may
+        // be the concentrator a capture relays through, and it is what
+        // teams_healthcheck reports as the bridge's fetch timeout — so it
+        // must not sit at the library's 30s while TEAMS_CAPTURE_TIMEOUT asks
+        // for longer.
+        fetchTimeoutMs: bridgeDeadlineMs(captureWindowMs()),
         // stderr only — stdout is the JSON-RPC channel. Without this the
         // first-ever pairing (or a scope widening) leaves a tool call
         // hanging with no way for the user to know a ContextMint Bridge approval
@@ -313,46 +142,6 @@ export class TeamsClient {
       }
       throw e;
     }
-  }
-
-  /** The chat-list sidebar, regardless of which chat is currently open. */
-  async listChats(): Promise<ChatListRow[]> {
-    return (await this.#readDomList('chatList')) as ChatListRow[];
-  }
-
-  /**
-   * Messages from whichever chat is CURRENTLY DISPLAYED in the signed-in
-   * tab. There is no way to select a different chat from here — see the
-   * module doc.
-   */
-  async getOpenChatMessages(): Promise<ChatMessageRow[]> {
-    return (await this.#readDomList('chatMessages')) as ChatMessageRow[];
-  }
-
-  /** The Teams-and-Channels sidebar, regardless of which channel is open. */
-  async listTeamsAndChannels(): Promise<TeamOrChannelRow[]> {
-    return (await this.#readDomList('teamsAndChannels')) as TeamOrChannelRow[];
-  }
-
-  /**
-   * Top-level posts from whichever channel is CURRENTLY DISPLAYED in the
-   * signed-in tab (the Teams-and-Channels view must be open, not Chat).
-   * There is no way to select a different channel from here — see the
-   * module doc.
-   */
-  async getOpenChannelPosts(): Promise<ChannelPostRow[]> {
-    return (await this.#readDomList('channelPosts')) as ChannelPostRow[];
-  }
-
-  /**
-   * Every sidebar row Teams marks as selected (up to 5). Usually one, but the
-   * selector spans BOTH the Chat and the Teams-and-Channels sidebars, so a
-   * channel row can stay selected while a chat is open (and vice versa) —
-   * callers must pick by `itemType` (see `tools/conversation.ts`), never
-   * just take the first row.
-   */
-  async getSelectedConversations(): Promise<OpenConversationRow[]> {
-    return (await this.#readDomList('openConversation')) as OpenConversationRow[];
   }
 
   /** The Activity feed (the bell icon in the left nav), regardless of which item is selected. */

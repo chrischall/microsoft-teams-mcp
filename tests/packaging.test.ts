@@ -116,13 +116,49 @@ describe('publish scaffold', () => {
 });
 
 /**
- * The env keys the server honours. `TEAMS_WS_PORT` is this server's own
- * (.env.example / README); `FETCHPROXY_WS_HOST` and `FETCHPROXY_IDENTITY_DIR`
- * are read by the bundled `@fetchproxy/server` because this server never
- * passes `host` / `identityDir`. It always passes `port`, so
- * `FETCHPROXY_WS_PORT` is NOT honoured and is not declared.
+ * The env keys the server honours. The `TEAMS_*` keys are this server's own
+ * (.env.example / README): the bridge port, and the chat-service token's
+ * source, cache, capture deadline and API base. `FETCHPROXY_WS_HOST` and
+ * `FETCHPROXY_IDENTITY_DIR` are read by the bundled `@fetchproxy/server`
+ * because this server never passes `host` / `identityDir`. It always passes
+ * `port`, so `FETCHPROXY_WS_PORT` is NOT honoured and is not declared. The
+ * `MCP_CONFIRM_*` keys are mcp-utils' `confirmWrite` settings for the two
+ * write tools, as the README's confirmation table documents them.
  */
-const ENV = ['FETCHPROXY_IDENTITY_DIR', 'FETCHPROXY_WS_HOST', 'TEAMS_WS_PORT'];
+const ENV = [
+  'FETCHPROXY_IDENTITY_DIR',
+  'FETCHPROXY_WS_HOST',
+  'MCP_CONFIRM_ELICITATION',
+  'MCP_CONFIRM_MODE',
+  'MCP_CONFIRM_SECRET',
+  'MCP_CONFIRM_TTL_SECONDS',
+  'TEAMS_ACCESS_TOKEN',
+  'TEAMS_CAPTURE_TIMEOUT',
+  'TEAMS_CHATSVC_BASE',
+  'TEAMS_CHATSVC_REGION',
+  'TEAMS_DISABLE_FETCHPROXY',
+  'TEAMS_TOKEN_CACHE',
+  'TEAMS_TOKEN_FILE',
+  'TEAMS_WS_PORT',
+];
+
+/**
+ * Chats and channels are read through the chat-service API now, by id or
+ * name, so no install surface may still promise only "the open" conversation.
+ */
+describe('install surface descriptions', () => {
+  it('no longer describe reads as limited to the currently open conversation', () => {
+    const texts = [
+      read('manifest.json').description,
+      read('server.json').description,
+      read('.claude-plugin/plugin.json').description,
+      read('.claude-plugin/marketplace.json').metadata.description,
+      read('.claude-plugin/marketplace.json').plugins[0].description,
+      ...read('manifest.json').tools.map((t: { description: string }) => t.description),
+    ];
+    for (const t of texts) expect(t).not.toMatch(/open (messages|chat|channel)|currently open/i);
+  });
+});
 
 describe('manifest tool roster', () => {
   it('matches the registered tools in BOTH directions', async () => {
@@ -133,6 +169,36 @@ describe('manifest tool roster', () => {
     for (const t of read('manifest.json').tools) {
       expect(t.description, `${t.name} needs a description`).toBeTruthy();
     }
+  });
+});
+
+/**
+ * teams_send_message and teams_react post as the user, visibly to everyone in
+ * the conversation, so every surface that describes them must say they ask
+ * first — and nothing may still claim the server only reads.
+ */
+describe('write tools are documented as confirm-gated', () => {
+  const readme = readFileSync(join(root, 'README.md'), 'utf8');
+  const skill = readFileSync(join(root, 'skills/teams-fpx/SKILL.md'), 'utf8');
+
+  it('says in each write tool\'s manifest description that it asks to confirm first', () => {
+    const tools = read('manifest.json').tools as { name: string; description: string }[];
+    for (const name of ['teams_send_message', 'teams_react']) {
+      expect(tools.find((t) => t.name === name)?.description, name).toMatch(/confirm/i);
+    }
+  });
+
+  it('README describes both writes, the confirmation flow and the self-chat to test in', () => {
+    for (const s of ['teams_send_message', 'teams_react', 'confirmToken', 'MCP_CONFIRM_MODE', '48:notes']) {
+      expect(readme, s).toContain(s);
+    }
+    expect(readme).not.toMatch(/all tools are read-only/i);
+  });
+
+  it('the skill points writes at the confirm-gated tools and demands approval for a shell send', () => {
+    expect(skill).toContain('teams_send_message');
+    expect(skill).toContain('teams_react');
+    expect(skill).toMatch(/explicit approval/i);
   });
 });
 
@@ -152,5 +218,24 @@ describe('install surfaces pass every honoured env key', () => {
     const vars = read('server.json').packages[0].environmentVariables as { name: string; isRequired: boolean }[];
     expect(vars.map((v) => v.name).sort()).toEqual(ENV);
     expect(vars.every((v) => v.isRequired === false)).toBe(true);
+  });
+
+  it('marks the access token and the confirm signing key secret on both surfaces, and nothing else', () => {
+    const SECRET = ['MCP_CONFIRM_SECRET', 'TEAMS_ACCESS_TOKEN'];
+    const vars = read('server.json').packages[0].environmentVariables as { name: string; isSecret: boolean }[];
+    expect(vars.filter((v) => v.isSecret).map((v) => v.name).sort()).toEqual(SECRET);
+
+    const m = read('manifest.json');
+    const refs = SECRET.map((k) => /^\$\{user_config\.([^}]+)\}$/.exec(m.server.mcp_config.env[k])![1]).sort();
+    const sensitive = Object.entries(m.user_config as Record<string, { sensitive?: boolean }>)
+      .filter(([, c]) => c.sensitive === true)
+      .map(([k]) => k)
+      .sort();
+    expect(sensitive).toEqual(refs);
+  });
+
+  it('documents in the README every MCP_CONFIRM_* key it passes', () => {
+    const readme = readFileSync(join(root, 'README.md'), 'utf8');
+    for (const k of ENV.filter((e) => e.startsWith('MCP_CONFIRM_'))) expect(readme, k).toContain(`\`${k}\``);
   });
 });

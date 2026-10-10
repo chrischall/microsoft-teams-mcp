@@ -1,0 +1,46 @@
+{
+  "conversations": [
+    {
+      "id": "19:aaaa1111@thread.v2",
+      "type": "Conversation",
+      "version": 1760000000000,
+      "targetLink": "https://teams.cloud.microsoft/api/chatsvc/amer/v1/users/ME/conversations/19:aaaa1111@thread.v2",
+      "properties": {
+        "consumptionhorizon": "1760000000000;1760000000500;1760000000000",
+        "favorite": "false",
+        "isemptyconversation": "false",
+        "lastimreceivedtime": "2026-10-09T12:00:00.000Z"
+      },
+      "threadProperties": {
+        "topic": "Example project group",
+        "threadType": "chat",
+        "productThreadType": "Chat",
+        "createdat": "1750000000000",
+        "privacy": "private"
+      },
+      "lastMessage": {
+        "id": "1760000100000",
+        "composetime": "2026-10-09T12:01:40.000Z",
+        "originalarrivaltime": "2026-10-09T12:01:40.000Z",
+        "content": "Example message text",
+        "from": "https://teams.cloud.microsoft/api/chatsvc/amer/v1/users/ME/contacts/8:orgid:00000000-0000-0000-0000-0000000000b2",
+        "imdisplayname": "Example Person",
+        "messagetype": "Text",
+        "conversationid": "19:aaaa1111@thread.v2",
+        "sequenceId": 42
+      }
+    },
+    {
+      "id": "48:notes",
+      "type": "Conversation",
+      "properties": {},
+      "threadProperties": {}
+    }
+  ],
+  "_metadata": {
+    "backwardLink": "https://teams.cloud.microsoft/api/chatsvc/amer/v1/users/ME/conversations?view=msnp24Equivalent&pageSize=200&syncState=page2",
+    "forwardLink": "https://teams.cloud.microsoft/api/chatsvc/amer/v1/users/ME/conversations?view=msnp24Equivalent&pageSize=200&syncState=fwd",
+    "syncState": "page1",
+    "totalCount": 3
+  }
+}
