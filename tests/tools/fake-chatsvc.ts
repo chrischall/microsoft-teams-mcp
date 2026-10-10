@@ -10,12 +10,30 @@ const FROM = (mri: string) => `https://teams.cloud.microsoft/api/chatsvc/amer/v1
 /** A conversation whose last message arrived at `at` (epoch ms), read up to `horizon`. */
 export function rawConv(
   id: string,
-  opts: { topic?: string; at?: number; horizon?: number; fromMe?: boolean; sender?: string; spaceId?: string; text?: string } = {},
+  opts: {
+    topic?: string;
+    at?: number;
+    horizon?: number;
+    fromMe?: boolean;
+    sender?: string;
+    spaceId?: string;
+    text?: string;
+    /** The last message's type (default `Text`). */
+    type?: string;
+    /** `properties.lastimreceivedtime`, as epoch ms (written as ISO, as Teams sends it). */
+    lastIm?: number;
+    /** `memberProperties.interest` — `NotInterested` is a channel hidden in Teams. */
+    interest?: string;
+  } = {},
 ): RawConversation {
   const at = opts.at ?? 1_760_000_000_000;
   return {
     id,
-    properties: { consumptionhorizon: `${opts.horizon ?? at};${at};${opts.horizon ?? at}` },
+    properties: {
+      consumptionhorizon: `${opts.horizon ?? at};${at};${opts.horizon ?? at}`,
+      ...(opts.lastIm !== undefined ? { lastimreceivedtime: new Date(opts.lastIm).toISOString() } : {}),
+    },
+    ...(opts.interest !== undefined ? { memberProperties: { interest: opts.interest } } : {}),
     threadProperties: {
       ...(opts.topic !== undefined ? { topic: opts.topic } : {}),
       ...(opts.spaceId !== undefined ? { spaceId: opts.spaceId } : {}),
@@ -26,7 +44,7 @@ export function rawConv(
       content: opts.text ?? 'Example text',
       from: FROM(opts.fromMe ? ME : OTHER),
       imdisplayname: opts.fromMe ? 'Me Myself' : (opts.sender ?? 'Example Person'),
-      messagetype: 'Text',
+      messagetype: opts.type ?? 'Text',
     },
   };
 }

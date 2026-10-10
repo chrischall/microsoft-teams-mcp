@@ -289,6 +289,13 @@ describe('teams_send_message — conversation', () => {
     expect(payload(data)).toMatchObject({ status: 'sent', conversation: { id: '48:notes' } });
   });
 
+  it.each(['notes', 'self'])('sends to the self-chat named %j', async (conversation) => {
+    const { chatsvc, sendMessage } = fakeWith();
+    const { data } = await sendConfirmed(chatsvc, { conversation, text: 'note to self' });
+    expect(sendMessage.mock.calls[0]?.[0]).toBe('48:notes');
+    expect(payload(data)).toMatchObject({ status: 'sent', conversation: { id: '48:notes', kind: 'self' } });
+  });
+
   it('refuses every other 48: system conversation', async () => {
     const { chatsvc, sendMessage } = fakeWith();
     const { first } = await sendConfirmed(chatsvc, { conversation: '48:calendar', text: 'hi' });

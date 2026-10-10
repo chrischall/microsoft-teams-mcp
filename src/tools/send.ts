@@ -35,7 +35,7 @@ import {
   type MentionTarget,
   type QuotedMessage,
 } from '../compose.js';
-import { conversationSummary, htmlToText, isUserMessage, normaliseMessage, senderMri } from '../model.js';
+import { htmlToText, isUserMessage, normaliseMessage, SELF_CHAT, senderMri, summariseAll } from '../model.js';
 import { resolveConversation } from './conversation.js';
 import { wrapApiError } from './errors.js';
 import {
@@ -52,7 +52,7 @@ const TOOL = 'teams_send_message';
  * messages, and the safe place to try this tool out. Every other `48:*` id
  * (calendar, notifications, …) is refused.
  */
-export const SELF_CHAT = '48:notes';
+export { SELF_CHAT };
 
 /** Recent messages scanned for mention candidates and for the read-back. */
 const RECENT_MESSAGES = 200;
@@ -85,8 +85,8 @@ const mentionArg = z.object({
 });
 
 /**
- * The conversation a write goes to: `48:notes`, else an id or name as
- * `teams_read_conversation` resolves it. `verb` words the refusals ("post to",
+ * The conversation a write goes to: `48:notes` (also by the names `notes` /
+ * `self`), else an id or name as `teams_read_conversation` resolves it. `verb` words the refusals ("post to",
  * "react in").
  */
 export async function resolveTarget(
@@ -102,11 +102,7 @@ export async function resolveTarget(
     });
   }
   const raw = await chatsvc.listConversations();
-  const s = resolveConversation(
-    raw.map((c) => conversationSummary(c, me, raw)),
-    conversation,
-    verb,
-  );
+  const s = resolveConversation(summariseAll(raw, me), conversation, verb);
   return { id: s.id, title: s.title, kind: s.kind };
 }
 
@@ -245,7 +241,7 @@ export function registerSendTools(server: McpServer, { chatsvc }: Pick<TeamsDeps
         'channel posts into that root post\'s thread; in a chat it quote-replies that message. quote ' +
         'quote-replies a message in any conversation. mentions @-mention people: name_in_text must appear ' +
         'in text, and person is an MRI or a display name matched among recent senders (ambiguous names ' +
-        `are refused with the candidates). conversation "${SELF_CHAT}" is the user's own notes self-chat — ` +
+        `are refused with the candidates). conversation "${SELF_CHAT}" (or "notes" / "self") is the user's own notes self-chat — ` +
         'use it to try this tool without anyone else seeing; other 48: system conversations are refused. ' +
         'Everyone in the conversation sees the post. The result says whether the post was found again by ' +
         'reading the conversation back (verified); status "unknown" means Teams did not confirm it — check ' +
@@ -259,7 +255,10 @@ export function registerSendTools(server: McpServer, { chatsvc }: Pick<TeamsDeps
         conversation: z
           .string()
           .min(1)
-          .describe(`The conversation id (or "${SELF_CHAT}"), or a case-insensitive substring of the chat title, channel name or team name.`),
+          .describe(
+            `The conversation id (or "${SELF_CHAT}" — also by the name "notes" or "self" — for the self-chat), ` +
+              'or a case-insensitive substring of the chat title, channel name or team name.',
+          ),
         text: z.string().min(1).describe('The message, as plain text. Newlines are kept; :key: shortcodes become emoji.'),
         reply_to: z
           .string()

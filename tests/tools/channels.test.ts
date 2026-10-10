@@ -83,6 +83,35 @@ describe('teams_list_teams_and_channels', () => {
     expect(data?.truncated).toMatchObject({ total: 5, returned: 2 });
   });
 
+  describe('hidden channels', () => {
+    // Unread, but hidden in Teams; and a visible unread channel with no interest field.
+    const HIDDEN = '19:alpha-hidden@thread.tacv2';
+    const WITH_HIDDEN = [
+      ...CONVS,
+      rawConv(HIDDEN, { topic: 'Archive', spaceId: ALPHA, at: T0 + 6 * MIN, horizon: T0, interest: 'NotInterested' }),
+    ];
+
+    it('lists a hidden channel marked hidden, after every visible one', async () => {
+      const { data } = await call(fakeChatsvc(WITH_HIDDEN));
+      const channels = data?.channels as (Row & { hidden?: true })[];
+
+      expect(channels.at(-1)).toMatchObject({ id: HIDDEN, hidden: true });
+      expect(channels.filter((c) => c.hidden).map((c) => c.id)).toEqual([HIDDEN]);
+    });
+
+    it('leaves a hidden channel out of unread_only by default', async () => {
+      const { data } = await call(fakeChatsvc(WITH_HIDDEN), { unread_only: true });
+
+      expect((data?.channels as Row[]).map((c) => c.id)).toEqual([ALPHA, BRAVO_OPS]);
+    });
+
+    it('includes it with include_hidden', async () => {
+      const { data } = await call(fakeChatsvc(WITH_HIDDEN), { unread_only: true, include_hidden: true });
+
+      expect((data?.channels as Row[]).map((c) => c.id)).toEqual([ALPHA, BRAVO_OPS, HIDDEN]);
+    });
+  });
+
   it('returns its result inside the untrusted-data envelope', async () => {
     const { data } = await call(fakeChatsvc(CONVS));
 
@@ -110,7 +139,8 @@ describe('teams_list_teams_and_channels', () => {
     expect(tool?.description).toMatch(/every channel/i);
     expect(tool?.description).toMatch(/teams_read_conversation/);
     expect(tool?.annotations?.readOnlyHint).toBe(true);
-    expect(Object.keys(schema.properties ?? {}).sort()).toEqual(['limit', 'query', 'unread_only']);
+    expect(Object.keys(schema.properties ?? {}).sort()).toEqual(['include_hidden', 'limit', 'query', 'unread_only']);
+    expect(tool?.description).toMatch(/hidden/i);
     expect(schema.required ?? []).toEqual([]);
     await harness.close();
   });

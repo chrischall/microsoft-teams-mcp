@@ -8,7 +8,18 @@
  */
 import type { RawConversation, RawLastMessage, RawMessage } from './chatsvc.js';
 
-export type ConversationKind = 'channel' | 'meeting' | 'oneOnOne' | 'group';
+export type ConversationKind = 'channel' | 'meeting' | 'oneOnOne' | 'group' | 'self';
+
+/**
+ * The user's own notes chat ("notes to self") — the one `48:*` system
+ * conversation that is a real chat. Every other `48:*` id (calendar,
+ * notifications, …) is not one and is never listed.
+ */
+export const SELF_CHAT = '48:notes';
+const SELF_CHAT_TITLE = 'Notes (self-chat)';
+
+/** Names that resolve to {@link SELF_CHAT} outright, ahead of any substring match. */
+const SELF_CHAT_ALIASES = new Set(['notes', 'self']);
 
 export interface ConversationSummary {
   id: string;
@@ -18,11 +29,18 @@ export interface ConversationSummary {
   team?: string;
   unread: boolean;
   /**
-   * Set when `unread` rests on a last message that is a system event or
-   * deleted: a real unread message may or may not sit behind it, so the read
-   * tools confirm by fetching.
+   * Set only when the listing cannot tell: the last message is a system event
+   * or deleted, newer than the read horizon, and the conversation carries no
+   * `lastimreceivedtime` to say when its last REAL message came. `unread` is
+   * then false — Teams shows no badge for a call recording — and the read
+   * tools settle it by fetching.
    */
   unread_uncertain?: true;
+  /**
+   * A channel the user has hidden in Teams (`memberProperties.interest` is
+   * `NotInterested`). Teams shows it nowhere, unread or not.
+   */
+  hidden?: true;
   /** ISO time of the last message; absent for a conversation with none. */
   lastActivity?: string;
   lastMessagePreview?: string;
@@ -76,7 +94,11 @@ interface MessageLike {
   properties?: RawMessage['properties'];
 }
 
-/** Message types a person wrote. Everything else (`ThreadActivity/*`, `Event/Call`, …) is a system event. */
+/**
+ * Message types a person wrote. Everything else is a system event that Teams
+ * never counts as unread: `RichText/Media_*` (call recordings, transcripts),
+ * `Event/*`, `ThreadActivity/*`, `Control/*`, ….
+ */
 const USER_MESSAGE_TYPES = new Set(['Text', 'RichText/Html']);
 
 /** Longest last-message preview a conversation summary carries. */
@@ -94,6 +116,7 @@ const IMAGE_OBJECT_PATH = /^\/v1\/objects\/([^/]+)\/views\//;
 
 export function conversationKind(c: RawConversation): ConversationKind {
   const id = c.id;
+  if (id === SELF_CHAT) return 'self';
   if (id.endsWith('@thread.tacv2')) return 'channel';
   const tp = c.threadProperties ?? {};
   if (
@@ -174,21 +197,56 @@ function teamName(team: RawConversation): string {
 }
 
 /**
- * Whether the listing's `lastMessage` makes the conversation unread. A real,
- * live last message decides it outright. A system event or a deleted message
- * hides what is behind it, so one past the horizon (and not the user's own)
- * counts as unread but uncertain — the read tools confirm by fetching.
+ * `properties.lastimreceivedtime` — when the conversation's last real IM
+ * arrived — as epoch ms. Seen as an ISO string; epoch ms (a number or a
+ * numeric string) is read too. `undefined` when absent or unparseable.
+ */
+export function lastImReceivedMs(c: RawConversation): number | undefined {
+  const raw: unknown = c.properties?.lastimreceivedtime;
+  let ms: number;
+  if (typeof raw === 'number') ms = raw;
+  else if (typeof raw === 'string' && /^\s*\d+\s*$/.test(raw)) ms = Number(raw);
+  else if (typeof raw === 'string' && raw.trim() !== '') ms = Date.parse(raw);
+  else return undefined;
+  return Number.isFinite(ms) && ms > 0 ? ms : undefined;
+}
+
+/**
+ * Whether the conversation is unread, the way Teams decides it: its last REAL
+ * message (Text / RichText/Html, not deleted) is newer than the read horizon
+ * and not the user's own. System events — a call recording, a member added —
+ * never make a conversation unread.
+ *
+ * The last real message's time is the newer of `lastimreceivedtime` and a
+ * real `lastMessage`. A real `lastMessage` is the newest message of all, so it
+ * also says who sent the last real one. When the last message is a system
+ * event or deleted and there is no `lastimreceivedtime`, nothing says when the
+ * last real message came: that is not unread, but uncertain.
  */
 function lastMessageUnread(
-  last: RawLastMessage | undefined,
+  c: RawConversation,
   horizon: number,
   meMri: string,
 ): { unread: boolean; uncertain: boolean } {
+  const last = c.lastMessage;
+  const lastIsReal = last !== undefined && isUserMessage(last) && !isDeleted(last);
+  if (lastIsReal && senderMri(last.from) === meMri) return { unread: false, uncertain: false };
+
+  const lastIm = lastImReceivedMs(c);
+  const lastArrival = lastIsReal ? Number(last.id) : NaN;
+  const candidates = [lastIm, lastArrival].filter((n): n is number => n !== undefined && Number.isFinite(n));
+  if (candidates.length > 0) return { unread: Math.max(...candidates) > horizon, uncertain: false };
+
+  // A system event or deleted message past the horizon, and no other signal.
   if (last === undefined) return { unread: false, uncertain: false };
-  if (isUserMessage(last) && !isDeleted(last)) return { unread: isUnread(last, horizon, meMri), uncertain: false };
   const arrival = Number(last.id);
-  const unread = Number.isFinite(arrival) && arrival > horizon && senderMri(last.from) !== meMri;
-  return { unread, uncertain: unread };
+  const uncertain = Number.isFinite(arrival) && arrival > horizon && senderMri(last.from) !== meMri;
+  return { unread: false, uncertain };
+}
+
+/** A channel the user has hidden in Teams. */
+function isHiddenChannel(c: RawConversation): boolean {
+  return c.memberProperties?.interest === 'NotInterested';
 }
 
 export function conversationSummary(
@@ -205,7 +263,7 @@ export function conversationSummary(
   const lastSender = systemEvent ? undefined : nonEmpty(last?.imdisplayname);
   const ownTeam = kind === 'channel' && isTeamThread(c);
 
-  let title = ownTeam ? 'General' : nonEmpty(tp.topic);
+  let title = kind === 'self' ? SELF_CHAT_TITLE : ownTeam ? 'General' : nonEmpty(tp.topic);
   if (title === undefined) {
     // An untopiced chat is named after the other person — learnable only when
     // they sent the last message.
@@ -220,7 +278,8 @@ export function conversationSummary(
 
   const lastActivity = last ? (toIso(last.originalarrivaltime) ?? toIso(last.composetime)) : undefined;
   const preview = systemEvent ? SYSTEM_EVENT_PREVIEW : last?.content !== undefined ? htmlToText(last.content) : undefined;
-  const { unread, uncertain } = lastMessageUnread(last, readHorizon(c), meMri);
+  const { unread, uncertain } = lastMessageUnread(c, readHorizon(c), meMri);
+  const hidden = kind === 'channel' && isHiddenChannel(c);
 
   return {
     id: c.id,
@@ -229,6 +288,7 @@ export function conversationSummary(
     ...(team !== undefined ? { team } : {}),
     unread,
     ...(uncertain ? { unread_uncertain: true as const } : {}),
+    ...(hidden ? { hidden: true as const } : {}),
     ...(lastActivity !== undefined ? { lastActivity } : {}),
     ...(preview ? { lastMessagePreview: truncate(preview, PREVIEW_CHARS) } : {}),
     ...(lastSender !== undefined ? { lastSender } : {}),
@@ -419,8 +479,20 @@ export function normaliseMessage(m: RawMessage, meMri: string): NormalisedMessag
 }
 
 /**
- * Resolve a user's `conversation` argument: an exact id wins outright, else a
- * case-insensitive substring of the title or team name.
+ * Every conversation's summary, with the self-chat added when the listing did
+ * not carry it — so `48:notes` resolves by id or name whether or not Teams
+ * listed it.
+ */
+export function summariseAll(raw: readonly RawConversation[], meMri: string): ConversationSummary[] {
+  const out = raw.map((c) => conversationSummary(c, meMri, raw));
+  if (!out.some((s) => s.id === SELF_CHAT)) out.push(conversationSummary({ id: SELF_CHAT }, meMri));
+  return out;
+}
+
+/**
+ * Resolve a user's `conversation` argument: an exact id wins outright, then
+ * `notes` / `self` name the self-chat, else a case-insensitive substring of
+ * the title or team name.
  */
 export function matchConversations<T extends Pick<ConversationSummary, 'id' | 'title' | 'team'>>(
   summaries: readonly T[],
@@ -430,5 +502,9 @@ export function matchConversations<T extends Pick<ConversationSummary, 'id' | 't
   if (exact) return [exact];
   const q = query.trim().toLowerCase();
   if (q === '') return [];
+  if (SELF_CHAT_ALIASES.has(q)) {
+    const self = summaries.find((s) => s.id === SELF_CHAT);
+    if (self) return [self];
+  }
   return summaries.filter((s) => s.title.toLowerCase().includes(q) || (s.team?.toLowerCase().includes(q) ?? false));
 }

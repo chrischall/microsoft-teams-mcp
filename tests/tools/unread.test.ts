@@ -277,13 +277,86 @@ describe('teams_get_unread', () => {
     expect(data?.total_unread_exact).toBe(false);
   });
 
-  it('confirms an unread_uncertain conversation by fetching it', async () => {
-    const base = rawConv(GROUP, { topic: 'Call happened', at: T0 + 4 * MIN, horizon: T0 + 2 * MIN });
-    const convs = [{ ...base, lastMessage: { ...base.lastMessage!, messagetype: 'Event/Call' } }];
+  it('leaves an unread_uncertain conversation out by default, without fetching it', async () => {
+    const convs = [rawConv(GROUP, { topic: 'Call happened', at: T0 + 4 * MIN, horizon: T0 + 2 * MIN, type: 'Event/Call' })];
+    const getMessages = perConversation();
+    const { data } = await call(fakeChatsvc(convs, { getMessages }));
+
+    expect(data).toMatchObject({ total_unread: 0, conversations: [] });
+    expect(getMessages).not.toHaveBeenCalled();
+  });
+
+  it('confirms an unread_uncertain conversation by fetching it with include_uncertain', async () => {
+    const convs = [rawConv(GROUP, { topic: 'Call happened', at: T0 + 4 * MIN, horizon: T0 + 2 * MIN, type: 'Event/Call' })];
+    const { data } = await call(fakeChatsvc(convs, { getMessages: perConversation() }), { include_uncertain: true });
+
+    expect(ids(data)).toEqual([GROUP]);
+    expect(entry(data, GROUP).conversation).toMatchObject({ unread: true });
+    expect(entry(data, GROUP).conversation).not.toHaveProperty('unread_uncertain');
+  });
+
+  it('never reads a meeting chat whose only news is a call recording or transcript', async () => {
+    const convs = [
+      rawConv(MEETING, {
+        topic: 'Recorded sync',
+        at: T0 + 9 * MIN,
+        horizon: T0 + 2 * MIN,
+        lastIm: T0 + 2 * MIN,
+        type: 'RichText/Media_CallRecording',
+      }),
+      rawConv(GROUP, {
+        topic: 'Transcribed',
+        at: T0 + 8 * MIN,
+        horizon: T0 + 2 * MIN,
+        lastIm: T0 + 1 * MIN,
+        type: 'RichText/Media_CallTranscript',
+      }),
+    ];
+    const getMessages = perConversation();
+    const { data } = await call(fakeChatsvc(convs, { getMessages }));
+
+    expect(data).toMatchObject({ total_unread: 0, conversations: [] });
+    expect(getMessages).not.toHaveBeenCalled();
+  });
+
+  it('reads a chat whose last message is a recording but whose last real message is unread', async () => {
+    const convs = [
+      rawConv(GROUP, {
+        topic: 'Project Falcon',
+        at: T0 + 9 * MIN,
+        horizon: T0 + 2 * MIN,
+        lastIm: T0 + 4 * MIN,
+        type: 'RichText/Media_CallRecording',
+      }),
+    ];
     const { data } = await call(fakeChatsvc(convs, { getMessages: perConversation() }));
 
     expect(ids(data)).toEqual([GROUP]);
-    expect(entry(data, GROUP).conversation).not.toHaveProperty('unread_uncertain');
+    expect(entry(data, GROUP).unread_count).toBe(2);
+  });
+
+  describe('hidden channels', () => {
+    const HIDDEN = '19:hidden0001@thread.tacv2';
+    const convs = [
+      ...CONVS,
+      rawConv(HIDDEN, { topic: 'Archive', at: T0 + 7 * MIN, horizon: T0, spaceId: TEAM, interest: 'NotInterested' }),
+    ];
+    const msgs = { ...MESSAGES, [HIDDEN]: [rawMsg(T0 + 7 * MIN, { conv: HIDDEN, rootId: T0 + 7 * MIN, text: 'hidden post' })] };
+
+    it('leaves channels hidden in Teams out by default, without fetching them', async () => {
+      const getMessages = perConversation(msgs);
+      const { data } = await call(fakeChatsvc(convs, { getMessages }));
+
+      expect(ids(data)).not.toContain(HIDDEN);
+      expect(getMessages.mock.calls.map((c) => c[0])).not.toContain(HIDDEN);
+    });
+
+    it('includes them with include_hidden', async () => {
+      const { data } = await call(fakeChatsvc(convs, { getMessages: perConversation(msgs) }), { include_hidden: true });
+
+      expect(ids(data)).toContain(HIDDEN);
+      expect(entry(data, HIDDEN).conversation).toMatchObject({ hidden: true });
+    });
   });
 
   it('returns an empty result when nothing is unread', async () => {
@@ -329,7 +402,11 @@ describe('teams_get_unread', () => {
     expect(tool.description).toMatch(/badges are unaffected/i);
     expect(tool.annotations?.readOnlyHint).toBe(true);
     expect(tool.annotations?.openWorldHint).toBe(true);
+    expect(tool.description).toMatch(/call recording/i);
+    expect(tool.description).toMatch(/hidden/i);
     expect(Object.keys((tool.inputSchema as { properties?: object }).properties ?? {}).sort()).toEqual([
+      'include_hidden',
+      'include_uncertain',
       'kinds',
       'max_conversations',
       'per_conversation_limit',

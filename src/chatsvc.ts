@@ -29,6 +29,7 @@ import {
 } from '@chrischall/mcp-utils';
 import { TokenManager, type BearerTokens } from '@chrischall/mcp-utils/session';
 import { createTokenCache, reportCacheWriteFailure } from './token-cache.js';
+import { SELF_CHAT } from './model.js';
 
 /**
  * Load the bridge bootstrap lazily.
@@ -271,9 +272,14 @@ export class ChatServiceClient {
     return this.#baseUrl;
   }
 
-  /** Epoch ms at which the current token expires, or `null` if none is held. */
+  /**
+   * Epoch ms at which the current token expires, or `null` if none is held —
+   * including after a capture that failed, when the token manager exists but
+   * holds nothing (it reports that as expiry 0, i.e. 1970).
+   */
   tokenExpiresAt(): number | null {
-    return this.#tokens ? this.#tokens.getExpiresAt() : null;
+    const at = this.#tokens?.getExpiresAt();
+    return at !== undefined && Number.isFinite(at) && at > 0 ? at : null;
   }
 
   /**
@@ -315,8 +321,9 @@ export class ChatServiceClient {
   }
 
   /**
-   * Every conversation the user is in, across up to 10 pages, minus `48:*`
-   * system threads (notes, calendar, …) which are not chats.
+   * Every conversation the user is in, across up to 10 pages, minus the
+   * `48:*` system threads (calendar, notifications, …) which are not chats —
+   * except `48:notes`, the user's self-chat, which is.
    */
   async listConversations(): Promise<RawConversation[]> {
     this.#requireConfigured();
@@ -327,7 +334,7 @@ export class ChatServiceClient {
       const convs = body.conversations ?? [];
       if (convs.length === 0) break;
       for (const c of convs) {
-        if (typeof c?.id === 'string' && !c.id.startsWith('48:')) out.push(c);
+        if (typeof c?.id === 'string' && (!c.id.startsWith('48:') || c.id === SELF_CHAT)) out.push(c);
       }
       url = this.#nextLink(body);
     }

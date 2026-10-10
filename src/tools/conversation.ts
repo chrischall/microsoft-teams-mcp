@@ -14,12 +14,12 @@ import { McpToolError, toolAnnotations } from '@chrischall/mcp-utils';
 import type { RawMessage } from '../chatsvc.js';
 import type { TeamsDeps } from '../deps.js';
 import {
-  conversationSummary,
   isUnread,
   isUserMessage,
   matchConversations,
   normaliseMessage,
   readHorizon,
+  summariseAll,
   type ConversationSummary,
   type NormalisedMessage,
 } from '../model.js';
@@ -122,7 +122,7 @@ export function registerConversationTools(server: McpServer, { chatsvc }: Pick<T
       description:
         'Read the messages of any chat or channel the signed-in user is in, by id (from ' +
         'teams_list_chats / teams_list_teams_and_channels) or by name, without opening it in ' +
-        'Teams. Messages come oldest first, each with id, time (ISO 8601), sender, fromMe, ' +
+        'Teams. "48:notes" (or the name "notes" / "self") is the user\'s own notes self-chat. Messages come oldest first, each with id, time (ISO 8601), sender, fromMe, ' +
         'text, subject, edited/deleted flags and attachments; a channel is returned as threads, ' +
         'each root post with its replies (a root older than the window is marked missing). ' +
         'unread_only returns just the messages the user has not read; since stops at a time; ' +
@@ -136,7 +136,10 @@ export function registerConversationTools(server: McpServer, { chatsvc }: Pick<T
         conversation: z
           .string()
           .min(1)
-          .describe('The conversation id, or a case-insensitive substring of the chat title, channel name or team name.'),
+          .describe(
+            'The conversation id ("48:notes", "notes" or "self" for the self-chat), or a case-insensitive ' +
+              'substring of the chat title, channel name or team name.',
+          ),
         unread_only: z
           .boolean()
           .optional()
@@ -148,9 +151,9 @@ export function registerConversationTools(server: McpServer, { chatsvc }: Pick<T
     async ({ conversation, unread_only, since, limit }) => {
       try {
         const [raw, me] = await Promise.all([chatsvc.listConversations(), chatsvc.meMri()]);
-        const summaries = raw.map((c) => conversationSummary(c, me, raw));
-        const summary = resolveConversation(summaries, conversation, 'read');
-        const conv = raw.find((c) => c.id === summary.id)!;
+        const summary = resolveConversation(summariseAll(raw, me), conversation, 'read');
+        // The self-chat resolves even when the listing does not carry it.
+        const conv = raw.find((c) => c.id === summary.id) ?? { id: summary.id };
         const horizon = readHorizon(conv);
         const cutoff = since !== undefined ? Date.parse(since) : undefined;
         const wanted = (m: RawMessage): boolean => isUserMessage(m) && (!unread_only || isUnread(m, horizon, me));

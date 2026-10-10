@@ -27,7 +27,8 @@ Tell the kinds apart by id suffix:
 | `@thread.tacv2` | channel (`threadProperties.spaceId` is its team's id) |
 | `@thread.v2` | group or meeting chat (`19:meeting_…` ids are meetings) |
 | `@unq.gbl.spaces` | 1:1 chat (no topic — name it after the other person) |
-| `48:*` | system thread (notes, calendar, …) — not a chat; skip |
+| `48:notes` | the user's own notes self-chat — readable and writable like any chat |
+| `48:*` (other) | system thread (calendar, …) — not a chat; skip |
 
 ## Which conversations are unread
 
@@ -35,16 +36,29 @@ Tell the kinds apart by id suffix:
 teams_get '/users/ME/conversations?view=msnp24Equivalent&pageSize=200' \
   | jq -r '.conversations[]
       | select(.id | startswith("48:") | not)
+      | select(.memberProperties.interest != "NotInterested")
       | ((.properties.consumptionhorizon // "0") | split(";")[0] | tonumber? // 0) as $read
-      | select((.lastMessage.id // "0" | tonumber? // 0) > $read)
+      | (.properties.lastimreceivedtime // "" | tostring
+          | if test("^[0-9]+$") then tonumber
+            else (sub("\\.[0-9]+Z$"; "Z") | (fromdateiso8601? // 0) * 1000) end) as $lastIm
+      | (if (.lastMessage.messagetype // "") as $t | ($t == "Text" or $t == "RichText/Html")
+           then (.lastMessage.id // "0" | tonumber? // 0) else 0 end) as $lastReal
+      | select([$lastIm, $lastReal] | max > $read)
       | [.id, (.threadProperties.topic // .lastMessage.imdisplayname // "(untitled)")] | @tsv'
 ```
 
 `properties.consumptionhorizon` is `"<lastReadArrivalMs>;<clientMs>;<messageId>"`.
-A message is unread when its `id` (arrival epoch ms) is greater than the first
-segment. This rough filter also counts a conversation whose newest message is
-your own; drop those by comparing `.lastMessage.from` (a URL ending in the
-sender's MRI) with your MRI, `8:orgid:<oid>` from the token's `oid` claim.
+A conversation is unread when its last REAL message (`Text` / `RichText/Html`)
+arrived after the first segment. Only real messages count: a meeting chat whose
+newest message is a call recording (`RichText/Media_CallRecording`), a
+transcript, `Event/Call`, `ThreadActivity/*` or `Control/*` is not unread in
+Teams, so use `properties.lastimreceivedtime` (when the last real IM arrived —
+an ISO time) rather than `lastMessage.id` when the last message is one of those.
+Channels with `memberProperties.interest == "NotInterested"` are hidden in
+Teams and show no badge; the filter skips them. It still counts a conversation
+whose newest message is your own; drop those by comparing `.lastMessage.from`
+(a URL ending in the sender's MRI) with your MRI, `8:orgid:<oid>` from the
+token's `oid` claim.
 
 ## Read one conversation
 

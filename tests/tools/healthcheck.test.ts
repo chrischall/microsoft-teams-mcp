@@ -135,6 +135,28 @@ describe('teams_healthcheck', () => {
     await harness.close();
   });
 
+  it('reports no token expiry (null, not minutes since 1970) when the capture failed', async () => {
+    const chatsvc = new ChatServiceClient({
+      env: { TEAMS_TOKEN_CACHE: 'false' },
+      captureToken: async () => {
+        throw new Error('could not capture a Teams token from the browser (timed out). Open …');
+      },
+      fetchImpl: (async () => new Response('{}')) as unknown as typeof fetch,
+    });
+    const harness = await createTestHarness((server) =>
+      registerHealthcheckTool(server, { teams: { transport: fakeTransport() } as unknown as TeamsClient, chatsvc }),
+    );
+
+    const data = parseToolResult(await harness.callTool('teams_healthcheck')) as Record<string, unknown>;
+    const svc = data.chat_service as ChatServiceBlock;
+
+    expect(data.ok).toBe(false);
+    expect(svc.token_expires_at).toBeNull();
+    expect(svc.token_minutes_remaining).toBeNull();
+    expect(svc.conversations).toBeNull();
+    await harness.close();
+  });
+
   it('names a directly-supplied token as the source', async () => {
     const harness = await createTestHarness((server) =>
       registerHealthcheckTool(server, {

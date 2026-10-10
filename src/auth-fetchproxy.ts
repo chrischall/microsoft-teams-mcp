@@ -30,7 +30,7 @@ import {
   createFetchproxyTransport,
   type Capability,
 } from '@chrischall/mcp-utils/fetchproxy';
-import { readTtlMsEnv } from '@chrischall/mcp-utils';
+import { bridgeDeadlineMs, captureWindowMs } from './capture-window.js';
 import { getWsPort } from './client.js';
 import { PACKAGE_NAME, VERSION } from './version.js';
 
@@ -51,27 +51,6 @@ export const CAPTURE_DECL = {
  * nothing wider is needed.
  */
 export const TRUST_DOMAINS = [CAPTURE_DECL.host];
-
-/**
- * How long to wait for the page to make a request we can read.
- *
- * The window IS the mechanism: capture resolves on the NEXT matching request,
- * so nothing the page did before the listener came up counts. 30s is long
- * enough for the user to click into a chat, short enough that an idle tab does
- * not hang a tool call for minutes.
- */
-const CAPTURE_TIMEOUT_MS = readTtlMsEnv('TEAMS_CAPTURE_TIMEOUT', 30_000);
-
-/**
- * The transport-wide deadline, derived from the capture window rather than left
- * at the library default.
- *
- * `captureRequestHeader`'s own `timeoutMs` is silently capped by
- * `fetchTimeoutMs`: a window raised past the deadline fails early at the
- * deadline's number, which reads as a timeout nobody configured. Deriving it
- * means the two cannot disagree.
- */
-const BRIDGE_DEADLINE_MS = Math.max(CAPTURE_TIMEOUT_MS + 15_000, 30_000);
 
 /**
  * Shortest plausible token. Real ones are several KB of JWT; this only guards
@@ -106,7 +85,9 @@ export function stripBearer(raw: string): string {
  * Capture a chat-service access token from the user's signed-in Teams tab.
  * Returns the bare token (no `Bearer ` prefix).
  */
-export async function captureTokenViaFetchproxy(): Promise<string> {
+export async function captureTokenViaFetchproxy(env: NodeJS.ProcessEnv = process.env): Promise<string> {
+  // Read per capture, not at import: see `capture-window.ts`.
+  const windowMs = captureWindowMs(env);
   const transport = createFetchproxyTransport({
     ...withFetch(
       createBootstrapOpts({
@@ -115,7 +96,10 @@ export async function captureTokenViaFetchproxy(): Promise<string> {
       }),
     ),
     port: getWsPort(),
-    fetchTimeoutMs: BRIDGE_DEADLINE_MS,
+    // Both: the explicit deadline for every bridge version, and the declared
+    // window so mcp-utils' own derivation agrees with it.
+    fetchTimeoutMs: bridgeDeadlineMs(windowMs),
+    captureWindowMs: windowMs,
     serverName: PACKAGE_NAME,
     version: VERSION,
   });
@@ -130,7 +114,7 @@ export async function captureTokenViaFetchproxy(): Promise<string> {
     try {
       const raw = await transport.server.captureRequestHeader({
         ...CAPTURE_DECL,
-        timeoutMs: CAPTURE_TIMEOUT_MS,
+        timeoutMs: windowMs,
       });
       if (typeof raw !== 'string') {
         throw new Error(`${CAPTURE_DECL.host}: capture returned no header`);

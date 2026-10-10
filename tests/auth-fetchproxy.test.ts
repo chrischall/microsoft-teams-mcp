@@ -80,6 +80,37 @@ describe('captureTokenViaFetchproxy', () => {
     expect(close).toHaveBeenCalledTimes(1);
   });
 
+  it('derives the bridge deadline from the default 30s capture window', async () => {
+    captureRequestHeader.mockResolvedValue(FAKE_TOKEN);
+    await captureTokenViaFetchproxy({});
+
+    const opts = createFetchproxyTransport.mock.calls[0][0] as { fetchTimeoutMs: number; captureWindowMs: number };
+    expect(opts.fetchTimeoutMs).toBe(45_000);
+    expect(opts.captureWindowMs).toBe(30_000);
+  });
+
+  it('honours TEAMS_CAPTURE_TIMEOUT in the capture window AND the bridge deadline', async () => {
+    captureRequestHeader.mockResolvedValue(FAKE_TOKEN);
+    await captureTokenViaFetchproxy({ TEAMS_CAPTURE_TIMEOUT: '120' });
+
+    expect(captureRequestHeader).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 120_000 }));
+    const opts = createFetchproxyTransport.mock.calls[0][0] as { fetchTimeoutMs: number; captureWindowMs: number };
+    expect(opts.fetchTimeoutMs).toBe(135_000);
+    expect(opts.captureWindowMs).toBe(120_000);
+  });
+
+  it('reads TEAMS_CAPTURE_TIMEOUT from process.env when the capture runs, not at import', async () => {
+    captureRequestHeader.mockResolvedValue(FAKE_TOKEN);
+    vi.stubEnv('TEAMS_CAPTURE_TIMEOUT', '60');
+    try {
+      await captureTokenViaFetchproxy();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect(captureRequestHeader).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 60_000 }));
+    expect((createFetchproxyTransport.mock.calls[0][0] as { fetchTimeoutMs: number }).fetchTimeoutMs).toBe(75_000);
+  });
+
   it('rejects a header too short to be a token, with the click-into-a-chat hint', async () => {
     captureRequestHeader.mockResolvedValue('Bearer short');
 

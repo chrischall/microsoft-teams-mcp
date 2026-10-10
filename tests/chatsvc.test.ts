@@ -115,6 +115,20 @@ describe('requests', () => {
   });
 });
 
+describe('tokenExpiresAt with no token held', () => {
+  it('is null before any call', () => {
+    expect(client(vi.fn()).tokenExpiresAt()).toBeNull();
+  });
+
+  it('is null after a capture that failed, not the epoch', async () => {
+    const c = client(vi.fn(async () => jsonResponse({ conversations: [] })), async () => {
+      throw new Error('could not capture a Teams token from the browser (timed out)');
+    });
+    await expect(c.listConversations()).rejects.toThrow(/could not capture/);
+    expect(c.tokenExpiresAt()).toBeNull();
+  });
+});
+
 describe('401 handling', () => {
   it('re-captures once and replays once on a 401', async () => {
     const capture = vi.fn(async () => jwt());
@@ -160,7 +174,7 @@ describe('other failures', () => {
 });
 
 describe('listConversations', () => {
-  it('follows backwardLink pages and drops 48: system ids', async () => {
+  it('follows backwardLink pages and drops 48: system ids but the 48:notes self-chat', async () => {
     const fetchImpl: FetchMock = vi.fn(async (input) =>
       String(input).includes('syncState=page2')
         ? jsonResponse(fixture('conversations-page2.json'))
@@ -177,6 +191,7 @@ describe('listConversations', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
     expect(convs.map((c) => c.id)).toEqual([
       '19:aaaa1111@thread.v2',
+      '48:notes',
       '19:bbbb2222@thread.tacv2',
       '19:00000000-0000-0000-0000-0000000000a1_00000000-0000-0000-0000-0000000000b2@unq.gbl.spaces',
     ]);

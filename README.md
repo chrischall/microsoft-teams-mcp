@@ -92,7 +92,7 @@ Everything is optional — by default the token is captured from your browser.
 | `TEAMS_DISABLE_FETCHPROXY` | `true` to never capture from the browser (then `TEAMS_ACCESS_TOKEN` is required). |
 | `TEAMS_CHATSVC_REGION` | Chat-service region in the API path. Defaults to `amer`. |
 | `TEAMS_CHATSVC_BASE` | Full override for the API base (default `https://teams.cloud.microsoft/api/chatsvc/<region>/v1`). |
-| `TEAMS_CAPTURE_TIMEOUT` | Seconds to wait for the Teams tab to issue a chat-service request. Defaults to `30`. |
+| `TEAMS_CAPTURE_TIMEOUT` | Seconds to wait for the Teams tab to issue a chat-service request. Defaults to `30`. The bridge deadline is derived from it (window + 15s), for the capture and for `teams_healthcheck` alike. |
 | `TEAMS_TOKEN_CACHE` | `false` to keep the captured token in memory only. Defaults to on. |
 | `TEAMS_TOKEN_FILE` | Where the captured token is cached. Defaults to `~/.microsoft-teams-mcp/token.json`. |
 | `TEAMS_WS_PORT` | fetchproxy concentrator port. Defaults to `37149`, the fleet-wide shared port. |
@@ -102,22 +102,28 @@ Everything is optional — by default the token is captured from your browser.
 ## Tools
 
 - `teams_list_chats` — every chat you are in (1:1, group and meeting chats,
-  not just the visible sidebar), most recent activity first: id, kind,
+  not just the visible sidebar, plus your `48:notes` self-chat as kind
+  `self` when Teams lists it), most recent activity first: id, kind,
   title, unread flag, ISO-8601 last-activity time, last-message preview and
   sender. `unread_only`, `query` (title) and `limit` (default 50, max 500).
 - `teams_list_teams_and_channels` — every channel you are in, by team then
-  title, with the same fields. `unread_only`, `query` (channel or team name)
-  and `limit` (default 50, max 500).
+  title, with the same fields. Channels you have hidden in Teams are listed
+  after the rest with `hidden: true`, and left out of `unread_only` unless
+  `include_hidden` is set. `unread_only`, `include_hidden`, `query` (channel
+  or team name) and `limit` (default 50, max 500).
 - `teams_read_conversation` — read any chat or channel by id or name,
   oldest first: sender, ISO-8601 time, text, subject, edited/deleted flags
   and attachments. A channel comes back as threads (root post + replies).
   `unread_only`, `since` (ISO 8601) and `limit` (default 50, max 500, newest
   kept). An ambiguous name lists the candidates and asks for the id.
+  `48:notes` — or the name `notes` / `self` — is your notes self-chat.
 - `teams_get_unread` — every unread message across your chats and channels,
   grouped by conversation, most recent first. Filter by `kinds` (`chat`,
   `channel`, `meeting`, `oneOnOne`) or `query`; `per_conversation_limit`
   (default 50) and `max_conversations` (default 20 — the rest are named in
-  `more_unread_conversations`).
+  `more_unread_conversations`). Hidden channels are left out unless
+  `include_hidden`; `include_uncertain` also reads conversations the listing
+  could not decide (see below).
 - `teams_get_attachment` — one attachment of a message: an inline image is
   returned as the image itself; a shared file as its name, type and open
   link only (files live in SharePoint and this server cannot download their
@@ -128,8 +134,9 @@ Everything is optional — by default the token is captured from your browser.
   page, so it requires the Activity view open.
 - `teams_healthcheck` — probes the chat service (one conversations listing,
   which also captures a token on a cold start) and reports where the token
-  came from and when it expires — never the token — plus the bridge status
-  the capture and the Activity feed rely on.
+  came from and when it expires (both `null` when no token is held, e.g.
+  after a failed capture) — never the token — plus the bridge status the
+  capture and the Activity feed rely on.
 
 **Write** (both ask you to confirm first — see [Writes](#writes)):
 
@@ -174,8 +181,9 @@ On a client without prompts the token is something the model passes back
 itself, so keep `MCP_CONFIRM_MODE=ask-user` and approve each preview in chat
 as the real guard on what gets posted.
 
-**Try it in your own notes first.** The conversation `48:notes` is your Teams
-self-chat ("notes to self"): both writes accept it, nobody else sees it, and
+**Try it in your own notes first.** The conversation `48:notes` (also by the
+name `notes` or `self`) is your Teams self-chat ("notes to self"): both writes
+accept it, `teams_read_conversation` reads it, nobody else sees it, and
 it is the safe place to see what a message or reaction will look like. Every
 other `48:` system conversation (calendar and the like) is refused.
 
@@ -203,8 +211,17 @@ instead.
   because the server usually runs beside write-capable MCPs (mail, messaging)
   that an injected instruction could otherwise reach.
 - **Unread means what Teams means.** A message is unread when it arrived
-  after the conversation's read marker (`consumptionhorizon`) and was not
-  sent by you. This server only reads that marker; it never moves it.
+  after the conversation's read marker (`consumptionhorizon`), was not sent
+  by you, and is a real message. System messages — call recordings and
+  transcripts (`RichText/Media_*`), `Event/*`, `ThreadActivity/*`,
+  `Control/*` — never make anything unread, so a meeting chat whose only news
+  is its recording is read. A conversation is unread when its last real
+  message (`lastimreceivedtime`, else a real last message) is past the
+  marker. When neither says (a system event past the marker and no
+  `lastimreceivedtime`), the summary is `unread: false, unread_uncertain:
+  true`; reading the conversation settles it. Channels you have hidden in
+  Teams (`hidden: true`) are not counted as unread unless you pass
+  `include_hidden`. This server only reads the marker; it never moves it.
 - **The token only goes to Teams.** It is sent to the chat-service base and,
   for inline images, only to https hosts under `.asm.skype.com` (Teams' own
   image store) — an image link in a message pointing anywhere else is

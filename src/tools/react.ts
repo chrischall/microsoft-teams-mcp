@@ -130,7 +130,7 @@ export function registerReactTools(server: McpServer, { chatsvc }: Pick<TeamsDep
         'teams_read_conversation. reaction is an emoji or name — thumbsup/👍/like, heart/❤️, laugh/😆, ' +
         `surprised/😮, sad/😢, angry/😡, checkmark/✅ — or any raw Teams reaction key (e.g. fire, ` +
         '1f389_partypopper); an emoji without a known key is refused with the rule for spelling its key. ' +
-        `conversation "${SELF_CHAT}" is the user's own notes self-chat — use it to try this tool. Everyone ` +
+        `conversation "${SELF_CHAT}" (or "notes" / "self") is the user's own notes self-chat — use it to try this tool. Everyone ` +
         'in the conversation sees the reaction. The result says whether reading the message back showed the ' +
         'change (verified; null when the message was not found again); status "unknown" means Teams did not ' +
         'confirm the change and the read-back did not show it — check the message before retrying. ' +
@@ -143,7 +143,10 @@ export function registerReactTools(server: McpServer, { chatsvc }: Pick<TeamsDep
         conversation: z
           .string()
           .min(1)
-          .describe(`The conversation id (or "${SELF_CHAT}"), or a case-insensitive substring of the chat title, channel name or team name.`),
+          .describe(
+            `The conversation id (or "${SELF_CHAT}" — also by the name "notes" or "self" — for the self-chat), ` +
+              'or a case-insensitive substring of the chat title, channel name or team name.',
+          ),
         message_id: z.string().min(1).describe('The message to react to, as teams_read_conversation lists it.'),
         reaction: z.string().min(1).describe('An emoji (👍), a name (thumbsup) or a Teams reaction key (like, 1f389_partypopper).'),
         remove: z.boolean().optional().describe('Withdraw this reaction instead of adding it (default false).'),

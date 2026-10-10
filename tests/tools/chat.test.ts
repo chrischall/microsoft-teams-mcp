@@ -50,6 +50,26 @@ describe('teams_list_chats', () => {
     expect((data?.chats as Row[]).map((c) => c.id)).toEqual([GROUP, DM]);
   });
 
+  it('lists the 48:notes self-chat when Teams lists it, as kind self', async () => {
+    const { data } = await call(fakeChatsvc([...CONVS, { id: '48:notes', properties: {}, threadProperties: {} }]));
+    const self = (data?.chats as Row[]).find((c) => c.id === '48:notes');
+
+    expect(self).toMatchObject({ kind: 'self', title: 'Notes (self-chat)', unread: false });
+  });
+
+  it('does not call a meeting chat unread for a call recording after the last read message', async () => {
+    const recorded = rawConv('19:meeting_rec0001@thread.v2', {
+      topic: 'Recorded sync',
+      at: T0 + 50 * MIN,
+      horizon: T0 + 45 * MIN,
+      lastIm: T0 + 44 * MIN,
+      type: 'RichText/Media_CallRecording',
+    });
+    const { data } = await call(fakeChatsvc([...CONVS, recorded]), { unread_only: true });
+
+    expect((data?.chats as Row[]).map((c) => c.id)).toEqual([GROUP, DM]);
+  });
+
   it('filters by a case-insensitive title substring with query', async () => {
     const { data } = await call(fakeChatsvc(CONVS), { query: 'falcon' });
 

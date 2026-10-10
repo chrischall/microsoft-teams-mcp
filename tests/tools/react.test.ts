@@ -412,6 +412,12 @@ describe('teams_react — refusals before any preview', () => {
     expect(getMessage).not.toHaveBeenCalled();
   });
 
+  it('resolves the self-chat by the name "notes"', async () => {
+    const { chatsvc, getMessage } = fakeWith();
+    await reactConfirmed(chatsvc, { conversation: 'notes', message_id: MSG, reaction: 'like' });
+    expect(getMessage.mock.calls[0]?.[0]).toBe('48:notes');
+  });
+
   it('refuses a 48: system conversation other than the self-chat', async () => {
     const { chatsvc } = fakeWith();
     const { first } = await reactConfirmed(chatsvc, { conversation: '48:calendar', message_id: MSG, reaction: 'like' });

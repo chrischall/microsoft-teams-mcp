@@ -238,7 +238,34 @@ describe('teams_read_conversation', () => {
         since: new Date(T0 + 4 * MIN).toISOString(),
       });
 
-      expect(data?.conversation).toMatchObject({ unread: true, unread_uncertain: true });
+      expect(data?.conversation).toMatchObject({ unread: false, unread_uncertain: true });
+    });
+  });
+
+  describe('the 48:notes self-chat', () => {
+    const NOTES = [rawMsg(T0 + 1 * MIN, { text: 'note to self', fromMe: true, conv: '48:notes' })];
+
+    it.each(['48:notes', 'notes', 'Self'])('reads it as %j even when the listing does not carry it', async (conversation) => {
+      const getMessages = messagesFrom(NOTES);
+      const { data } = await call(fakeChatsvc(CONVS, { getMessages }), { conversation });
+
+      expect(getMessages.mock.calls[0]?.[0]).toBe('48:notes');
+      expect(data?.conversation).toMatchObject({ id: '48:notes', kind: 'self', title: 'Notes (self-chat)', unread: false });
+      expect((data?.messages as Msg[]).map((m) => m.text)).toEqual(['note to self']);
+    });
+
+    it('reads it when the listing does carry it', async () => {
+      const getMessages = messagesFrom(NOTES);
+      const listed = [...CONVS, { id: '48:notes', properties: {}, threadProperties: {} }];
+      const { data } = await call(fakeChatsvc(listed, { getMessages }), { conversation: 'notes' });
+
+      expect(data?.conversation).toMatchObject({ id: '48:notes', kind: 'self' });
+    });
+
+    it('still refuses to resolve any other 48: id', async () => {
+      const { result } = await call(fakeChatsvc(CONVS), { conversation: '48:calendar' });
+
+      expect(result.isError).toBe(true);
     });
   });
 

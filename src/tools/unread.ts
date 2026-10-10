@@ -2,9 +2,10 @@
  * `teams_get_unread` — every message the user has not read, across all their
  * chats and channels, in one call, from the Teams chat-service API.
  *
- * One listing finds the unread conversations (the last message is past the
- * read horizon and not the user's own); each is then read newest first down
- * to its own horizon, a few at a time. Nothing writes the read marker, so the
+ * One listing finds the unread conversations (the last REAL message — never a
+ * call recording or other system event — is past the read horizon and not the
+ * user's own; channels hidden in Teams left out); each is then read newest
+ * first down to its own horizon, a few at a time. Nothing writes the read marker, so the
  * user's unread badges in Teams are exactly as they were.
  */
 import type { McpServer } from '@modelcontextprotocol/server';
@@ -23,6 +24,7 @@ import {
   type ConversationSummary,
 } from '../model.js';
 import { confirmUnread, groupThreads } from './conversation.js';
+import { countsAsUnread, includeHiddenArg } from './listing.js';
 import { wrapApiError } from './errors.js';
 import { untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
 import { makeLimitedStopAt } from './limit.js';
@@ -68,7 +70,12 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
         'messages the user has not read, oldest first; a channel\'s are grouped as threads ' +
         'under their root post (a root the user already read is marked missing). Conversations ' +
         'past max_conversations are listed by id and title in more_unread_conversations; read ' +
-        'one with teams_read_conversation. A conversation that could not be read is listed in ' +
+        'one with teams_read_conversation. As in Teams, a call recording, transcript or other ' +
+        'system event never makes a conversation unread, and channels the user has hidden in ' +
+        'Teams are left out (include_hidden adds them). A conversation whose listing cannot ' +
+        'say (a system event past the read marker, no record of the last real message) is ' +
+        'left out too unless include_uncertain is set, which reads it to find out. ' +
+        'A conversation that could not be read is listed in ' +
         'errors and the rest still come back. total_unread_exact is false when conversations ' +
         'were capped, truncated or failed. This does NOT mark anything read — the user\'s ' +
         'Teams unread badges are unaffected.' +
@@ -88,6 +95,15 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
           .min(1)
           .optional()
           .describe('Case-insensitive substring of the chat title, channel name or team name, or an exact conversation id.'),
+        include_hidden: includeHiddenArg,
+        include_uncertain: z
+          .boolean()
+          .optional()
+          .describe(
+            'Also read conversations the listing marks unread_uncertain (a system event past the read ' +
+              'marker and no record of when the last real message came), keeping those that turn out ' +
+              'to hold unread messages (default false).',
+          ),
         per_conversation_limit: z
           .number()
           .int()
@@ -110,14 +126,19 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
           ),
       },
     },
-    async ({ kinds, query, per_conversation_limit, max_conversations }) => {
+    async ({ kinds, query, include_hidden, include_uncertain, per_conversation_limit, max_conversations }) => {
       try {
         const [raw, me] = await Promise.all([chatsvc.listConversations(), chatsvc.meMri()]);
         const allowed = new Set<ConversationKind>((kinds ?? ['chat', 'channel']).flatMap((k) => KIND_FILTERS[k]));
         // Summaries are built against the FULL listing so a channel can find its team's name.
         let unread = raw
           .map((c) => conversationSummary(c, me, raw))
-          .filter((s) => s.unread && allowed.has(s.kind));
+          .filter(
+            (s) =>
+              allowed.has(s.kind) &&
+              (countsAsUnread(s, include_hidden) ||
+                (include_uncertain === true && s.unread_uncertain === true && (include_hidden === true || !s.hidden))),
+          );
         if (query !== undefined) unread = matchConversations(unread, query);
         unread.sort(byLastActivityDesc);
 
@@ -175,9 +196,8 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
         const first = failed[0];
         if (first !== undefined && failed.length === read.length) throw first.error;
 
-        // The listing can call a conversation unread when what is past the
-        // horizon has since been deleted, or when it only saw a system event;
-        // leave those out.
+        // What is past the horizon may since have been deleted, and an
+        // uncertain conversation may hold nothing unread; leave those out.
         const conversations = read.flatMap((r) => (r === null || r.unread_count === 0 ? [] : [r]));
         const exact = rest.length === 0 && failed.length === 0 && conversations.every((c) => c.truncated === undefined);
         return untrustedResult({

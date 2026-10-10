@@ -17,6 +17,12 @@
       "type": "Conversation",
       "properties": {},
       "threadProperties": {}
+    },
+    {
+      "id": "48:calendar",
+      "type": "Conversation",
+      "properties": {},
+      "threadProperties": {}
     }
   ],
   "_metadata": {

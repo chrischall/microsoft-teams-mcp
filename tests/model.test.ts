@@ -59,6 +59,10 @@ describe('conversationKind', () => {
     expect(conversationKind(conv(ONE_ON_ONE))).toBe('oneOnOne');
   });
 
+  it('classifies 48:notes as the self-chat', () => {
+    expect(conversationKind({ id: '48:notes' })).toBe('self');
+  });
+
   it('classifies any other thread as a group chat', () => {
     expect(conversationKind(conv(GROUP))).toBe('group');
   });
@@ -98,6 +102,13 @@ describe('isUserMessage', () => {
   it('rejects system events', () => {
     expect(isUserMessage(message('1760000240000'))).toBe(false);
   });
+
+  it.each(['RichText/Media_CallRecording', 'RichText/Media_CallTranscript', 'RichText/Media_Card', 'Event/Call', 'ThreadActivity/DeleteMember', 'Control/Typing'])(
+    'rejects %s as a system message',
+    (messagetype) => {
+      expect(isUserMessage({ messagetype })).toBe(false);
+    },
+  );
 });
 
 describe('isUnread', () => {
@@ -117,6 +128,12 @@ describe('isUnread', () => {
 
   it('is false for a system message', () => {
     expect(isUnread(message('1760000240000'), horizon, ME)).toBe(false);
+  });
+
+  it('is false for a call recording or transcript', () => {
+    const m = message('1760000300000');
+    expect(isUnread({ ...m, messagetype: 'RichText/Media_CallRecording' }, horizon, ME)).toBe(false);
+    expect(isUnread({ ...m, messagetype: 'RichText/Media_CallTranscript' }, horizon, ME)).toBe(false);
   });
 
   it('is false for a deleted message', () => {
@@ -338,10 +355,10 @@ describe('conversationSummary', () => {
     expect(s.lastActivity).toBe('2026-10-09T12:08:20.000Z');
   });
 
-  it('calls a conversation whose last message is someone else\'s system event past the horizon unread, but uncertain', () => {
+  it('never calls a conversation unread on a system event alone: with no lastimreceivedtime it is uncertain, not unread', () => {
     // A real message may sit between the horizon and the event; only a fetch can tell.
     const s = conversationSummary(conv(CHANNEL), ME, CONVS);
-    expect(s.unread).toBe(true);
+    expect(s.unread).toBe(false);
     expect(s.unread_uncertain).toBe(true);
   });
 
@@ -351,12 +368,107 @@ describe('conversationSummary', () => {
     expect(s).not.toHaveProperty('lastSender');
   });
 
-  it('calls a conversation whose last message was deleted after the horizon unread, but uncertain', () => {
+  it('calls a conversation whose last message was deleted after the horizon uncertain, not unread', () => {
     const c: RawConversation = {
       ...conv(GROUP),
       lastMessage: { ...conv(GROUP).lastMessage!, properties: { deletetime: '1760000100001' } },
     };
-    expect(conversationSummary(c, ME, CONVS)).toMatchObject({ unread: true, unread_uncertain: true });
+    expect(conversationSummary(c, ME, CONVS)).toMatchObject({ unread: false, unread_uncertain: true });
+  });
+
+  describe('unread from the last real message (lastimreceivedtime)', () => {
+    const HORIZON = 1_760_000_000_000;
+    const withLast = (
+      messagetype: string,
+      lastim: string | number | undefined,
+      opts: { fromMe?: boolean; deleted?: boolean } = {},
+    ): RawConversation => {
+      const base = conv(GROUP);
+      return {
+        ...base,
+        properties: {
+          ...base.properties,
+          ...(lastim !== undefined ? { lastimreceivedtime: lastim as string } : {}),
+        },
+        lastMessage: {
+          ...base.lastMessage!,
+          messagetype,
+          ...(opts.fromMe ? { from: `https://example.invalid/contacts/${ME}` } : {}),
+          ...(opts.deleted ? { properties: { deletetime: '1760000100001' } } : {}),
+        },
+      };
+    };
+    const before = new Date(HORIZON - 60_000).toISOString();
+    const after = new Date(HORIZON + 60_000).toISOString();
+
+    it.each(['RichText/Media_CallRecording', 'RichText/Media_CallTranscript', 'Event/Call', 'ThreadActivity/AddMember', 'Control/Typing'])(
+      'a %s last message after a read real message is read, and certain',
+      (type) => {
+        const s = conversationSummary(withLast(type, before), ME, CONVS);
+        expect(s.unread).toBe(false);
+        expect(s).not.toHaveProperty('unread_uncertain');
+      },
+    );
+
+    it('a system last message behind a real message past the horizon is unread, and certain', () => {
+      const s = conversationSummary(withLast('RichText/Media_CallRecording', after), ME, CONVS);
+      expect(s.unread).toBe(true);
+      expect(s).not.toHaveProperty('unread_uncertain');
+    });
+
+    it('reads lastimreceivedtime as epoch ms too, as a number or a numeric string', () => {
+      expect(conversationSummary(withLast('Event/Call', HORIZON + 1), ME, CONVS).unread).toBe(true);
+      expect(conversationSummary(withLast('Event/Call', String(HORIZON - 1)), ME, CONVS).unread).toBe(false);
+    });
+
+    it('ignores an unparseable lastimreceivedtime (falling back to uncertain)', () => {
+      const s = conversationSummary(withLast('Event/Call', 'not a time'), ME, CONVS);
+      expect(s).toMatchObject({ unread: false, unread_uncertain: true });
+    });
+
+    it('a deleted last message behind a read real message is read, and certain', () => {
+      const s = conversationSummary(withLast('Text', before, { deleted: true }), ME, CONVS);
+      expect(s.unread).toBe(false);
+      expect(s).not.toHaveProperty('unread_uncertain');
+    });
+
+    it('a real last message of mine is never unread, whatever lastimreceivedtime says', () => {
+      expect(conversationSummary(withLast('Text', after, { fromMe: true }), ME, CONVS).unread).toBe(false);
+    });
+
+    it('a real last message from someone else past the horizon is unread with or without lastimreceivedtime', () => {
+      expect(conversationSummary(withLast('RichText/Html', after), ME, CONVS).unread).toBe(true);
+      expect(conversationSummary(withLast('RichText/Html', undefined), ME, CONVS).unread).toBe(true);
+    });
+  });
+
+  describe('hidden channels', () => {
+    const interest = (c: RawConversation, value: string | undefined): RawConversation => ({
+      ...c,
+      memberProperties: value === undefined ? {} : { interest: value },
+    });
+
+    it('marks a channel the user is NotInterested in as hidden', () => {
+      expect(conversationSummary(interest(conv(CHANNEL), 'NotInterested'), ME, CONVS).hidden).toBe(true);
+    });
+
+    it('leaves a visible channel (no interest, or another value) unmarked', () => {
+      expect(conversationSummary(interest(conv(CHANNEL), undefined), ME, CONVS)).not.toHaveProperty('hidden');
+      expect(conversationSummary(interest(conv(CHANNEL), 'Interested'), ME, CONVS)).not.toHaveProperty('hidden');
+    });
+
+    it('never marks a chat hidden', () => {
+      expect(conversationSummary(interest(conv(GROUP), 'NotInterested'), ME, CONVS)).not.toHaveProperty('hidden');
+    });
+  });
+
+  it('summarises 48:notes as the self-chat', () => {
+    expect(conversationSummary({ id: '48:notes' }, ME)).toEqual({
+      id: '48:notes',
+      kind: 'self',
+      title: 'Notes (self-chat)',
+      unread: false,
+    });
   });
 
   it('never calls a conversation unread when the last event past the horizon is the user\'s own', () => {
@@ -434,5 +546,24 @@ describe('matchConversations', () => {
 
   it('returns nothing for no match', () => {
     expect(matchConversations(summaries, 'nothing like this')).toEqual([]);
+  });
+
+  describe('the self-chat', () => {
+    const self = conversationSummary({ id: '48:notes' }, ME);
+    const notesChat: ConversationSummary = { id: '19:notes0001@thread.v2', kind: 'group', title: 'Release notes', unread: false };
+    const withSelf = [...summaries, notesChat, self];
+
+    it.each(['48:notes', 'notes', 'NOTES', ' self ', 'Self'])('resolves %j to 48:notes alone', (q) => {
+      expect(matchConversations(withSelf, q).map((s) => s.id)).toEqual(['48:notes']);
+    });
+
+    it('matches by substring like any other title otherwise', () => {
+      expect(matchConversations(withSelf, 'self-chat').map((s) => s.id)).toEqual(['48:notes']);
+      expect(matchConversations(withSelf, 'release').map((s) => s.id)).toEqual(['19:notes0001@thread.v2']);
+    });
+
+    it('treats "notes" as an ordinary substring when no self-chat is listed', () => {
+      expect(matchConversations([...summaries, notesChat], 'notes').map((s) => s.id)).toEqual(['19:notes0001@thread.v2']);
+    });
   });
 });

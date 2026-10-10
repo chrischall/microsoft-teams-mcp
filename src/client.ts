@@ -17,6 +17,7 @@ import {
 } from '@chrischall/mcp-utils/fetchproxy';
 import { readPortEnv } from '@chrischall/mcp-utils';
 import type { DomListSelectorDecl } from '@fetchproxy/protocol';
+import { bridgeDeadlineMs, captureWindowMs } from './capture-window.js';
 import { PACKAGE_NAME, VERSION } from './version.js';
 
 /**
@@ -94,6 +95,12 @@ export class TeamsClient {
         capabilities: ['read_dom_list'],
         domListSelectors: [...DOM_LIST_SELECTORS],
         port: getWsPort(),
+        // The same deadline the token capture runs under. This transport may
+        // be the concentrator a capture relays through, and it is what
+        // teams_healthcheck reports as the bridge's fetch timeout — so it
+        // must not sit at the library's 30s while TEAMS_CAPTURE_TIMEOUT asks
+        // for longer.
+        fetchTimeoutMs: bridgeDeadlineMs(captureWindowMs()),
         // stderr only — stdout is the JSON-RPC channel. Without this the
         // first-ever pairing (or a scope widening) leaves a tool call
         // hanging with no way for the user to know a ContextMint Bridge approval
