@@ -157,7 +157,7 @@
     },
     {
       "name": "teams_get_attachment",
-      "description": "Fetch a message's inline image, or a shared file's metadata and open link"
+      "description": "Fetch a message's inline image, or download a shared file's contents from SharePoint (metadata and open link when it cannot be fetched)"
     },
     {
       "name": "teams_send_message",

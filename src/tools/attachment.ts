@@ -11,15 +11,20 @@
  * Two kinds, verified live:
  * - an inline image (Teams' own image store) downloads with the chat-service
  *   token and comes back as MCP image content;
- * - a shared file lives in SharePoint, which that token cannot read (Graph
- *   /shares → 403, SharePoint direct → 401), so it comes back as metadata and
- *   its open link, saying so.
+ * - a shared file lives in SharePoint, downloaded through `SharePointClient`
+ *   with a separate per-host SharePoint token (see `sharepoint.ts`): an image
+ *   comes back as MCP image content, anything else as an MCP embedded resource
+ *   carrying the raw bytes. A file the account cannot open — or the first file
+ *   from a SharePoint host before its short-lived token has been minted — comes
+ *   back as metadata and its open link, degrading gracefully rather than
+ *   failing the tool.
  */
-import type { McpServer } from '@modelcontextprotocol/server';
+import type { CallToolResult, McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import { McpToolError, toolAnnotations } from '@chrischall/mcp-utils';
+import { McpToolError, errorKindOf, errorStatusOf, toolAnnotations } from '@chrischall/mcp-utils';
 import type { RawMessage } from '../chatsvc.js';
 import type { TeamsDeps } from '../deps.js';
+import type { FileAttachment, NormalisedMessage } from '../model.js';
 import { normaliseMessage } from '../model.js';
 import { wrapApiError } from './errors.js';
 import { untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
@@ -31,9 +36,23 @@ import { untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
  */
 const MAX_RAW_MESSAGES = 4000;
 
-const FILE_HINT = 'Shared files live in SharePoint; this MCP cannot download their contents yet — open the link.';
+/**
+ * Largest shared file whose contents are downloaded and returned inline. Past
+ * this the bounded read in `SharePointClient` aborts and the file degrades to
+ * metadata + link — a file this big belongs behind its link, not in a result.
+ */
+const MAX_FILE_BYTES = 25 * 1024 * 1024;
 
-export function registerAttachmentTools(server: McpServer, { chatsvc }: Pick<TeamsDeps, 'chatsvc'>): void {
+const FILE_HINT =
+  'A shared file is downloaded from SharePoint and returned as its contents (an image as an image, ' +
+  'anything else as an embedded resource). The first file from a given SharePoint host may need ' +
+  'opening once in Teams to mint a short-lived token; a file your account cannot open comes back as ' +
+  'metadata and its link.';
+
+export function registerAttachmentTools(
+  server: McpServer,
+  { chatsvc, sharepoint }: Pick<TeamsDeps, 'chatsvc' | 'sharepoint'>,
+): void {
   server.registerTool(
     'teams_get_attachment',
     {
@@ -41,10 +60,12 @@ export function registerAttachmentTools(server: McpServer, { chatsvc }: Pick<Tea
       description:
         'Fetch one attachment of a Teams chat or channel message, as listed by ' +
         'teams_read_conversation / teams_get_unread. An inline image (attachments.images[].ref) ' +
-        'is returned as the image itself. A shared file (attachments.files[].name) is returned ' +
-        'as its name, type and links only: files live in SharePoint and their contents cannot ' +
-        'be downloaded by this MCP yet, so the result says so and gives the link to open. ' +
-        'Does not mark anything read.' +
+        'is returned as the image itself. A shared file (attachments.files[].name) is downloaded ' +
+        'from SharePoint and returned as its contents: an image as the image, anything else as an ' +
+        'embedded resource carrying the bytes. The first file from a given SharePoint host in a ' +
+        'session may need opening once in Teams to mint a short-lived token; a file your account ' +
+        'cannot open, or one that could not be fetched, comes back as metadata and its open link ' +
+        'instead of failing. Does not mark anything read.' +
         UNTRUSTED_DESCRIPTION_SUFFIX,
       annotations: toolAnnotations({ readOnly: true, openWorld: true }),
       inputSchema: {
@@ -97,7 +118,7 @@ export function registerAttachmentTools(server: McpServer, { chatsvc }: Pick<Tea
 
         const file = message.attachments.files.find((f) => f.name === ref);
         if (file !== undefined) {
-          return untrustedResult({ ...file, content_available: false, hint: FILE_HINT });
+          return downloadSharedFile(sharepoint, file, message, { conversation, message_id });
         }
 
         const { images, files } = message.attachments;
@@ -110,5 +131,92 @@ export function registerAttachmentTools(server: McpServer, { chatsvc }: Pick<Tea
         throw wrapApiError(err, 'get the attachment');
       }
     },
+  );
+}
+
+/**
+ * Download a shared file's contents, degrading to metadata + link on any
+ * failure rather than throwing: a file that cannot be fetched (no token yet, a
+ * 403, a transient error) must never fail the tool, so this swallows every
+ * `downloadFile` error and returns today's metadata result with a hint saying
+ * why. A file with no `url` at all (nothing to download) takes the same path.
+ */
+async function downloadSharedFile(
+  sharepoint: Pick<TeamsDeps['sharepoint'], 'downloadFile'>,
+  file: FileAttachment,
+  message: NormalisedMessage,
+  ids: { conversation: string; message_id: string },
+): Promise<CallToolResult> {
+  if (file.url === undefined) {
+    return untrustedResult({ ...file, content_available: false, hint: FILE_HINT });
+  }
+
+  try {
+    const { mimeType, data, size } = await sharepoint.downloadFile(file.url, MAX_FILE_BYTES);
+    const caption = untrustedResult({
+      name: file.name,
+      ...(file.type !== undefined ? { type: file.type } : {}),
+      ...(file.openUrl !== undefined ? { openUrl: file.openUrl } : {}),
+      mimeType,
+      bytes: size,
+      sender: message.sender,
+      time: message.time,
+      message_id: ids.message_id,
+      conversation: ids.conversation,
+    });
+
+    if (mimeType.startsWith('image/')) {
+      return { content: [{ type: 'image' as const, data: data.toString('base64'), mimeType }, ...caption.content] };
+    }
+    // An embedded resource carries the raw bytes; the installed
+    // `@modelcontextprotocol/server` (2.3.0) accepts a `{type:'resource'}`
+    // content block with a `BlobResourceContents` body ({uri, mimeType, blob}),
+    // so no base64-text fallback is needed. The `uri` is the file's open link
+    // (its SharePoint object url otherwise) — an identifier, not a re-fetch.
+    return {
+      content: [
+        {
+          type: 'resource' as const,
+          resource: { uri: file.openUrl ?? file.url, mimeType, blob: data.toString('base64') },
+        },
+        ...caption.content,
+      ],
+    };
+  } catch (err) {
+    // Graceful degrade: a file that could not be fetched comes back as metadata
+    // and its link, never as a tool failure (see the docblock).
+    return untrustedResult({ ...file, content_available: false, hint: degradeHint(err, hostOf(file.url)) });
+  }
+}
+
+/** The host of the file's url, for the degrade hint; a stand-in if it will not parse. */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return 'the SharePoint site';
+  }
+}
+
+/**
+ * Why a shared file degraded to metadata + link, as a user-facing hint.
+ * `SharePointClient` throws `McpToolError`s carrying `status`/`kind`/`hint`; a
+ * token-capture failure arrives as a plain `Error`. Branch on structure, not
+ * message text (fleet convention).
+ */
+function degradeHint(err: unknown, host: string): string {
+  if (errorStatusOf(err) === 403) {
+    return (
+      `Your account cannot open this file, or it is on a SharePoint host (${host}) your captured ` +
+      'token does not cover. Open it once in a signed-in Teams tab, then retry.'
+    );
+  }
+  if (errorKindOf(err) === 'no_credential') {
+    return 'SharePoint file download is disabled here (no token source). Unset TEAMS_DISABLE_FETCHPROXY, then retry.';
+  }
+  if (err instanceof McpToolError && err.hint !== undefined) return err.hint;
+  return (
+    `Couldn't mint a SharePoint token for ${host} — open the shared file once in a signed-in Teams ` +
+    'tab (that browser request is where the token is captured from), then retry.'
   );
 }

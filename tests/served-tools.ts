@@ -3,6 +3,7 @@
 import { createTestHarness } from '@chrischall/mcp-utils/test';
 import type { McpServer } from '@modelcontextprotocol/server';
 import type { ChatServiceClient } from '../src/chatsvc.js';
+import type { SharePointClient } from '../src/sharepoint.js';
 import { registerChatTools } from '../src/tools/chat.js';
 import { registerChannelTools } from '../src/tools/channels.js';
 import { registerConversationTools } from '../src/tools/conversation.js';
@@ -16,6 +17,7 @@ import { registerHealthcheckTool } from '../src/tools/healthcheck.js';
 export async function servedTools() {
   const deps = {
     chatsvc: { listConversations: async () => [], meMri: async () => '8:orgid:x' } as unknown as ChatServiceClient,
+    sharepoint: { downloadFile: async () => ({ mimeType: '', data: Buffer.alloc(0), size: 0 }) } as unknown as SharePointClient,
   };
 
   const h = await createTestHarness((server: McpServer) => {

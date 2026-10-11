@@ -202,6 +202,24 @@ describe('teams_healthcheck', () => {
     await harness.close();
   });
 
+  it('notes the SharePoint token is captured on demand per host and short-lived, without needing one to pass', async () => {
+    // A healthy run holds a chat-service token but no SharePoint token (none is
+    // minted until a shared file is opened). The note must appear and health
+    // must not depend on an SP token existing.
+    const harness = await createTestHarness((server) =>
+      registerHealthcheckTool(server, deps(async () => [{ id: '19:a@thread.v2' }])),
+    );
+
+    const data = parseToolResult(await harness.callTool('teams_healthcheck')) as Record<string, unknown>;
+
+    expect(data.ok).toBe(true);
+    const sharepoint = String(data.sharepoint);
+    expect(sharepoint).toMatch(/on demand/i);
+    expect(sharepoint).toMatch(/per (sharepoint )?host/i);
+    expect(sharepoint).toMatch(/short-lived/i);
+    await harness.close();
+  });
+
   it('describes itself as a read-only, open-world probe of the chat service', async () => {
     const harness = await createTestHarness((server) => registerHealthcheckTool(server, deps(async () => [])));
 
