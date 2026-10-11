@@ -157,6 +157,10 @@ async function downloadSharedFile(
       name: file.name,
       ...(file.type !== undefined ? { type: file.type } : {}),
       ...(file.openUrl !== undefined ? { openUrl: file.openUrl } : {}),
+      // The degrade path carries `content_available: false`; a successful
+      // download must carry the matching `true` so a caller keying on the field
+      // does not read a downloaded file as unavailable.
+      content_available: true,
       mimeType,
       bytes: size,
       sender: message.sender,

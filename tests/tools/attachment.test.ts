@@ -124,6 +124,8 @@ describe('teams_get_attachment', () => {
     expect(caption.untrusted_content).toBe(true);
     expect(caption.mimeType).toBe(DOCX_MIME);
     expect(caption.bytes).toBe(bytes.length);
+    // A successful download carries content_available:true (the degrade path is false).
+    expect(caption.content_available).toBe(true);
     expect(JSON.stringify(caption)).toContain(FILE_NAME);
     expect(downloadFile).toHaveBeenCalledWith(FILE_URL, MAX_FILE_BYTES);
   });
