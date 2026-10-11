@@ -4,10 +4,14 @@
  * A shared file in a Teams chat lives in SharePoint, not the Teams AMS object
  * store that holds inline images, so downloading its contents needs a
  * SharePoint token — NOT the chat-service token `auth-fetchproxy.ts` captures.
- * When the user opens such a file in Teams, the browser requests the file's own
- * SharePoint host (`{tenant}-my.sharepoint.com` or `{tenant}.sharepoint.com`)
- * with `Authorization: Bearer …`; we snapshot that header, then talk to the
- * SharePoint v2.1 shares API with a plain Node `fetch`.
+ * The token is captured from the user's OneDrive host
+ * (`{tenant}-my.sharepoint.com`): the browser authenticates that host during
+ * normal Teams use and its token reads team-site files too, whereas it never
+ * issues a capturable request to a tenant-root team-site host. The caller
+ * resolves this capture host from the file's host via `captureHostFor` and
+ * passes it as `host` here. We snapshot the `Authorization: Bearer …` header off
+ * a request to it, then talk to the SharePoint v2.1 shares API with a plain Node
+ * `fetch`.
  *
  * Verified live 2026-10-11 against a real Teams tenant:
  *   - the working token has `aud` = the SharePoint/Office 365 resource GUID
@@ -16,14 +20,15 @@
  *   - that token authenticates a plain server-side GET of
  *     `/_api/v2.1/shares/u!{base64url(objectUrl)}/driveItem`, whose
  *     `@content.downloadUrl` is a pre-signed link fetched with no auth;
- *   - it is short-lived (~53 min) and host-family-scoped: a
- *     `{tenant}-my.sharepoint.com` token also worked on `{tenant}.sharepoint.com`
- *     but got 403 on a separate OneDrive-region host. So each distinct SP host
- *     needs its own captured token.
+ *   - it is short-lived (~53 min) and host-family-scoped: the
+ *     `{tenant}-my.sharepoint.com` OneDrive token also worked on
+ *     `{tenant}.sharepoint.com`, but got 403 on a separate OneDrive-region host
+ *     — so that region needs its own captured token.
  *
  * The capture layer cannot wildcard the host: `validateCaptureHeaderDecls` runs
  * each capture host through `HOSTNAME_RE`, which rejects `*.sharepoint.com`. The
- * capture host is therefore the file's concrete host, derived at download time.
+ * capture host is therefore a concrete OneDrive host, resolved from the file's
+ * host by `captureHostFor` at download time.
  * The pairing TRUST SCOPE may still be the broad `sharepoint.com` —
  * `hostMatchesAnyDomain` accepts any `*.sharepoint.com` subdomain via
  * `endsWith('.' + domain)` — so one domain covers every tenant SP host without
@@ -104,8 +109,9 @@ export async function captureSharePointTokenViaFetchproxy(
     );
   }
 
-  // The one request we capture from: any call the browser makes to this file's
-  // SharePoint host. A concrete host (never a wildcard) — see the module note.
+  // The one request we capture from: any call the browser makes to this
+  // OneDrive host (the caller resolves it from the file's host via
+  // `captureHostFor`). A concrete host, never a wildcard — see the module note.
   const captureDecl = { host, path: '/*', headerName: 'authorization' } as const;
 
   // Read per capture, not at import: see `capture-window.ts`.
@@ -155,8 +161,9 @@ export async function captureSharePointTokenViaFetchproxy(
       const detail = (e as Error).message;
       throw new Error(
         `could not capture a SharePoint token for ${host} (${detail}). ` +
-          `Open the shared file once in Teams — that makes the browser request ${host}, ` +
-          'which is what the SharePoint token is captured from — then retry.',
+          `Click around Teams or open one of your own OneDrive files — that makes the ` +
+          `browser request ${host}, which is where the SharePoint token is captured ` +
+          'from — then retry.',
       );
     }
   } finally {
