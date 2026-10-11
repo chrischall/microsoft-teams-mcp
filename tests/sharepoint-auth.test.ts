@@ -16,6 +16,7 @@ vi.mock('@chrischall/mcp-utils/fetchproxy', async (importOriginal) => {
 
 const {
   isSharePointHost,
+  captureHostFor,
   captureSharePointTokenViaFetchproxy,
   SHAREPOINT_TRUST_DOMAINS,
 } = await import('../src/sharepoint-auth.js');
@@ -49,6 +50,26 @@ describe('isSharePointHost', () => {
     expect(isSharePointHost('sharepoint.com')).toBe(false);
     expect(isSharePointHost('graph.microsoft.com')).toBe(false);
     expect(isSharePointHost('')).toBe(false);
+  });
+});
+
+describe('captureHostFor', () => {
+  it('derives the -my OneDrive host for a tenant-root (team-site) host', () => {
+    // The browser authenticates the -my host, not the root, and the -my token
+    // reads root files too (verified live 2026-10-11).
+    expect(captureHostFor('transunion.sharepoint.com')).toBe('transunion-my.sharepoint.com');
+    expect(captureHostFor('Contoso.SharePoint.com')).toBe('contoso-my.sharepoint.com');
+  });
+
+  it('leaves a -my host (incl. a region OneDrive) unchanged', () => {
+    expect(captureHostFor('transunion-my.sharepoint.com')).toBe('transunion-my.sharepoint.com');
+    expect(captureHostFor('transunionind-my.sharepoint.com')).toBe('transunionind-my.sharepoint.com');
+  });
+
+  it('always returns a host that isSharePointHost accepts', () => {
+    for (const h of ['transunion.sharepoint.com', 'transunion-my.sharepoint.com', 'contoso.sharepoint.com']) {
+      expect(isSharePointHost(captureHostFor(h))).toBe(true);
+    }
   });
 });
 

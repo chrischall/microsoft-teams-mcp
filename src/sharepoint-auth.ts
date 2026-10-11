@@ -57,6 +57,30 @@ export function isSharePointHost(host: string): boolean {
 }
 
 /**
+ * The host to capture a SharePoint token FROM, for a file that lives on
+ * `fileHost`.
+ *
+ * Verified live 2026-10-11: the browser authenticates the user's OneDrive host
+ * (`<tenant>-my.sharepoint.com`) during normal Teams use, but never issues a
+ * capturable page request to a tenant-root team-site host
+ * (`<tenant>.sharepoint.com`) — so capturing from the file's own host times out
+ * for a team-site file. The `-my` token, however, downloads team-site files too
+ * (it worked cross-host to `transunion.sharepoint.com` in the spike). So:
+ *   - a file already on a `*-my` host → capture from that host (incl. a separate
+ *     region OneDrive like `<tenant>ind-my`, which needs its own token);
+ *   - a file on a `<tenant>.sharepoint.com` root → capture from `<tenant>-my`.
+ * The result always satisfies {@link isSharePointHost}. One `-my` token thus
+ * serves every file on both that OneDrive and its tenant root, which is why the
+ * client keys its per-host token cache by this capture host.
+ */
+export function captureHostFor(fileHost: string): string {
+  const h = fileHost.toLowerCase();
+  if (/-my\.sharepoint\.com$/.test(h)) return h;
+  const m = /^([a-z0-9][a-z0-9-]*)\.sharepoint\.com$/.exec(h);
+  return m ? `${m[1]}-my.sharepoint.com` : h;
+}
+
+/**
  * Shortest plausible token. Real ones are several KB of JWT; this only guards
  * against an empty or echoed header, not against a wrong-audience token.
  */

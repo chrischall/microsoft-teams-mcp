@@ -157,12 +157,31 @@ export class SharePointClient {
       });
     }
 
+    // The driveItem GET goes to the FILE's host, but the token is captured from
+    // (and cached under) the user's OneDrive host — the browser authenticates
+    // that host, and its token reads the tenant root too. See `captureHostFor`.
+    const { captureHostFor } = await import('./sharepoint-auth.js');
+    const captureHost = captureHostFor(host);
+
     // `u!` + unpadded base64url of the full objectUrl (Node's `base64url` already
     // uses `-`/`_` and drops padding), matching the live spike.
     const share = `u!${Buffer.from(objectUrl, 'utf8').toString('base64url')}`;
     const driveItemUrl = `https://${host}/_api/v2.1/shares/${share}/driveItem?$select=id,size,@content.downloadUrl`;
 
-    const meta = await this.#getDriveItem(host, driveItemUrl);
+    const meta = await this.#getDriveItem(captureHost, driveItemUrl);
+
+    // Refuse an oversize file BEFORE streaming it: the driveItem carries `size`,
+    // so a file past the cap degrades to metadata + link (the attachment tool
+    // surfaces this hint) instead of fetching to the byte limit and tripping a
+    // less actionable read error.
+    if (typeof meta.size === 'number' && meta.size > maxBytes) {
+      const mb = (n: number) => `${Math.round(n / (1024 * 1024))} MB`;
+      throw new McpToolError(`The file is ${mb(meta.size)}, larger than the ${mb(maxBytes)} download limit.`, {
+        kind: 'http',
+        hint: `This file is ${mb(meta.size)}; open it with its link rather than downloading it here.`,
+      });
+    }
+
     const downloadUrl = meta['@content.downloadUrl'];
     if (typeof downloadUrl !== 'string' || downloadUrl === '') {
       throw new McpToolError('SharePoint returned no download link for the file.', {
@@ -208,9 +227,9 @@ export class SharePointClient {
    * `TokenManager.withAuth` supplies the token and, on a 401, re-captures once
    * and replays once — so a 401 that reaches here is the second one.
    */
-  async #getDriveItem(host: string, url: string): Promise<DriveItemMeta> {
+  async #getDriveItem(captureHost: string, url: string): Promise<DriveItemMeta> {
     let body = '';
-    const res = await this.#managerFor(host).withAuth(async (token) => {
+    const res = await this.#managerFor(captureHost).withAuth(async (token) => {
       const r = await fetchBounded(
         url,
         {

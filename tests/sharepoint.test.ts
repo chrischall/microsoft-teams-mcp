@@ -156,6 +156,29 @@ describe('SharePointClient.downloadFile', () => {
     expect(capture).toHaveBeenCalledTimes(2);
   });
 
+  it('captures the token from the -my OneDrive host for a team-site (root) file', async () => {
+    // The browser never authenticates a tenant-root host, but its `-my` token
+    // reads root files — so a file on contoso.sharepoint.com must be fetched
+    // with a token captured from contoso-my.sharepoint.com.
+    const rootUrl = 'https://contoso.sharepoint.com/sites/Team/Shared Documents/deck.pptx';
+    const capture = vi.fn(async () => jwt());
+    const fetchImpl = twoStep(driveItem(), bytesResponse([1, 2]));
+    await client(fetchImpl, capture).downloadFile(rootUrl, 25 * 1024 * 1024);
+    // driveItem GET still targets the file's own host…
+    expect(urlOf(fetchImpl, 0)).toContain('https://contoso.sharepoint.com/_api/v2.1/shares/');
+    // …but the token was captured from the derived -my host.
+    expect(capture).toHaveBeenCalledWith('contoso-my.sharepoint.com');
+  });
+
+  it('refuses an oversize file from the driveItem size, before streaming it', async () => {
+    const fetchImpl = twoStep(driveItem(DOWNLOAD_URL, { size: 40 * 1024 * 1024 }), bytesResponse([1]));
+    const p = client(fetchImpl).downloadFile(OBJECT_URL, 25 * 1024 * 1024);
+    await expect(p).rejects.toBeInstanceOf(McpToolError);
+    await expect(p).rejects.toMatchObject({ hint: expect.stringContaining('MB') });
+    // Only the driveItem call ran — the content fetch was skipped.
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it('captures one token per host and reuses it across files on that host', async () => {
     const capture = vi.fn(async () => jwt());
     // Fresh responses per call — a `Response` body can only be read once.
