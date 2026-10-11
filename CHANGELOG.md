@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.4.0](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.3.0...v0.4.0) (2026-10-11)
+
+
+### ⚠ BREAKING CHANGES
+
+* read any Teams chat or channel, catch up on unread, and post and react through the chat-service API ([#42](https://github.com/chrischall/microsoft-teams-mcp/issues/42))
+
+### Features
+
+* **activity:** read the Teams Activity feed through the chat-service API instead of the page ([#48](https://github.com/chrischall/microsoft-teams-mcp/issues/48)) ([a0c29bd](https://github.com/chrischall/microsoft-teams-mcp/commit/a0c29bdb54db22342da612c5c38cc3bf8ea7756f))
+* download shared-file attachment contents from SharePoint ([#51](https://github.com/chrischall/microsoft-teams-mcp/issues/51)) ([d72526f](https://github.com/chrischall/microsoft-teams-mcp/commit/d72526f51f9b92cd1ad9caa1c2c60568f1ac3405))
+* read any Teams chat or channel, catch up on unread, and post and react through the chat-service API ([#42](https://github.com/chrischall/microsoft-teams-mcp/issues/42)) ([48e36c1](https://github.com/chrischall/microsoft-teams-mcp/commit/48e36c1976279c59f78f0d96616047599ad279f1))
+
+
+### Bug Fixes
+
+* **attachment:** mark downloaded files content_available; correct capture-host wording ([#53](https://github.com/chrischall/microsoft-teams-mcp/issues/53)) ([de064a9](https://github.com/chrischall/microsoft-teams-mcp/commit/de064a913c7b1b43ab2de64bfbe36dfb1e0a3d3c))
+* **chatsvc:** keep newer messages a read boundary would have cut off mid-page ([#45](https://github.com/chrischall/microsoft-teams-mcp/issues/45)) ([aeab941](https://github.com/chrischall/microsoft-teams-mcp/commit/aeab941b0a786db7d63ac2ad85216ee77439f17b))
+* **tools:** title untitled group chats by their participants, not the last sender ([#46](https://github.com/chrischall/microsoft-teams-mcp/issues/46)) ([3b299ce](https://github.com/chrischall/microsoft-teams-mcp/commit/3b299cec3b7fcabededc4a5f42be596610616aaf))
+
+
+### Documentation
+
+* list the 0.4 output changes for anyone scripting against 0.3 ([#50](https://github.com/chrischall/microsoft-teams-mcp/issues/50)) ([1f21265](https://github.com/chrischall/microsoft-teams-mcp/commit/1f21265c6679dfff7be168324fa976fd28e445ae))
+
 ## [0.3.0](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.2.7...v0.3.0) (2026-10-09)
 
 
