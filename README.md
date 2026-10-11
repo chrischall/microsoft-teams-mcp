@@ -37,6 +37,32 @@ your Teams unread badges exactly as they were. The two writes —
 `teams_send_message` and `teams_react` — go through the same chat-service
 API and post nothing until you confirm (see [Writes](#writes)).
 
+## SharePoint file download
+
+A **shared file** in a chat or channel is not in Teams' own object store
+(where inline images live) — it is in **SharePoint**, which does not accept the
+chat-service token. So `teams_get_attachment` captures a **separate SharePoint
+token** and fetches the file through SharePoint's `v2.1` shares API, then
+downloads the pre-signed link it returns (with no token attached).
+
+Two things follow from that, both one-time and additive — they do **not** change
+how the chat-service token is captured:
+
+- **A one-time re-pair.** The SharePoint path declares a second trust scope,
+  `sharepoint.com`, so the ContextMint Bridge grant has to cover it. If you
+  paired `microsoft-teams-mcp` before this feature, revoke and re-pair it in the
+  bridge popup once to add the SharePoint scope (a `not in declared set` error
+  on a file download is this, nothing more). The chat-service capture is
+  untouched — it still trusts only `teams.cloud.microsoft`.
+- **Open the file once per SharePoint host.** The SharePoint token is captured
+  from the browser's own request to the file's SharePoint host, is short-lived
+  (~53 minutes), and is scoped to one host family. So the first file from a
+  given host in a session may need you to open it once in a signed-in Teams tab
+  (that browser request is what the token is read from); after that the token is
+  cached and refreshed until it expires. A file your account cannot open, or on
+  a SharePoint host your token does not cover, comes back as metadata and its
+  open link rather than failing.
+
 ## Install
 
 ```sh
@@ -158,9 +184,13 @@ Everything is optional — by default the token is captured from your browser.
   its participants, as in `teams_list_chats` — in `conversations`, in
   `more_unread_conversations` and in `errors`.
 - `teams_get_attachment` — one attachment of a message: an inline image is
-  returned as the image itself; a shared file as its name, type and open
-  link only (files live in SharePoint and this server cannot download their
-  contents yet — the result says so).
+  returned as the image itself; a shared file is downloaded from SharePoint and
+  returned as its contents — an image as the image, anything else as an embedded
+  resource carrying the bytes. Shared-file download uses a separate, short-lived
+  SharePoint token captured per SharePoint host, so the first file from a given
+  host may need [opening once in Teams](#sharepoint-file-download) to mint it; a
+  file your account cannot open, or one that could not be fetched, comes back as
+  metadata and its open link instead of failing.
 - `teams_get_activity` — the Activity feed (the bell icon), newest first:
   mentions (including @team / @everyone), reactions, replies, meeting
   notices and missed calls across every chat and channel. Each row has its
@@ -276,12 +306,16 @@ instead.
   `older_unread_skipped` (with a hint to widen `since_days`), never dropped
   silently. `teams_read_conversation` is not windowed: it takes an explicit
   `since` and `limit`. This server only reads the marker; it never moves it.
-- **The token only goes to Teams.** It is sent to the chat-service base and,
-  for inline images, only to https hosts under `.asm.skype.com` (Teams' own
-  image store) — an image link in a message pointing anywhere else is
-  refused.
-- **Shared files are links, not contents.** They live in SharePoint, which
-  does not accept the chat-service token.
+- **The token only goes to Teams.** The chat-service token is sent to the
+  chat-service base and, for inline images, only to https hosts under
+  `.asm.skype.com` (Teams' own image store) — an image link pointing anywhere
+  else is refused. Shared-file download uses a **separate** SharePoint token
+  (below), sent only to the file's own `*.sharepoint.com` host; the pre-signed
+  download link it returns is fetched with **no** token at all.
+- **Shared files download from SharePoint.** They live in SharePoint, which
+  does not accept the chat-service token, so `teams_get_attachment` captures a
+  separate SharePoint token and fetches the file through SharePoint's v2.1
+  shares API — see below.
 - **Scope grows quietly.** If you see a `not in declared set` error, the
   extension's approved scope is behind the server's declared one — revoke
   and re-pair `microsoft-teams-mcp` in the ContextMint Bridge popup.
@@ -299,9 +333,16 @@ changed shape. If you script against them:
   `where: { conversation_id, title, type }`, `message_id`, `reply_chain_id`
   and `preview`; `time` is ISO 8601 (it was prose like "1:19 PM"); `read` is
   new; `empty_hint` is gone (the feed no longer depends on the Activity view).
+- **`teams_get_attachment`:** a shared file now returns its **contents** (an
+  image as image content, anything else as an MCP embedded resource carrying the
+  bytes), not just metadata and a link — see
+  [SharePoint file download](#sharepoint-file-download). A file that cannot be
+  fetched still returns the old metadata-and-link shape, so a script that only
+  reads the metadata keeps working.
 - **`teams_healthcheck`:** the top-level `bridge` section is gone — the bridge
   is only used to capture the token now. Token health is under `credential`
-  and `chat_service`.
+  and `chat_service`; a new `sharepoint` note describes the on-demand,
+  short-lived SharePoint token (the healthcheck does not require one).
 - **Chat titles:** untitled chats are titled `(1:1 chat)` (or the other
   person's name), `Group chat: A; B; C +N` (with a `participants` array), or
   `(untitled group chat)` — no longer the last sender's name or

@@ -53,9 +53,17 @@ export const CAPTURE_DECL = {
 } as const;
 
 /**
- * The extension's trust boundary: exactly the host we capture from. Every API
- * call afterwards is a plain server-side `fetch` the bridge never sees, so
- * nothing wider is needed.
+ * The extension's trust boundary for the chat-service path: exactly the host we
+ * capture from. Every API call afterwards is a plain server-side `fetch` the
+ * bridge never sees, so nothing wider is needed here.
+ *
+ * Shared-file download adds a SECOND, independent trust scope —
+ * `SHAREPOINT_TRUST_DOMAINS = ['sharepoint.com']` in `sharepoint-auth.ts` — used
+ * only when a file is opened. It is additive: the SharePoint capture declares
+ * `sharepoint.com` on its own transport and does NOT widen this chat-service
+ * capture decl, which stays `teams.cloud.microsoft` alone. Granting the broader
+ * SharePoint scope takes a one-time re-pair of `microsoft-teams-mcp` in the
+ * ContextMint Bridge popup; until then shared files degrade to metadata + link.
  */
 export const TRUST_DOMAINS = [CAPTURE_DECL.host];
 

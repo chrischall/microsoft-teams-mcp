@@ -83,7 +83,9 @@ typecheck — `npm test` runs both).
   sharepointIds, site, …`. They live in SharePoint (several tenant hosts).
   The chatsvc token CANNOT download them (Graph /shares → 403, SharePoint
   direct → 401). **Scope for this plan: return file metadata + `openUrl`/
-  `objectUrl`, never content.** Content download is a follow-up spike.
+  `objectUrl`, never content.** Content download was the follow-up spike, now
+  implemented via a separate per-host SharePoint token — see
+  [`2026-10-11-sharepoint-attachment-download.md`](./2026-10-11-sharepoint-attachment-download.md).
 - **Inline images.** `<img src="https://us-api.asm.skype.com/v1/objects/{id}/views/imgo">`
   in `content`. `GET` with the chatsvc bearer → 200 `image/jpeg` (8–18 KB
   seen). Host varies by region (`us-api.asm.skype.com`); only fetch URLs whose
@@ -291,8 +293,10 @@ shared file returns metadata + link.
 
 ## Out of scope (follow-ups)
 
-- Downloading shared-file content (SharePoint token per host, captured on
-  demand) — spike.
+- ~~Downloading shared-file content (SharePoint token per host, captured on
+  demand) — spike.~~ **Done** — implemented in
+  [`2026-10-11-sharepoint-attachment-download.md`](./2026-10-11-sharepoint-attachment-download.md):
+  `teams_get_attachment` now downloads a shared file's contents.
 - Mark-as-read, sending messages.
 - Hosting on mcp-host.
 

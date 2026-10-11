@@ -15,6 +15,13 @@
  * non-secret detail only, never the token: this result is what people paste
  * into a chat when something is broken.
  *
+ * A `sharepoint` note sits beside those two. Shared-file download
+ * (`teams_get_attachment`) uses a SEPARATE SharePoint token, captured on demand
+ * per SharePoint host and short-lived (~53 min) — so there is usually none held
+ * until a file is opened, and this healthcheck never mints or probes one. It is
+ * a static note, not a check: a healthy result does not depend on an SP token
+ * existing.
+ *
  * Imported from `/healthcheck`, deliberately NOT from `/fetchproxy`: that
  * module pulls in the optional `@fetchproxy/server` peer, which is absent in
  * the `.mcpb` bundle.
@@ -26,6 +33,16 @@ import type { TeamsDeps } from '../deps.js';
 
 const HOST_LABEL = 'teams.cloud.microsoft';
 const TITLE = 'Verify the Teams chat-service token and API end-to-end';
+
+/**
+ * Static note on the SharePoint path: a separate token, captured on demand per
+ * host and short-lived, that `teams_get_attachment` uses for shared-file
+ * download. Not probed here — a healthy result never depends on it existing.
+ */
+const SHAREPOINT_NOTE =
+  'Shared-file download (teams_get_attachment) uses a separate SharePoint token, captured on ' +
+  'demand per SharePoint host and short-lived (~53 min). None is held until you open a file, and ' +
+  'this healthcheck neither mints nor requires one.';
 
 export function registerHealthcheckTool(server: McpServer, { chatsvc }: Pick<TeamsDeps, 'chatsvc'>): void {
   server.registerTool(
@@ -89,12 +106,20 @@ export function registerHealthcheckTool(server: McpServer, { chatsvc }: Pick<Tea
         return {
           content: [
             ...result.content,
-            { type: 'text' as const, text: JSON.stringify({ chat_service: chatService }, null, 2) },
+            {
+              type: 'text' as const,
+              text: JSON.stringify({ chat_service: chatService, sharepoint: SHAREPOINT_NOTE }, null, 2),
+            },
           ],
         };
       }
       return {
-        content: [{ type: 'text' as const, text: JSON.stringify({ ...body, chat_service: chatService }, null, 2) }],
+        content: [
+          {
+            type: 'text' as const,
+            text: JSON.stringify({ ...body, chat_service: chatService, sharepoint: SHAREPOINT_NOTE }, null, 2),
+          },
+        ],
       };
     },
   );
