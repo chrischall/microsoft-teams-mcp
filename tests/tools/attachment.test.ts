@@ -3,6 +3,7 @@ import { createTestHarness, parseToolResult } from '@chrischall/mcp-utils/test';
 import { McpToolError } from '@chrischall/mcp-utils';
 import { registerAttachmentTools } from '../../src/tools/attachment.js';
 import type { ChatServiceClient, GetMessagesOptions, RawMessage } from '../../src/chatsvc.js';
+import type { SharePointClient } from '../../src/sharepoint.js';
 import { fakeChatsvc, messagesFrom, rawMsg } from './fake-chatsvc.js';
 
 const T0 = 1_760_000_000_000;
@@ -13,12 +14,19 @@ const IMAGE_REF = '0-eus-d1-00000000000000000000000000000abc';
 const IMAGE_URL = `https://us-api.asm.skype.com/v1/objects/${IMAGE_REF}/views/imgo`;
 const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
+const FILE_NAME = 'Example plan.docx';
+const FILE_OPEN_URL = 'https://example.sharepoint.com/:w:/r/sites/demo/Example%20plan.docx';
+const FILE_URL = 'https://example.sharepoint.com/sites/demo/Shared%20Documents/Example%20plan.docx';
+const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+/** 25 MiB — must match MAX_FILE_BYTES in the tool. */
+const MAX_FILE_BYTES = 25 * 1024 * 1024;
+
 const FILES = JSON.stringify([
   {
-    fileName: 'Example plan.docx',
+    fileName: FILE_NAME,
     fileType: 'docx',
-    openUrl: 'https://example.sharepoint.com/:w:/r/sites/demo/Example%20plan.docx',
-    objectUrl: 'https://example.sharepoint.com/sites/demo/Shared%20Documents/Example%20plan.docx',
+    openUrl: FILE_OPEN_URL,
+    objectUrl: FILE_URL,
   },
 ]);
 
@@ -42,8 +50,23 @@ function chatsvcWith(messages = MSGS, overrides: Record<string, unknown> = {}): 
   });
 }
 
-async function call(chatsvc: ChatServiceClient, args: Record<string, unknown>) {
-  const harness = await createTestHarness((server) => registerAttachmentTools(server, { chatsvc }));
+/**
+ * A stub `SharePointClient` — the tool only ever calls `downloadFile`, so that
+ * is all it carries. By default it rejects (no SP token in a test), which is the
+ * graceful-degrade path; a test that exercises a download injects its own.
+ */
+function fakeSharepoint(
+  downloadFile: SharePointClient['downloadFile'] = vi.fn().mockRejectedValue(new Error('no token in tests')),
+): SharePointClient {
+  return { downloadFile } as unknown as SharePointClient;
+}
+
+async function call(
+  chatsvc: ChatServiceClient,
+  args: Record<string, unknown>,
+  sharepoint: SharePointClient = fakeSharepoint(),
+) {
+  const harness = await createTestHarness((server) => registerAttachmentTools(server, { chatsvc, sharepoint }));
   try {
     return await harness.callTool('teams_get_attachment', args);
   } finally {
@@ -55,7 +78,7 @@ function errorText(result: { content?: unknown[] }): string {
   return (result.content?.[0] as { text?: string })?.text ?? '';
 }
 
-type Block = { type: string; text?: string; data?: string; mimeType?: string };
+type Block = { type: string; text?: string; data?: string; mimeType?: string; resource?: { uri: string; mimeType?: string; blob?: string } };
 
 describe('teams_get_attachment', () => {
   it('returns an inline image as MCP image content plus an untrusted caption', async () => {
@@ -83,22 +106,74 @@ describe('teams_get_attachment', () => {
     expect(opts.stopAt?.(rawMsg(T0 + 1 * MIN))).toBe(true);
   });
 
-  it('returns a shared file as metadata and its open link, saying the content is not available', async () => {
-    const chatsvc = chatsvcWith();
-    const result = await call(chatsvc, { conversation: GROUP, message_id: String(TARGET), ref: 'Example plan.docx' });
+  it('downloads a shared file as an MCP embedded resource plus an untrusted caption', async () => {
+    const bytes = Buffer.from('PK\u0003\u0004 pretend docx body');
+    const downloadFile = vi.fn().mockResolvedValue({ mimeType: DOCX_MIME, data: bytes, size: bytes.length });
+    const result = await call(
+      chatsvcWith(),
+      { conversation: GROUP, message_id: String(TARGET), ref: FILE_NAME },
+      fakeSharepoint(downloadFile),
+    );
+
+    expect(result.isError).toBeFalsy();
+    const content = result.content as Block[];
+    expect(content[0].type).toBe('resource');
+    expect(content[0].resource).toEqual({ uri: FILE_OPEN_URL, mimeType: DOCX_MIME, blob: bytes.toString('base64') });
+    expect(content[1].type).toBe('text');
+    const caption = JSON.parse(content[1].text!) as Record<string, unknown>;
+    expect(caption.untrusted_content).toBe(true);
+    expect(caption.mimeType).toBe(DOCX_MIME);
+    expect(caption.bytes).toBe(bytes.length);
+    expect(JSON.stringify(caption)).toContain(FILE_NAME);
+    expect(downloadFile).toHaveBeenCalledWith(FILE_URL, MAX_FILE_BYTES);
+  });
+
+  it('downloads a shared file that is an image as MCP image content', async () => {
+    const downloadFile = vi.fn().mockResolvedValue({ mimeType: 'image/png', data: PNG_BYTES, size: PNG_BYTES.length });
+    const result = await call(
+      chatsvcWith(),
+      { conversation: GROUP, message_id: String(TARGET), ref: FILE_NAME },
+      fakeSharepoint(downloadFile),
+    );
+
+    expect(result.isError).toBeFalsy();
+    const content = result.content as Block[];
+    expect(content[0]).toEqual({ type: 'image', data: PNG_BYTES.toString('base64'), mimeType: 'image/png' });
+    expect(content[1].type).toBe('text');
+  });
+
+  it('degrades a forbidden file to metadata and its link, not a thrown error', async () => {
+    const downloadFile = vi.fn().mockRejectedValue(
+      new McpToolError('SharePoint refused access to the file (403).', {
+        status: 403,
+        kind: 'http',
+        hint: 'Your account cannot open this file.',
+      }),
+    );
+    const result = await call(
+      chatsvcWith(),
+      { conversation: GROUP, message_id: String(TARGET), ref: FILE_NAME },
+      fakeSharepoint(downloadFile),
+    );
 
     expect(result.isError).toBeFalsy();
     const data = parseToolResult(result) as Record<string, unknown>;
-    expect(data).toMatchObject({
-      untrusted_content: true,
-      name: 'Example plan.docx',
-      type: 'docx',
-      openUrl: 'https://example.sharepoint.com/:w:/r/sites/demo/Example%20plan.docx',
-      url: 'https://example.sharepoint.com/sites/demo/Shared%20Documents/Example%20plan.docx',
-      content_available: false,
-    });
-    expect(data.hint).toMatch(/SharePoint/);
-    expect(chatsvc.fetchImage).not.toHaveBeenCalled();
+    expect(data).toMatchObject({ name: FILE_NAME, openUrl: FILE_OPEN_URL, content_available: false });
+    expect(data.hint).toMatch(/cannot open/i);
+  });
+
+  it('degrades a token-capture failure to metadata and its link, not a thrown error', async () => {
+    const downloadFile = vi.fn().mockRejectedValue(new Error('could not capture a SharePoint token (timed out).'));
+    const result = await call(
+      chatsvcWith(),
+      { conversation: GROUP, message_id: String(TARGET), ref: FILE_NAME },
+      fakeSharepoint(downloadFile),
+    );
+
+    expect(result.isError).toBeFalsy();
+    const data = parseToolResult(result) as Record<string, unknown>;
+    expect(data).toMatchObject({ name: FILE_NAME, content_available: false });
+    expect(data.hint).toMatch(/open the (shared )?file once/i);
   });
 
   it('errors when the message is not in the conversation', async () => {
