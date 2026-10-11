@@ -286,6 +286,32 @@ instead.
   extension's approved scope is behind the server's declared one — revoke
   and re-pair `microsoft-teams-mcp` in the ContextMint Bridge popup.
 
+## Upgrading from 0.3
+
+0.4 moves every tool onto the Teams chat-service API, and several outputs
+changed shape. If you script against them:
+
+- **Removed tools:** `teams_get_open_chat_messages` and
+  `teams_get_open_channel_posts` — use `teams_read_conversation`, which reads
+  any chat or channel by id or name without it being open.
+- **`teams_get_activity`:** rows now come from the Activity feed itself.
+  `title` and `location` are replaced by `type`/`subtype`/`kind`, `from`,
+  `where: { conversation_id, title, type }`, `message_id`, `reply_chain_id`
+  and `preview`; `time` is ISO 8601 (it was prose like "1:19 PM"); `read` is
+  new; `empty_hint` is gone (the feed no longer depends on the Activity view).
+- **`teams_healthcheck`:** the top-level `bridge` section is gone — the bridge
+  is only used to capture the token now. Token health is under `credential`
+  and `chat_service`.
+- **Chat titles:** untitled chats are titled `(1:1 chat)` (or the other
+  person's name), `Group chat: A; B; C +N` (with a `participants` array), or
+  `(untitled group chat)` — no longer the last sender's name or
+  `(untitled chat)`. Plain `teams_list_chats` / `teams_list_teams_and_channels`
+  listings put `favorite` and then `pinned` conversations first.
+- **Unread:** confirmed by reading messages after your read point (call
+  recordings and other system events never count), hidden channels are left
+  out unless `include_hidden`, and `since_days` defaults to 14 with
+  `older_unread_skipped` reporting the rest.
+
 ## Development
 
 ```sh
