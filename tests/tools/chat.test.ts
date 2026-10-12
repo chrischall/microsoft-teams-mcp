@@ -523,6 +523,141 @@ describe('teams_list_chats', () => {
     expect(text).toMatch(/Wait a minute/);
   });
 
+  describe('match_reason and message matching', () => {
+    type Matched = Row & { match_reason?: string; matched_message?: Record<string, unknown> };
+    const LUNCH = '19:lunch0001@thread.v2';
+    const PLANS = '19:plans0001@thread.v2';
+    const convs = [
+      ...CONVS,
+      rawConv(LUNCH, { topic: 'Lunch crew', at: T0 + 5 * MIN, text: '<p>Falcon budget review moved to 3pm</p>' }),
+      rawConv(PLANS, { topic: 'Weekend plans', at: T0 + 4 * MIN, text: 'see you there' }),
+    ];
+    const reasons = (data: Record<string, unknown> | undefined) =>
+      (data?.chats as Matched[]).map((c) => [c.id, c.match_reason]);
+
+    it('says why each row matched a query: id, title, or participant', async () => {
+      expect(reasons((await call(fakeChatsvc(CONVS), { query: MEETING })).data)).toEqual([[MEETING, 'id']]);
+      expect(reasons((await call(fakeChatsvc(CONVS), { query: 'falcon' })).data)).toEqual([[GROUP, 'title']]);
+      // An untitled 1:1 is titled after the other person, who is its participant.
+      expect(reasons((await call(fakeChatsvc(CONVS), { query: 'pat' })).data)).toEqual([[DM, 'participant']]);
+    });
+
+    it('adds no match_reason without a query', async () => {
+      const { data } = await call(fakeChatsvc(CONVS));
+      for (const c of data?.chats as Matched[]) expect(c).not.toHaveProperty('match_reason');
+    });
+
+    it('matches the listing\'s last-message preview when no name does, as "message", reading nothing', async () => {
+      const chatsvc = chatsvcWith(convs);
+      const { data } = await call(chatsvc, { query: 'budget review' });
+
+      expect(reasons(data)).toEqual([[LUNCH, 'message']]);
+      expect(chatsvc.getMessages).not.toHaveBeenCalled();
+    });
+
+    it('keeps the name reason when the preview matches too', async () => {
+      const { data } = await call(chatsvcWith(convs), { query: 'falcon' });
+      expect(reasons(data)).toEqual([
+        [GROUP, 'title'],
+        [LUNCH, 'message'],
+      ]);
+    });
+
+    describe('search_messages', () => {
+      const older = (conv: string, at: number, text: string, opts: Parameters<typeof rawMsg>[1] = {}) =>
+        rawMsg(at, { ...opts, conv, text, sender: 'Lee Example' });
+      const byId: Record<string, RawMessage[]> = {
+        ...MESSAGES,
+        [PLANS]: [
+          older(PLANS, T0 + MIN, '<p>The <b>offsite</b> agenda is in the wiki</p>'),
+          older(PLANS, T0 + 2 * MIN, 'nothing to see'),
+          older(PLANS, T0 + 4 * MIN, 'see you there'),
+        ],
+        [MEETING]: [
+          older(MEETING, T0 + MIN, 'offsite (deleted)', { deleted: true }),
+          older(MEETING, T0 + 2 * MIN, 'offsite recording', { type: 'RichText/Media_CallRecording' }),
+        ],
+      };
+
+      it('scans the recent messages of every chat no name or preview matched, as "message", with the message', async () => {
+        const chatsvc = chatsvcWith(convs, byId);
+        const { data } = await call(chatsvc, { query: 'OFFSITE', search_messages: true });
+        const chats = data?.chats as Matched[];
+
+        expect(reasons(data)).toEqual([[PLANS, 'message']]);
+        expect(chats[0].matched_message).toEqual({
+          id: String(T0 + MIN),
+          time: new Date(T0 + MIN).toISOString(),
+          sender: 'Lee Example',
+          text: 'The offsite agenda is in the wiki',
+        });
+        // Each unmatched chat is read once, one page of at most 50; deleted and system messages never match.
+        const read = (chatsvc.getMessages as ReturnType<typeof vi.fn>).mock.calls;
+        expect(read.map(([id]) => id).sort()).toEqual([DM, GROUP, LUNCH, MEETING, PLANS].sort());
+        for (const [, opts] of read) expect(opts).toMatchObject({ max: 50, pageSize: 50 });
+      });
+
+      it('does not read a chat a name or preview already matched', async () => {
+        const chatsvc = chatsvcWith(convs, byId);
+        const { data } = await call(chatsvc, { query: 'falcon', search_messages: true });
+
+        expect(reasons(data)).toEqual([
+          [GROUP, 'title'],
+          [LUNCH, 'message'],
+        ]);
+        const read = (chatsvc.getMessages as ReturnType<typeof vi.fn>).mock.calls.map(([id]) => id);
+        expect(read).not.toContain(GROUP);
+        expect(read).not.toContain(LUNCH);
+      });
+
+      it('reads nothing for an exact id', async () => {
+        const chatsvc = chatsvcWith(convs, byId);
+        const { data } = await call(chatsvc, { query: PLANS, search_messages: true });
+
+        expect(reasons(data)).toEqual([[PLANS, 'id']]);
+        expect(chatsvc.getMessages).not.toHaveBeenCalled();
+      });
+
+      it('counts chats whose read failed in messages_not_searched and still returns the rest', async () => {
+        const { data } = await call(chatsvcWith(convs, { ...byId, [MEETING]: new Error('boom') }), {
+          query: 'offsite',
+          search_messages: true,
+        });
+
+        expect(reasons(data)).toEqual([[PLANS, 'message']]);
+        expect(data?.messages_not_searched).toBe(1);
+      });
+
+      it('adds no messages_not_searched when every read succeeded', async () => {
+        const { data } = await call(chatsvcWith(convs, byId), { query: 'offsite', search_messages: true });
+        expect(data).not.toHaveProperty('messages_not_searched');
+      });
+
+      it('reads at most four chats at once', async () => {
+        const many = Array.from({ length: 12 }, (_, i) => rawConv(`19:m${i}@thread.v2`, { topic: `chat ${i}`, at: T0 + i * MIN }));
+        let inFlight = 0;
+        let peak = 0;
+        const getMessages = vi.fn(async () => {
+          peak = Math.max(peak, ++inFlight);
+          await new Promise((r) => setTimeout(r, 5));
+          inFlight--;
+          return [];
+        });
+        await call(fakeChatsvc(many, { getMessages }), { query: 'zzz', search_messages: true });
+
+        expect(getMessages).toHaveBeenCalledTimes(12);
+        expect(peak).toBeLessThanOrEqual(4);
+      });
+
+      it('needs a query', async () => {
+        const { result } = await call(chatsvcWith(convs, byId), { search_messages: true });
+
+        expect(result.isError).toBe(true);
+        expect((result.content?.[0] as { text?: string })?.text).toMatch(/query/);
+      });
+    });
+  });
+
   describe('since_days (with unread_only)', () => {
     const OLD = '19:old0001@thread.v2';
     const DORMANT = '19:dormant0001@thread.v2';
@@ -575,6 +710,7 @@ describe('teams_list_chats', () => {
     expect(Object.keys((tool?.inputSchema as { properties?: object }).properties ?? {}).sort()).toEqual([
       'limit',
       'query',
+      'search_messages',
       'since',
       'since_days',
       'sort',

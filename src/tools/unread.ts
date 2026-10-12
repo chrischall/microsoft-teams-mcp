@@ -25,7 +25,7 @@ import {
 } from '../model.js';
 import { groupThreads } from './conversation.js';
 import { confirmedSummary, confirmUnreadCandidates, olderUnreadReport, sinceCutoff, sinceDaysArg } from './confirm.js';
-import { GROUP_TITLE_DESCRIPTION, includeHiddenArg, isUnreadCandidateFor } from './listing.js';
+import { GROUP_TITLE_DESCRIPTION, includeHiddenArg, isUnreadCandidateFor, MATCH_REASON_DESCRIPTION } from './listing.js';
 import { enrichTitles } from './titles.js';
 import { wrapApiError } from './errors.js';
 import { untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
@@ -82,7 +82,8 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
         'limit truncated or a read failed. This does NOT mark anything read — the user\'s ' +
         'Teams unread badges are unaffected. ' +
         GROUP_TITLE_DESCRIPTION +
-        ' query also matches those participant names.' +
+        ' query also matches those participant names, and the last-message preview. ' +
+        MATCH_REASON_DESCRIPTION +
         UNTRUSTED_DESCRIPTION_SUFFIX,
       annotations: toolAnnotations({ readOnly: true, openWorld: true }),
       inputSchema: {
@@ -99,8 +100,8 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
           .min(1)
           .optional()
           .describe(
-            'Case-insensitive substring of the chat title, channel name, team name or an untitled ' +
-              "chat's participant names, or an exact conversation id.",
+            'Case-insensitive substring of the chat title, channel name, team name, an untitled ' +
+              "chat's participant names or the last-message preview, or an exact conversation id.",
           ),
         include_hidden: includeHiddenArg,
         since_days: sinceDaysArg(),
@@ -135,8 +136,11 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
         let candidates = raw
           .map((c) => conversationSummary(c, me, raw))
           .filter((s) => allowed.has(s.kind) && isUnreadCandidateFor(s, include_hidden));
-        // A query can name a group chat or 1:1 by a participant, so every untitled candidate is titled first.
-        if (query !== undefined) candidates = matchConversations(await enrichTitles(chatsvc, raw, me, candidates), query);
+        // A query can name a group chat or 1:1 by a participant, so every untitled candidate is titled
+        // first; it also matches the listing's last-message preview (no extra reads).
+        if (query !== undefined) candidates = matchConversations(await enrichTitles(chatsvc, raw, me, candidates), query, {
+            messages: true,
+          });
         candidates.sort(byLastActivityDesc);
 
         const perLimit = per_conversation_limit ?? DEFAULT_PER_CONVERSATION;

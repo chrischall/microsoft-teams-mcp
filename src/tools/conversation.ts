@@ -87,14 +87,17 @@ export function confirmUnread(summary: ConversationSummary, unreadCount: number,
 
 function describeCandidate(s: ConversationSummary): string {
   const where = s.team !== undefined ? ` in ${s.team}` : '';
-  return `"${s.title}"${where} (${s.kind}, id ${s.id})`;
+  const how = s.match_reason !== undefined ? `, matched by ${s.match_reason}` : '';
+  return `"${s.title}"${where} (${s.kind}, id ${s.id}${how})`;
 }
 
 /**
  * The one conversation a `conversation` argument names: an exact id, else a
- * unique title/team substring. None, or several, is an `McpToolError` — the
- * latter naming up to 10 candidates so the caller can pass an id. `verb` fills
- * the hint ("Pass the id of the one to read").
+ * unique title/team/participant substring — never what was said in a chat,
+ * since this names the target of sends and reactions too. The match carries
+ * its `match_reason`. None, or several, is an `McpToolError` — the latter
+ * naming up to 10 candidates, each with how it matched, so the caller can pass
+ * an id. `verb` fills the hint ("Pass the id of the one to read").
  */
 export function resolveConversation(
   summaries: readonly ConversationSummary[],

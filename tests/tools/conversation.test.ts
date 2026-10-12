@@ -90,7 +90,15 @@ describe('teams_read_conversation', () => {
   it('resolves a conversation by a unique name', async () => {
     const { data } = await call(chatsvcWith(), { conversation: 'project falcon' });
 
-    expect((data?.conversation as { id: string }).id).toBe(GROUP);
+    expect(data?.conversation).toMatchObject({ id: GROUP, match_reason: 'title' });
+  });
+
+  it('never resolves a name by what was said in a chat (its last-message preview)', async () => {
+    const convs = [...CONVS, rawConv('19:said0001@thread.v2', { topic: 'Lunch', at: T0, text: 'quarterly offsite agenda' })];
+    const { result } = await call(fakeChatsvc(convs, { getMessages: messagesFrom(GROUP_MSGS) }), { conversation: 'offsite' });
+
+    expect(result.isError).toBe(true);
+    expect(errorText(result)).toMatch(/No chat or channel matches/);
   });
 
   it('refuses an ambiguous name, naming the candidates and asking for the id', async () => {
@@ -103,6 +111,7 @@ describe('teams_read_conversation', () => {
     expect(text).toContain(OTHER_GROUP);
     expect(text).toContain('Falcon launch party');
     expect(text).toMatch(/\bid\b/);
+    expect(text).toContain('matched by title');
     expect(chatsvc.getMessages).not.toHaveBeenCalled();
   });
 

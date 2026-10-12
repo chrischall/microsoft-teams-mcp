@@ -12,6 +12,7 @@ import type { ConversationSummary } from '../model.js';
 import { wrapApiError } from './errors.js';
 import { untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
 import { limitArg, trimRows } from './limit.js';
+import { SEARCH_FETCH_MESSAGES } from './search.js';
 import {
   FAVORITES_DESCRIPTION,
   favoritesFirst,
@@ -19,6 +20,7 @@ import {
   listSinceDaysArg,
   listSummaries,
   type ListedRow,
+  MATCH_REASON_DESCRIPTION,
   queryArg,
   UNREAD_HINT_DESCRIPTION,
   unreadOnlyArg,
@@ -62,6 +64,17 @@ const sortArg = z
       '(titles every untitled chat in the listing first, so it reads more).',
   );
 
+const searchMessagesArg = z
+  .boolean()
+  .optional()
+  .describe(
+    `With query: also read the last ${SEARCH_FETCH_MESSAGES} messages of every chat no name or ` +
+      'last-message preview matched, and return the chats where one of them contains the query ' +
+      '(match_reason "message", with the newest such message as matched_message: id, time, sender, ' +
+      'text). Reads one page per chat, four at a time, so it is slower on a large listing; narrow it ' +
+      'with since / until or unread_only. Default false.',
+  );
+
 /** Orders `rows` in place for `sort`; titles must already be final for "title". */
 function sortChats(rows: ListedRow[], sort: ChatSort, unreadOnly: boolean | undefined): void {
   rows.sort(byLastActivityDesc);
@@ -80,7 +93,9 @@ export function registerChatTools(server: McpServer, { chatsvc }: Pick<TeamsDeps
         'id, kind (oneOnOne / group / meeting, or self for the user\'s own 48:notes self-chat), ' +
         'title, unread hint, last-activity time (ISO 8601), and a last-message preview and sender. ' +
         GROUP_TITLE_DESCRIPTION +
-        ' query also matches those participant names. ' +
+        ' query also matches those participant names, and the last-message preview. ' +
+        MATCH_REASON_DESCRIPTION +
+        ' search_messages extends the match to each chat\'s recent messages. ' +
         FAVORITES_DESCRIPTION +
         ' ' +
         'Pass an id (or the title) to teams_read_conversation to read the messages. Use ' +
@@ -99,14 +114,20 @@ export function registerChatTools(server: McpServer, { chatsvc }: Pick<TeamsDeps
       inputSchema: {
         unread_only: unreadOnlyArg,
         since_days: listSinceDaysArg,
-        query: queryArg('chat title or an untitled chat\'s participant names'),
+        query: queryArg('chat title, an untitled chat\'s participant names or the last-message preview'),
+        search_messages: searchMessagesArg,
         since: activityBoundArg('since', 'at or after'),
         until: activityBoundArg('until', 'at or before'),
         sort: sortArg,
         limit: limitArg(MAX_CHATS, 'chats', 'the head of the sort order kept'),
       },
     },
-    async ({ unread_only, since_days, query, since, until, sort = 'activity', limit }) => {
+    async ({ unread_only, since_days, query, search_messages, since, until, sort = 'activity', limit }) => {
+      if (search_messages && query === undefined) {
+        throw new McpToolError('search_messages needs a query to search for.', {
+          hint: 'Pass the text to find as query, or drop search_messages.',
+        });
+      }
       const activeSince = since !== undefined ? Date.parse(since) : undefined;
       const activeUntil = until !== undefined ? Date.parse(until) : undefined;
       if (activeSince !== undefined && activeUntil !== undefined && activeSince > activeUntil) {
@@ -120,6 +141,7 @@ export function registerChatTools(server: McpServer, { chatsvc }: Pick<TeamsDeps
           unread_only,
           since_days,
           query,
+          searchMessages: search_messages,
           activeSince,
           activeUntil,
         });

@@ -174,6 +174,28 @@ describe('teams_get_unread', () => {
     expect(ids((await call(chatsvcWith(), { query: 'platform team' })).data)).toEqual([CHANNEL]);
   });
 
+  it('says why each conversation matched a query', async () => {
+    const reasons = (data: Record<string, unknown> | undefined) =>
+      (data?.conversations as { conversation: { id: string; match_reason?: string } }[]).map((c) => [
+        c.conversation.id,
+        c.conversation.match_reason,
+      ]);
+    expect(reasons((await call(chatsvcWith(), { query: 'falcon' })).data)).toEqual([[GROUP, 'title']]);
+    expect(reasons((await call(chatsvcWith(), { query: 'platform team' })).data)).toEqual([[CHANNEL, 'team']]);
+    expect(reasons((await call(chatsvcWith(), { query: 'example friend' })).data)).toEqual([[DM, 'participant']]);
+    expect(reasons((await call(chatsvcWith(), { query: MEETING })).data)).toEqual([[MEETING, 'id']]);
+  });
+
+  it('matches a conversation by its listing\'s last-message preview when no name does', async () => {
+    const convs = CONVS.map((c) =>
+      c.id === MEETING ? rawConv(MEETING, { topic: 'Weekly sync', at: T0 + 3 * MIN, horizon: T0 + 2 * MIN, text: 'Quarterly numbers are in' }) : c,
+    );
+    const { data } = await call(chatsvcWith({}, convs), { query: 'quarterly' });
+    const conversations = data?.conversations as { conversation: { id: string; match_reason?: string } }[];
+
+    expect(conversations.map((c) => [c.conversation.id, c.conversation.match_reason])).toEqual([[MEETING, 'message']]);
+  });
+
   it('caps the conversations returned and lists the rest, confirmed, by id, title and unread_count', async () => {
     const chatsvc = chatsvcWith();
     const { data } = await call(chatsvc, { max_conversations: 2 });
