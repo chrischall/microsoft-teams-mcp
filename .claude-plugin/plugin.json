@@ -1,7 +1,7 @@
 {
   "name": "microsoft-teams-mcp",
   "displayName": "Microsoft Teams",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Microsoft Teams for Claude — read any chat or channel, your unread messages, and their attachments, and send messages and reactions (each confirmed first), using your signed-in browser session",
   "author": {
     "name": "Chris Hall",

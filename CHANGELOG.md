@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.1](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.5.0...v0.5.1) (2026-10-12)
+
+
+### Bug Fixes
+
+* **attachment:** fetch inline images through the Teams gateway when the image store is unreachable ([#63](https://github.com/chrischall/microsoft-teams-mcp/issues/63)) ([93f9a94](https://github.com/chrischall/microsoft-teams-mcp/commit/93f9a94226678f1f995807c6569ff97f5ea73d55))
+* **attachment:** name the host and network cause instead of a bare "fetch failed" ([#61](https://github.com/chrischall/microsoft-teams-mcp/issues/61)) ([2f1e508](https://github.com/chrischall/microsoft-teams-mcp/commit/2f1e50854a7b90efb362f8a5e6ef227341e9d658))
+
 ## [0.5.0](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.4.0...v0.5.0) (2026-10-12)
 
 
