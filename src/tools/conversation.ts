@@ -3,7 +3,8 @@
  * the Teams chat-service API. Nothing has to be open in the browser, and by
  * default the read marker is never written, so the user's unread badges are
  * untouched; `mark_read` (confirm-gated, as `teams_mark_read` is) moves it up
- * to the newest message returned.
+ * to the newest message returned — never with format `summary`, and never
+ * when a limit or `since` cut left unread messages out of the read.
  *
  * Paging runs newest first and stops at the first boundary that applies: the
  * read horizon (`unread_only`), the `after_message_id` cursor, the `since`
@@ -51,8 +52,10 @@ import {
   horizonMessageId,
   MARK_READ_DESCRIPTION,
   markReadArg,
+  assertMarkReadFormat,
   type MarkOutcome,
   type MarkPlan,
+  type MarkSkip,
 } from './markread.js';
 
 const MAX_MESSAGES = 500;
@@ -216,6 +219,8 @@ interface ReadOne {
   conv: RawConversation;
   /** The newest message returned (not an outside_window root), or `undefined` for none. */
   newest: string | undefined;
+  /** Set when unread messages older than those returned were left out, so `mark_read` must not move the marker. */
+  skip?: MarkSkip;
   /** What a single-conversation call returns, less `fetched_at` (stamped once) and `marked_read`. */
   result: Record<string, unknown>;
 }
@@ -238,15 +243,23 @@ async function readOne(
   const limited = makeLimitedStopAt(unreadOnly ? horizon : undefined, wanted, limit);
   // A cursor or `since` cutoff above the read horizon leaves unread messages unseen.
   let windowCut = false;
+  // Only `since` leaves out messages the caller has not seen: a cursor's were returned by an earlier read.
+  let sinceCut = false;
   let capped = false;
+  // The oldest message paging looked at — where a limit or the raw cap cut the read.
+  let lastSeen: number | undefined;
   const stopAt = (m: RawMessage): boolean => {
+    lastSeen = Number(m.id);
     // The read horizon (checked inside `limited`) wins over the cursor and `since`, as the nearer boundary.
     const atHorizon = unreadOnly && Number(m.id) <= horizon;
     const at = arrivalMs(m);
     const atCursor = cursor !== undefined && Number(m.id) <= cursor;
     const atSince = cutoff !== undefined && Number.isFinite(at) && at < cutoff;
     if (!atHorizon && (atCursor || atSince)) {
-      if (Number(m.id) > horizon) windowCut = true;
+      if (Number(m.id) > horizon) {
+        windowCut = true;
+        if (atSince && !atCursor) sinceCut = true;
+      }
       return true;
     }
     return limited.stopAt(m);
@@ -270,6 +283,26 @@ async function readOne(
   // Whether every message past the read horizon was seen, so unread_count is the whole count.
   const exact = !truncated && !windowCut;
 
+  // A limit or cap that cut past the read horizon may have left out older unread messages.
+  const limitCut = truncated && (lastSeen === undefined || !(lastSeen <= horizon));
+  const skip: MarkSkip | undefined = limitCut
+    ? {
+        skipped: 'truncated',
+        hint:
+          'The read marker was left where it was: the limit cut this read, so unread messages older than those ' +
+          `returned were not returned. Read again with a larger limit (max ${MAX_MESSAGES}) to mark it read, or ` +
+          'use teams_mark_read to mark it all read deliberately.',
+      }
+    : sinceCut
+      ? {
+          skipped: 'since',
+          hint:
+            'The read marker was left where it was: the since cutoff left out unread messages older than those ' +
+            'returned. Read again with an earlier since (or without it) to mark it read, or use teams_mark_read ' +
+            'to mark it all read deliberately.',
+        }
+      : undefined;
+
   const result = {
     conversation: formatConversation(confirmUnread(summary, unread_count, exact), format),
     unread_count,
@@ -287,7 +320,7 @@ async function readOne(
       : {}),
     ...(next_cursor !== undefined ? { next_cursor } : {}),
   };
-  return { summary, conv, newest, result };
+  return { summary, conv, newest, ...(skip !== undefined ? { skip } : {}), result };
 }
 
 /** One `conversation` of a multi-conversation read that could not be resolved or read. */
@@ -395,7 +428,9 @@ export function registerConversationTools(server: McpServer, { chatsvc }: Pick<T
         'while the rest still come back. ' +
         MARK_READ_DESCRIPTION +
         'With mark_read the read marker of each conversation read moves up to the newest message returned ' +
-        '(never backwards; outside_window roots do not count) and its result says marked_read; the user ' +
+        '(never backwards; outside_window roots do not count) and its result says marked_read; one whose limit ' +
+        'or since cut off unread messages older than those returned is not marked (marked_read: { skipped, ' +
+        'hint }), while a limit that cut only already-read messages does not stop it; the user ' +
         'confirms first — a prompt where the client supports one, otherwise the first call returns only a ' +
         'preview and a confirmToken, and the repeat call with it reads and marks. ' +
         CONFIRM_INJECTION_RULE +
@@ -431,6 +466,7 @@ export function registerConversationTools(server: McpServer, { chatsvc }: Pick<T
     },
     async ({ conversation, unread_only, since, after_message_id, limit, tz, format, mark_read, confirmToken }, ctx) => {
       try {
+        assertMarkReadFormat(mark_read, format);
         const opts: ReadOptions = {
           unreadOnly: unread_only ?? false,
           since,
@@ -455,8 +491,8 @@ export function registerConversationTools(server: McpServer, { chatsvc }: Pick<T
           const plans: MarkPlan[] = [];
           for (const read of many.reads) {
             if ('ambiguous' in read) continue;
-            const { summary, conv, newest } = read;
-            if (advancesHorizon(conv, newest)) plans.push({ summary, previous: horizonMessageId(conv), target: newest });
+            const { summary, conv, newest, skip } = read;
+            if (skip === undefined && advancesHorizon(conv, newest)) plans.push({ summary, previous: horizonMessageId(conv), target: newest });
           }
           if (plans.length > 0) {
             const gate = await confirmMarks(ctx, { tool: 'teams_read_conversation', me, plans, confirmToken });
@@ -469,7 +505,12 @@ export function registerConversationTools(server: McpServer, { chatsvc }: Pick<T
             ? read.ambiguous
             : {
                 ...read.result,
-                ...(marks !== undefined ? (marks.get(read.summary.id) ?? { marked_read: false }) : {}),
+                ...(marks !== undefined
+                  ? (marks.get(read.summary.id) ??
+                    (read.skip !== undefined && advancesHorizon(read.conv, read.newest)
+                      ? { marked_read: read.skip }
+                      : { marked_read: false }))
+                  : {}),
               },
         );
 

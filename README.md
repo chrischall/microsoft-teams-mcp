@@ -248,6 +248,13 @@ Everything is optional — by default the token is captured from your browser.
   `outside_window` roots do not count) and reports `marked_read` — a write,
   so it asks you to confirm first. With an array, each conversation read is
   marked up to its own newest message, and one confirmation covers them all.
+  It never marks a message you were not given: `mark_read` with
+  `format: "summary"` is refused (`compact` is fine), and when `limit` or
+  `since` cut off unread messages older than those returned, that
+  conversation's marker stays put and it reports
+  `marked_read: { skipped: "truncated" | "since", hint }` (a `limit` that cut
+  only messages you had already read still marks). An empty read, or an
+  `after_message_id` with nothing new, marks nothing (`marked_read: false`).
 - `teams_get_unread` — every unread message across your chats and channels,
   grouped by conversation, most recent first. Filter by `kinds` (`chat`,
   `channel`, `meeting`, `oneOnOne`) or `query` (title, channel or team
@@ -268,9 +275,11 @@ Everything is optional — by default the token is captured from your browser.
   conversation returned with its messages (not `more_unread_conversations`)
   up to its newest unread message returned, and reports `marked_read` per
   conversation (with `mark_read_warning` when that move failed). One
-  confirmation covers every move. A `per_conversation_limit` cut marks the
-  older unread messages it left out read too, and so does any `format`:
-  `summary` marks read messages it never showed. `tz` (default
+  confirmation covers every move. It never marks a message you were not
+  given: `mark_read` with `format: "summary"` is refused (`compact` is
+  fine), a conversation `per_conversation_limit` cut keeps its marker and
+  reports `marked_read: { skipped: "truncated", hint }`, and `outside_window`
+  roots never count. `tz` (default
   `TEAMS_TIME_ZONE`) adds each message's `time_local`, as in
   `teams_read_conversation`. A channel's unread replies come grouped under
   their root post; a root you had already read is fetched and marked

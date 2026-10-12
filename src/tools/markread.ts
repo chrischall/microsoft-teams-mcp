@@ -53,13 +53,41 @@ export const markReadArg = z
   .describe(
     'After the read, also mark it read in Teams: move the read marker of each conversation returned up to ' +
       'the newest message returned (default false — the read leaves the unread badges alone). Never moves a ' +
-      'marker backwards. A write, so it asks the user to confirm first, as teams_mark_read does.',
+      'marker backwards, and never past an unread message the caller did not receive: a conversation whose ' +
+      'read was cut short is left as it was (marked_read: { skipped, hint }). Not allowed with format ' +
+      '"summary", which returns no message text. A write, so it asks the user to confirm first, as ' +
+      'teams_mark_read does.',
   );
+
+/**
+ * Refuse `mark_read` with `format: "summary"`: the caller would get no message
+ * text, so marking would clear badges on messages nobody read.
+ */
+export function assertMarkReadFormat(markRead: boolean | undefined, format: string | undefined): void {
+  if (markRead && format === 'summary') {
+    throw new McpToolError('mark_read cannot be combined with format "summary": a summary returns no messages, so nothing would have been read.', {
+      hint: 'Read with format "full" or "compact" to mark what is returned, or use teams_mark_read to mark a conversation read deliberately.',
+    });
+  }
+}
+
+/** Why a read tool's `mark_read` left a conversation's marker alone though it returned unread messages. */
+export interface MarkSkip {
+  /**
+   * `truncated`: a limit cut the read, so unread messages older than those
+   * returned were not returned. `since`: the `since` cutoff did.
+   */
+  skipped: 'truncated' | 'since';
+  hint: string;
+}
 
 /** Description text for a read tool that takes `mark_read`. */
 export const MARK_READ_DESCRIPTION =
   'By default this does NOT mark anything read — the user\'s Teams unread badges are unaffected; pass ' +
-  'mark_read: true (or use teams_mark_read) to clear them. ';
+  'mark_read: true (or use teams_mark_read) to clear them. mark_read never marks a message the caller did ' +
+  'not receive: it is refused with format "summary" (compact is fine), and a conversation whose read was ' +
+  'cut short, leaving unread messages older than those returned, keeps its marker and reports ' +
+  'marked_read: { skipped: "truncated" (or "since"), hint }. ';
 
 /** The request path a marker move PUTs to — the same string the client builds. */
 export function horizonPath(conversationId: string): string {
@@ -137,7 +165,7 @@ export async function confirmMarks(
 
 /** What a read tool reports per conversation after `mark_read`. */
 export interface MarkOutcome {
-  marked_read: boolean;
+  marked_read: boolean | MarkSkip;
   mark_read_warning?: string;
 }
 

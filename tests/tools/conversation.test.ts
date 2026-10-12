@@ -470,6 +470,8 @@ describe('teams_read_conversation', () => {
     expect(tool.description).toMatch(/by default this does NOT mark anything read/i);
     expect(tool.description).toMatch(/mark_read/);
     expect(tool.description).toMatch(/teams_mark_read/);
+    expect(tool.description).toMatch(/refused with format "summary"/);
+    expect(tool.description).toMatch(/skipped/);
     expect(tool.description).toMatch(/teams_get_attachment/);
     // mark_read makes it a write — a non-destructive, idempotent one.
     expect(tool.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true });
@@ -758,11 +760,109 @@ describe('teams_read_conversation — mark_read', () => {
     expect(data?.marked_read).toBe(true);
   });
 
-  it('marks up to the newest message the window returned, not past it', async () => {
+  it('leaves the marker alone when limit cut off unread messages older than those returned', async () => {
     const { chatsvc, setConsumptionHorizon } = withHorizonWrite();
-    // limit keeps the newest messages, so the newest returned is the newest there is.
-    await callConfirmed(chatsvc, { conversation: GROUP, mark_read: true, limit: 2 });
-    expect(setConsumptionHorizon).toHaveBeenCalledWith(GROUP, String(T0 + 4 * MIN));
+    // limit 2 returns +4 and +3.5 (mine); the unread "third" (+3) is past the horizon but was not returned.
+    const { preview, data } = await callConfirmed(chatsvc, { conversation: GROUP, mark_read: true, limit: 2 });
+
+    expect(preview).toBeUndefined();
+    expect(setConsumptionHorizon).not.toHaveBeenCalled();
+    expect((data?.messages as Msg[]).map((m) => m.text)).not.toContain('third');
+    expect(data?.truncated).toBeDefined();
+    expect(data?.marked_read).toEqual({ skipped: 'truncated', hint: expect.stringMatching(/limit/) });
+  });
+
+  it('with unread_only, a limit cut leaves the marker alone too', async () => {
+    const { chatsvc, setConsumptionHorizon } = withHorizonWrite();
+    const { preview, data } = await callConfirmed(chatsvc, { conversation: GROUP, mark_read: true, unread_only: true, limit: 1 });
+
+    expect(preview).toBeUndefined();
+    expect(setConsumptionHorizon).not.toHaveBeenCalled();
+    expect(data?.marked_read).toMatchObject({ skipped: 'truncated' });
+  });
+
+  it('still marks when limit cut only messages already read', async () => {
+    const { chatsvc, setConsumptionHorizon } = withHorizonWrite();
+    // limit 3 returns +4, +3.5 and +3 — every unread message; the cut falls at the horizon (+2).
+    const { data } = await callConfirmed(chatsvc, { conversation: GROUP, mark_read: true, limit: 3 });
+
+    expect(data?.truncated).toBeDefined();
+    expect(setConsumptionHorizon).toHaveBeenCalledExactlyOnceWith(GROUP, String(T0 + 4 * MIN));
+    expect(data?.marked_read).toBe(true);
+  });
+
+  it('leaves the marker alone when since cut off unread messages older than those returned', async () => {
+    const { chatsvc, setConsumptionHorizon } = withHorizonWrite();
+    const { preview, data } = await callConfirmed(chatsvc, {
+      conversation: GROUP,
+      mark_read: true,
+      since: new Date(T0 + 3.25 * MIN).toISOString(),
+    });
+
+    expect(preview).toBeUndefined();
+    expect(setConsumptionHorizon).not.toHaveBeenCalled();
+    expect(data?.marked_read).toEqual({ skipped: 'since', hint: expect.stringMatching(/since/) });
+  });
+
+  it('still marks when since stops at or below the read horizon', async () => {
+    const { chatsvc, setConsumptionHorizon } = withHorizonWrite();
+    const { data } = await callConfirmed(chatsvc, { conversation: GROUP, mark_read: true, since: new Date(T0 + 1.5 * MIN).toISOString() });
+
+    expect(setConsumptionHorizon).toHaveBeenCalledExactlyOnceWith(GROUP, String(T0 + 4 * MIN));
+    expect(data?.marked_read).toBe(true);
+  });
+
+  it('with an array, a truncated conversation is skipped while the others are marked under one confirmation', async () => {
+    const msgs = {
+      [GROUP]: GROUP_MSGS,
+      [CHANNEL]: [rawMsg(T0 + 4 * MIN, { conv: CHANNEL, text: 'channel news' })],
+    };
+    const setConsumptionHorizon = vi.fn(async () => undefined);
+    const getMessages = vi.fn(async (id: string, opts: GetMessagesOptions) => messagesFrom(msgs[id as keyof typeof msgs])(id, opts));
+    const { preview, data } = await callConfirmed(chatsvcWith(GROUP_MSGS, { getMessages, setConsumptionHorizon }), {
+      conversation: [GROUP, CHANNEL],
+      mark_read: true,
+      limit: 2,
+    });
+
+    const shown = JSON.stringify((preview?.preview as Record<string, unknown>).conversations);
+    expect(shown).toContain(CHANNEL);
+    expect(shown).not.toContain(GROUP);
+    expect(setConsumptionHorizon).toHaveBeenCalledExactlyOnceWith(CHANNEL, String(T0 + 4 * MIN));
+    const reads = data?.conversations as { conversation: { id: string }; marked_read?: unknown }[];
+    expect(reads.map((r) => [r.conversation.id, r.marked_read])).toEqual([
+      [GROUP, { skipped: 'truncated', hint: expect.any(String) }],
+      [CHANNEL, true],
+    ]);
+  });
+
+  it('marks nothing and asks nothing for a conversation with no messages', async () => {
+    const { chatsvc, setConsumptionHorizon } = withHorizonWrite({ getMessages: messagesFrom([]) });
+    const { preview, data } = await callConfirmed(chatsvc, { conversation: GROUP, mark_read: true });
+
+    expect(preview).toBeUndefined();
+    expect(setConsumptionHorizon).not.toHaveBeenCalled();
+    expect(data?.marked_read).toBe(false);
+  });
+
+  it('never lets an outside_window thread root drive the mark target', async () => {
+    const root = T0 + 1 * MIN;
+    const msgs = [
+      rawMsg(T0 + 3 * MIN, { conv: CHANNEL, rootId: root, text: 'late reply' }),
+      rawMsg(T0 + 4 * MIN, { conv: CHANNEL, rootId: root, text: 'later reply' }),
+    ];
+    // The root (+1) predates the window's replies; fetched by id, it is context, never the target.
+    const stored = rawMsg(root, { conv: CHANNEL, text: 'old root' });
+    const getMessage = vi.fn(async (_c: string, id: string) => (id === String(root) ? stored : undefined));
+    const setConsumptionHorizon = vi.fn(async () => undefined);
+    const { data } = await callConfirmed(chatsvcWith(msgs, { getMessage, setConsumptionHorizon }), {
+      conversation: CHANNEL,
+      mark_read: true,
+    });
+
+    expect(getMessage).toHaveBeenCalledWith(CHANNEL, String(root));
+    expect(JSON.stringify(data?.threads)).toContain('outside_window');
+    expect(setConsumptionHorizon).toHaveBeenCalledExactlyOnceWith(CHANNEL, String(T0 + 4 * MIN));
   });
 
   it('never moves the marker backwards: a read entirely before it is not marked', async () => {
@@ -830,11 +930,24 @@ describe('teams_read_conversation — mark_read', () => {
     expect(channel).toMatchObject({ conversation: { id: CHANNEL }, marked_read: true });
   });
 
-  it('with format summary, still marks up to the newest message read, though none is shown', async () => {
-    const { chatsvc, setConsumptionHorizon } = withHorizonWrite();
-    const { data } = await callConfirmed(chatsvc, { conversation: GROUP, mark_read: true, format: 'summary' });
+  it('refuses mark_read with format summary, reading and marking nothing', async () => {
+    for (const conversation of [GROUP, [GROUP, CHANNEL]]) {
+      const { chatsvc, setConsumptionHorizon } = withHorizonWrite();
+      const { first } = await callConfirmed(chatsvc, { conversation, mark_read: true, format: 'summary' });
 
-    expect(data).not.toHaveProperty('messages');
+      expect(first.isError).toBe(true);
+      expect(errorText(first)).toMatch(/mark_read/);
+      expect(errorText(first)).toMatch(/summary/);
+      expect(chatsvc.getMessages).not.toHaveBeenCalled();
+      expect(setConsumptionHorizon).not.toHaveBeenCalled();
+    }
+  });
+
+  it('with format compact, marks up to the newest message returned', async () => {
+    const { chatsvc, setConsumptionHorizon } = withHorizonWrite();
+    const { data } = await callConfirmed(chatsvc, { conversation: GROUP, mark_read: true, format: 'compact' });
+
+    expect((data?.messages as Msg[]).map((m) => m.text)).toContain('fourth');
     expect(setConsumptionHorizon).toHaveBeenCalledExactlyOnceWith(GROUP, String(T0 + 4 * MIN));
     expect(data?.marked_read).toBe(true);
   });

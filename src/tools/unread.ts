@@ -13,7 +13,8 @@
  * comes back (`cursor.ts`). By default nothing writes the read marker, so the
  * user's unread badges in Teams are exactly as they were; `mark_read`
  * (confirm-gated, as `teams_mark_read` is) moves each returned conversation's
- * marker up to its newest unread message returned.
+ * marker up to its newest unread message returned — never with format
+ * `summary`, and never for a conversation `per_conversation_limit` cut.
  */
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
@@ -51,8 +52,10 @@ import {
   horizonMessageId,
   MARK_READ_DESCRIPTION,
   markReadArg,
+  assertMarkReadFormat,
   type MarkOutcome,
   type MarkPlan,
+  type MarkSkip,
 } from './markread.js';
 
 const MAX_PER_CONVERSATION = 200;
@@ -78,6 +81,15 @@ export const KIND_FILTERS = {
 } as const satisfies Record<string, readonly ConversationKind[]>;
 
 export type KindFilter = keyof typeof KIND_FILTERS;
+
+/** What `mark_read` reports for a conversation `per_conversation_limit` cut: its marker is left alone. */
+const TRUNCATED_SKIP: MarkSkip = {
+  skipped: 'truncated',
+  hint:
+    'The read marker was left where it was: per_conversation_limit cut this read, so unread messages older ' +
+    `than those returned were not returned. Read again with a larger per_conversation_limit (max ${MAX_PER_CONVERSATION}) ` +
+    'or with teams_read_conversation (unread_only) to mark it read, or use teams_mark_read to mark it all read deliberately.',
+};
 
 /** Newest activity first; a conversation with no messages at all sorts last. */
 function byLastActivityDesc(a: ConversationSummary, b: ConversationSummary): number {
@@ -120,12 +132,11 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
         '(not those only in more_unread_conversations) — pass it back as cursors to get only what is new. ' +
         CURSOR_NO_CACHE_DESCRIPTION +
         FORMAT_DESCRIPTION +
-        'limit truncated or a read failed. ' +
         MARK_READ_DESCRIPTION +
         'With mark_read each conversation returned with its messages (not more_unread_conversations) has its ' +
-        'read marker moved up to its newest unread message returned — a per_conversation_limit cut marks the ' +
-        'older unread messages it left out read too — and carries marked_read (false with mark_read_warning when ' +
-        'that move failed); the user confirms first — a prompt where the client supports one, otherwise the ' +
+        'read marker moved up to its newest unread message returned (outside_window roots do not count) and ' +
+        'carries marked_read (false with mark_read_warning when that move failed); one per_conversation_limit ' +
+        'cut is not marked — marked_read: { skipped: "truncated", hint }; the user confirms first — a prompt where the client supports one, otherwise the ' +
         'first call returns only a preview and a confirmToken, and the repeat call with it reads and marks. ' +
         CONFIRM_INJECTION_RULE +
         ' ' +
@@ -211,6 +222,7 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
       ctx,
     ) => {
       try {
+        assertMarkReadFormat(mark_read, format);
         const timeZone = resolveTimeZone(tz);
         const fetched_at = new Date().toISOString();
         const [raw, me] = await Promise.all([chatsvc.listConversations(), chatsvc.meMri()]);
@@ -259,6 +271,8 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
           const byId = new Map(raw.map((c) => [c.id, c]));
           const plans: MarkPlan[] = [];
           for (const { summary, read } of returned) {
+            // A cut read left older unread messages out: those are not the caller's to mark (see TRUNCATED_SKIP).
+            if (read.truncated) continue;
             const conv = byId.get(summary.id) ?? { id: summary.id };
             const target = newestId(read.messages);
             if (advancesHorizon(conv, target)) plans.push({ summary, previous: horizonMessageId(conv), target });
@@ -299,7 +313,9 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
                 },
               }
             : {}),
-          ...(marks !== undefined ? (marks.get(summary.id) ?? { marked_read: false }) : {}),
+          ...(marks !== undefined
+            ? (marks.get(summary.id) ?? { marked_read: read.truncated ? TRUNCATED_SKIP : false })
+            : {}),
         }));
         const rest = confirmed.slice(cap);
         const next_cursors: Record<string, string> = { ...cursors };
