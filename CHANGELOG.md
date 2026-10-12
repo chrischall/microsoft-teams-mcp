@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.5.0](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.4.0...v0.5.0) (2026-10-12)
+
+
+### Features
+
+* **chats:** find chats by activity window, participants and message text; list older unread; skip muted ([#54](https://github.com/chrischall/microsoft-teams-mcp/issues/54)) ([c7387c6](https://github.com/chrischall/microsoft-teams-mcp/commit/c7387c615c716ce34c0176ed1548b8dca3e11e02))
+* **read:** cursors, compact/summary formats, multi-conversation reads, local times and teams_get_changes ([#57](https://github.com/chrischall/microsoft-teams-mcp/issues/57)) ([d9ff5ca](https://github.com/chrischall/microsoft-teams-mcp/commit/d9ff5caa4839bdfa0fbe740c2b0ac00d27e749b0))
+* **read:** teams_mark_read, and an opt-in mark_read flag on the read tools ([#59](https://github.com/chrischall/microsoft-teams-mcp/issues/59)) ([5ffd7f5](https://github.com/chrischall/microsoft-teams-mcp/commit/5ffd7f561c0dd68313bc44af327043a743575c18))
+* **search:** teams_search_messages finds messages across chats and channels ([#60](https://github.com/chrischall/microsoft-teams-mcp/issues/60)) ([5b661eb](https://github.com/chrischall/microsoft-teams-mcp/commit/5b661eb89e52e02aa1b3fd53bc44a3c0871b0159))
+
 ## [0.4.0](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.3.0...v0.4.0) (2026-10-11)
 
 
