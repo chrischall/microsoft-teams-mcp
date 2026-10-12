@@ -191,19 +191,33 @@ describe('teams_read_conversation with several conversations', () => {
       return pager(id, opts);
     });
     const { result, data } = await call(chatsvcWith({ getMessages }), {
-      conversation: [GROUP, CHANNEL, 'no such chat', 'falcon'],
+      conversation: [GROUP, CHANNEL, 'no such chat'],
     });
 
     expect(result.isError).toBeFalsy();
     expect((data?.conversations as Entry[]).map((c) => c.conversation.id)).toEqual([GROUP]);
     const errors = data?.errors as { conversation: string; id?: string; error: string; hint?: string }[];
-    expect(errors.map((e) => e.conversation)).toEqual([CHANNEL, 'no such chat', 'falcon']);
+    expect(errors.map((e) => e.conversation)).toEqual([CHANNEL, 'no such chat']);
     expect(errors[0]).toMatchObject({ id: CHANNEL });
     expect(errors[0].error).toMatch(/rate-limiting/);
     expect(errors[1].error).toMatch(/no chat or channel matches/i);
     expect(errors[1].hint).toMatch(/teams_list_chats/);
-    // An ambiguous name names its candidates, so the caller can pass an id.
-    expect(errors[2].error).toContain(OTHER_GROUP);
+  });
+
+  it('returns an ambiguous name among the conversations, in the order asked, as the single-read candidates object', async () => {
+    const chatsvc = chatsvcWith();
+    const multi = await call(chatsvc, { conversation: [CHANNEL, 'falcon', GROUP] });
+    const single = await call(chatsvc, { conversation: 'falcon' });
+
+    const conversations = multi.data?.conversations as Record<string, unknown>[];
+    expect(conversations).toHaveLength(3);
+    expect((conversations[0] as Entry).conversation.id).toBe(CHANNEL);
+    expect((conversations[2] as Entry).conversation.id).toBe(GROUP);
+    const { untrusted_content: _u, note: _n, ...singleBody } = single.data!;
+    expect(conversations[1]).toEqual(singleBody);
+    expect(conversations[1]).toMatchObject({ ambiguous: true, query: 'falcon', hint: expect.any(String) });
+    expect((conversations[1].candidates as { id: string }[]).map((c) => c.id).sort()).toEqual([GROUP, OTHER_GROUP].sort());
+    expect(multi.data).not.toHaveProperty('errors');
   });
 
   it('returns errors only, not a tool error, when every conversation fails', async () => {

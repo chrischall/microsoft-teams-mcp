@@ -8,7 +8,8 @@
  * cutoff, or one message past `limit`. The result is turned oldest first; a channel's posts are grouped
  * under their root post, and `format` (`format.ts`) trims what is shown. An
  * array of conversations is resolved against one listing and read a few at a
- * time, each failure reported beside the reads that worked.
+ * time, each failure reported beside the reads that worked, and an ambiguous
+ * name returned in its place as its candidates.
  */
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
@@ -284,8 +285,9 @@ function readError(conversation: string, err: unknown, id?: string): ReadError {
 /**
  * Read several conversations: each argument resolved against one listing, the
  * distinct conversations read {@link READ_CONCURRENCY} at a time, in the order
- * asked. One that cannot be resolved or read goes into `errors`; the rest
- * still come back.
+ * asked. An ambiguous name takes its place among them as the same
+ * {@link ambiguousResult} a single read returns; one that cannot be resolved
+ * or read goes into `errors`; the rest still come back.
  */
 async function readMany(
   chatsvc: ChatServiceClient,
@@ -296,7 +298,8 @@ async function readMany(
 ): Promise<{ conversations: Record<string, unknown>[]; errors: ReadError[] }> {
   const resolve = listedResolver(chatsvc, raw, me, 'read');
   const errors: ReadError[] = [];
-  const targets: { asked: string; summary: ConversationSummary }[] = [];
+  /** One slot per distinct conversation asked: a resolved one to read, or an ambiguous name's candidates. */
+  const slots: ({ asked: string; summary: ConversationSummary } | { ambiguous: Record<string, unknown> })[] = [];
   const seen = new Set<string>();
   for (const asked of new Set(conversations)) {
     try {
@@ -304,16 +307,18 @@ async function readMany(
       // A conversation named twice (by id and by name, say) is read once.
       if (seen.has(summary.id)) continue;
       seen.add(summary.id);
-      targets.push({ asked, summary });
+      slots.push({ asked, summary });
     } catch (err) {
-      errors.push(readError(asked, err));
+      if (err instanceof AmbiguousConversationError) slots.push({ ambiguous: ambiguousResult(err) });
+      else errors.push(readError(asked, err));
     }
   }
-  const reads = await mapWithConcurrency(targets, READ_CONCURRENCY, async ({ asked, summary }) => {
+  const reads = await mapWithConcurrency(slots, READ_CONCURRENCY, async (slot) => {
+    if ('ambiguous' in slot) return { ok: true as const, result: slot.ambiguous };
     try {
-      return { ok: true as const, result: await readOne(chatsvc, raw, me, summary, opts) };
+      return { ok: true as const, result: await readOne(chatsvc, raw, me, slot.summary, opts) };
     } catch (err) {
-      return { ok: false as const, error: readError(asked, err, summary.id) };
+      return { ok: false as const, error: readError(slot.asked, err, slot.summary.id) };
     }
   });
   const results: Record<string, unknown>[] = [];
@@ -346,12 +351,15 @@ export function registerConversationTools(server: McpServer, { chatsvc }: Pick<T
         'unread_count only covers what limit/since/after_message_id let through). after_message_id returns only ' +
         'messages newer than that id; next_cursor is the newest returned message id (or after_message_id ' +
         'when nothing is new) — pass it back as after_message_id to read only what arrived since. ' +
+        'after_message_id takes message-id cursors only: to read what teams_get_changes counted, pass that ' +
+        "row's after_message_id, never teams_get_changes' next_cursor (a time token for teams_get_changes). " +
         CURSOR_NO_CACHE_DESCRIPTION +
         FORMAT_DESCRIPTION +
         `conversation may also be an array of up to ${MAX_CONVERSATIONS} ids/names: the result is then ` +
         '{ conversations: [...], errors, fetched_at }, one single-read result per conversation (the other ' +
-        'arguments apply to each), and one that cannot be resolved or read is listed in errors while the ' +
-        'rest still come back. ' +
+        'arguments apply to each); an ambiguous name takes its place among them as the same { ambiguous: true, ' +
+        '... } object a single read returns, and one that cannot be resolved or read is listed in errors ' +
+        'while the rest still come back. ' +
         'This does NOT mark anything ' +
         'read — the user\'s Teams unread badges are unaffected. Attachments are listed per message (images by ref, files by ' +
         'name) and fetched with teams_get_attachment. A name that matches several conversations is ' +

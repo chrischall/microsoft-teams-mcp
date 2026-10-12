@@ -221,7 +221,9 @@ Everything is optional — by default the token is captured from your browser.
   `since` and `limit`); every result carries `next_cursor` — the newest
   returned message's id, or the `after_message_id` you passed when nothing
   is new — so passing it back as `after_message_id` reads only what arrived
-  since. See [Cursors](#cursors-only-what-is-new).
+  since. `after_message_id` takes message ids only: to read what
+  `teams_get_changes` counted, pass that row's `after_message_id`, not its
+  `next_cursor`. See [Cursors](#cursors-only-what-is-new).
   `format` sets how much comes back: `full` (default, everything above),
   `compact` (each message only `id`, `time`, `time_local`, `sender`, `text`,
   plus `subject` when set — no reactions, attachments or edited/deleted
@@ -233,9 +235,11 @@ Everything is optional — by default the token is captured from your browser.
   `conversation` may also be an array of up to 20 ids or names: the result
   is then `{ conversations: [...], errors, fetched_at }`, one single-read
   result per conversation (the other arguments apply to each), read four at
-  a time; one that cannot be resolved or read is listed in `errors` with its
-  reason and the rest still come back. A single string returns exactly the
-  shape above.
+  a time; an ambiguous name takes its place in `conversations` as the same
+  `{ambiguous: true, query, match_count, candidates, hint}` object a single
+  read returns, one that cannot be resolved or read is listed in `errors`
+  with its reason, and the rest still come back. A single string returns
+  exactly the shape above.
 - `teams_get_unread` — every unread message across your chats and channels,
   grouped by conversation, most recent first. Filter by `kinds` (`chat`,
   `channel`, `meeting`, `oneOnOne`) or `query` (title, channel or team
@@ -272,7 +276,10 @@ Everything is optional — by default the token is captured from your browser.
   system events, and deleted messages, are not counted),
   `new_from_others_count`, `newest_time` and, for a channel, `threads`: one
   `{ root_id, new_root, new_reply_count }` per thread the new messages landed
-  in, including a thread whose root post is older than the cursor. Without
+  in, including a thread whose root post is older than the cursor, and
+  `after_message_id` — the value to pass to `teams_read_conversation` as
+  `after_message_id` to read exactly the messages counted (a message id is
+  its arrival ms, so this is the cursor time written as an id). Without
   `cursor` it looks back 24 hours. `next_cursor` is an opaque token (base64url
   of `{"t": <epoch ms>}`; `cursor` also takes a plain ISO 8601 time) — pass it
   back to see only what arrived since. It is at-least-once: a conversation can
@@ -280,7 +287,11 @@ Everything is optional — by default the token is captured from your browser.
   (`errors`). `kinds` and `include_hidden` filter as in `teams_get_unread` —
   use the same ones with a cursor as the call that returned it; `limit`
   (default 50, max 200) caps the conversations returned, the rest are named in
-  `more_conversations`. Then read what changed with `teams_read_conversation`:
+  `more_conversations` (each with its `after_message_id` too). Then read what
+  changed with `teams_read_conversation`, handing on the row's
+  `after_message_id` — **not** `next_cursor`, which is a time token that only
+  `teams_get_changes` accepts (`teams_read_conversation` rejects it, and
+  `teams_get_changes` rejects a message id):
 
   ```jsonc
   // first call: the last 24 hours
@@ -288,9 +299,12 @@ Everything is optional — by default the token is captured from your browser.
   // → { since, total_new_messages: 5, conversations: [
   //      { conversation: { id: "19:…@thread.tacv2", kind: "channel", title: "Design", … },
   //        new_message_count: 3, new_from_others_count: 3, newest_time: "…",
+  //        after_message_id: "1791728801361",
   //        threads: [{ root_id: "1791803726629", new_root: false, new_reply_count: 2 }, …] }, … ],
   //    next_cursor: "eyJ0IjoxNzkxODE1MjAxMzYxfQ", next_cursor_time: "…", fetched_at }
-  // later: only what arrived since
+  // read the messages it counted in one conversation: hand on the row's after_message_id
+  teams_read_conversation({ conversation: "19:…@thread.tacv2", after_message_id: "1791728801361" })
+  // later: only what arrived since — next_cursor goes back to teams_get_changes only
   teams_get_changes({ cursor: "eyJ0IjoxNzkxODE1MjAxMzYxfQ" })
   ```
 
@@ -401,7 +415,12 @@ instead.
   no refresh flag because there is nothing to refresh. A cursor never moves
   the read marker; with `limit` / `per_conversation_limit` the newest
   messages are kept and `next_cursor` jumps to the newest, so check
-  `truncated` before assuming nothing was skipped.
+  `truncated` before assuming nothing was skipped. **Two cursor kinds:**
+  `teams_get_changes` has its own *time* cursor (an opaque token, or an ISO
+  8601 time) that goes back only to `teams_get_changes`; it is not a message
+  id. Each of its conversation rows carries the message-id cursor to hand on,
+  `after_message_id`, for `teams_read_conversation` (or `teams_get_unread`'s
+  `cursors`). Each tool rejects the other kind.
 
 - **Results are framed as untrusted.** Every data tool returns
   `{ untrusted_content: true, note, ... }` and says in its description that

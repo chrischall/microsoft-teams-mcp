@@ -8,18 +8,27 @@
  * message's id; the caller passes it back as `after_message_id` (or, for
  * `teams_get_unread`, inside `cursors`). The server keeps no state and no
  * cache: every call reads live, and says when in `fetched_at`.
+ *
+ * `teams_get_changes` has a different, time cursor (an opaque token); it is
+ * not accepted here. Its rows carry the message-id cursor to hand on instead,
+ * `after_message_id` — its cursor time written as an id.
  */
 import { z } from 'zod';
 import type { RawMessage } from '../chatsvc.js';
 
 /** A message id: decimal digits (its arrival epoch ms). */
-const messageId = z.string().regex(/^\d+$/, { message: 'a message id is decimal digits, e.g. "1760000000000"' });
+const messageId = z.string().regex(/^\d+$/, {
+  message:
+    'a message id is decimal digits, e.g. "1760000000000" — a teams_get_changes next_cursor is not one; ' +
+    'pass its per-conversation after_message_id instead',
+});
 
 export const afterMessageIdArg = messageId
   .optional()
   .describe(
-    'Only return messages newer than this message id (a previous result\'s next_cursor, or any message id); ' +
-      'the read stops at the first message at or before it.',
+    'Only return messages newer than this message id (a previous teams_read_conversation next_cursor, a ' +
+      "teams_get_changes row's after_message_id, or any message id); the read stops at the first message at " +
+      "or before it. Not teams_get_changes' next_cursor, which is a time token.",
   );
 
 export const cursorsArg = z

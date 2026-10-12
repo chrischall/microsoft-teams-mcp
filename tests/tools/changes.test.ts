@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { createTestHarness, parseToolResult } from '@chrischall/mcp-utils/test';
 import { McpToolError } from '@chrischall/mcp-utils';
 import { decodeChangesCursor, encodeChangesCursor, registerChangesTools } from '../../src/tools/changes.js';
+import { registerConversationTools } from '../../src/tools/conversation.js';
 import { UNTRUSTED_DESCRIPTION_SUFFIX } from '../../src/tools/untrusted.js';
 import { lastChangeMs } from '../../src/model.js';
 import type { ChatServiceClient, GetMessagesOptions, RawConversation, RawMessage } from '../../src/chatsvc.js';
@@ -118,6 +119,7 @@ type Row = {
   new_message_count: number;
   new_from_others_count: number;
   newest_time: string;
+  after_message_id: string;
   threads?: { root_id: string; new_root: boolean; new_reply_count: number }[];
   truncated?: true;
 };
@@ -146,6 +148,17 @@ describe('changes cursor', () => {
     for (const bad of ['not a cursor', Buffer.from('{"x":1}').toString('base64url'), Buffer.from('{"t":-5}').toString('base64url')]) {
       expect(() => decodeChangesCursor(bad), bad).toThrow(/cursor/i);
     }
+  });
+
+  it('refuses a message id, pointing it at after_message_id instead', () => {
+    let err: unknown;
+    try {
+      decodeChangesCursor('1760000000000');
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(McpToolError);
+    expect((err as McpToolError).hint).toMatch(/after_message_id/);
   });
 });
 
@@ -230,6 +243,59 @@ describe('teams_get_changes', () => {
       { root_id: String(OLD_ROOT), new_root: false, new_reply_count: 1 },
       { root_id: String(NOW - 5 * HOUR), new_root: false, new_reply_count: 1 },
     ]);
+  });
+
+  it("gives each conversation the after_message_id to read exactly what it counted: the cursor time as a message id", async () => {
+    const { data } = await call(chatsvcWith());
+    for (const r of rows(data)) expect(r.after_message_id).toBe(String(T));
+    const cursor = encodeChangesCursor(NOW - 2.5 * HOUR);
+    const later = await call(chatsvcWith(), { cursor });
+    for (const r of rows(later.data)) expect(r.after_message_id).toBe(String(NOW - 2.5 * HOUR));
+  });
+
+  it("hands off: a row's after_message_id passed to teams_read_conversation returns the messages it counted", async () => {
+    const { data } = await call(chatsvcWith());
+    const group = row(data, GROUP)!;
+    // Pages as the live service does after the newest-change ordering is settled: one page, the rejected skipped.
+    const getMessages = vi.fn(async (id: string, opts: GetMessagesOptions) =>
+      [...(MESSAGES[id] ?? [])].sort((a, b) => Number(b.id) - Number(a.id)).filter((m) => !opts.stopAt?.(m)),
+    );
+    const harness = await createTestHarness((server) =>
+      registerConversationTools(server, { chatsvc: chatsvcWith({ getMessages }) }),
+    );
+    try {
+      const read = parseToolResult(
+        await harness.callTool('teams_read_conversation', { conversation: GROUP, after_message_id: group.after_message_id }),
+      ) as { messages: { text: string; deleted?: boolean }[] };
+      const counted = read.messages.filter((m) => m.deleted !== true);
+      expect(counted.map((m) => m.text)).toEqual(['new 1', 'mine', 'new 2']);
+      expect(counted).toHaveLength(group.new_message_count);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it('is refused by teams_read_conversation when its next_cursor is passed as after_message_id', async () => {
+    const { data } = await call(chatsvcWith());
+    const harness = await createTestHarness((server) => registerConversationTools(server, { chatsvc: chatsvcWith() }));
+    try {
+      const result = await harness.callTool('teams_read_conversation', {
+        conversation: GROUP,
+        after_message_id: data?.next_cursor,
+      });
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toMatch(/teams_get_changes next_cursor is not one/);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it('documents that its cursor and after_message_id are different kinds, and which goes where', async () => {
+    const harness = await createTestHarness((server) => registerChangesTools(server, { chatsvc: chatsvcWith() }));
+    const tool = (await harness.client.listTools()).tools.find((t) => t.name === 'teams_get_changes');
+    await harness.close();
+    expect(tool?.description).toMatch(/after_message_id/);
+    expect(tool?.description).toMatch(/not a message id/i);
   });
 
   it('accepts an ISO time as the cursor', async () => {
