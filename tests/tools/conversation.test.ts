@@ -1,4 +1,4 @@
-import { afterEach, describe, it, expect, vi } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { createTestHarness, parseToolResult } from '@chrischall/mcp-utils/test';
 import { McpToolError } from '@chrischall/mcp-utils';
 import { registerConversationTools, resolveListed } from '../../src/tools/conversation.js';
@@ -458,7 +458,7 @@ describe('teams_read_conversation', () => {
     expect(errorText(result)).toMatch(/rate-limiting/);
   });
 
-  it('describes itself as read-only, any-conversation, never marking read, with attachments via teams_get_attachment', async () => {
+  it('describes itself as any-conversation, not marking read unless asked, with attachments via teams_get_attachment', async () => {
     const harness = await createTestHarness((server) => registerConversationTools(server, { chatsvc: fakeChatsvc() }));
     const tools = (await harness.client.listTools()).tools;
     await harness.close();
@@ -467,15 +467,21 @@ describe('teams_read_conversation', () => {
     const tool = tools[0];
     expect(tool.description).toMatch(/any chat or channel/i);
     expect(tool.description).toMatch(/without opening/i);
-    expect(tool.description).toMatch(/does not mark/i);
+    expect(tool.description).toMatch(/by default this does NOT mark anything read/i);
+    expect(tool.description).toMatch(/mark_read/);
+    expect(tool.description).toMatch(/teams_mark_read/);
+    expect(tool.description).toMatch(/refused with format "summary"/);
+    expect(tool.description).toMatch(/skipped/);
     expect(tool.description).toMatch(/teams_get_attachment/);
-    expect(tool.annotations?.readOnlyHint).toBe(true);
-    expect(tool.annotations?.openWorldHint).toBe(true);
+    // mark_read makes it a write — a non-destructive, idempotent one.
+    expect(tool.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true });
     expect(Object.keys((tool.inputSchema as { properties?: object }).properties ?? {}).sort()).toEqual([
       'after_message_id',
+      'confirmToken',
       'conversation',
       'format',
       'limit',
+      'mark_read',
       'since',
       'tz',
       'unread_only',
@@ -696,5 +702,276 @@ describe('teams_read_conversation after_message_id (cursor)', () => {
     } finally {
       await harness.close();
     }
+  });
+});
+
+describe('teams_read_conversation — mark_read', () => {
+  const ENV_KEYS = ['MCP_CONFIRM_MODE', 'MCP_CONFIRM_TTL_SECONDS', 'MCP_CONFIRM_SECRET'] as const;
+  let savedEnv: Record<string, string | undefined>;
+  beforeEach(() => {
+    savedEnv = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
+    for (const k of ENV_KEYS) delete process.env[k];
+  });
+  afterEach(() => {
+    for (const k of ENV_KEYS) {
+      if (savedEnv[k] === undefined) delete process.env[k];
+      else process.env[k] = savedEnv[k];
+    }
+  });
+
+  /** Phase 1, then (when phase 1 asked for one) phase 2 with its token. */
+  async function callConfirmed(chatsvc: ChatServiceClient, args: Record<string, unknown>) {
+    const harness = await createTestHarness((server) => registerConversationTools(server, { chatsvc }));
+    try {
+      const first = await harness.callTool('teams_read_conversation', args);
+      const one = first.isError ? undefined : (parseToolResult(first) as Record<string, unknown>);
+      if (typeof one?.confirmToken !== 'string') return { first, preview: undefined, data: one };
+      const second = await harness.callTool('teams_read_conversation', { ...args, confirmToken: one.confirmToken });
+      return { first, preview: one, data: second.isError ? undefined : (parseToolResult(second) as Record<string, unknown>) };
+    } finally {
+      await harness.close();
+    }
+  }
+
+  function withHorizonWrite(overrides: Record<string, unknown> = {}) {
+    const setConsumptionHorizon = vi.fn(async () => undefined);
+    return { chatsvc: chatsvcWith(GROUP_MSGS, { setConsumptionHorizon, ...overrides }), setConsumptionHorizon };
+  }
+
+  it('never writes the read marker by default, and asks for no confirmation', async () => {
+    const { chatsvc, setConsumptionHorizon } = withHorizonWrite();
+    const { data } = await call(chatsvc, { conversation: GROUP });
+    expect(setConsumptionHorizon).not.toHaveBeenCalled();
+    expect(data).not.toHaveProperty('marked_read');
+    expect(data).not.toHaveProperty('confirmToken');
+  });
+
+  it('phase 1 previews the move and returns no messages; phase 2 reads and marks up to the newest returned', async () => {
+    const { chatsvc, setConsumptionHorizon } = withHorizonWrite();
+    const { preview, data } = await callConfirmed(chatsvc, { conversation: GROUP, mark_read: true });
+
+    expect(preview).not.toHaveProperty('messages');
+    const shown = (preview?.preview as { conversations: { untrusted_content: boolean; data?: unknown } }).conversations;
+    expect(JSON.stringify(shown)).toContain(String(T0 + 4 * MIN));
+    expect(JSON.stringify(shown)).toContain('Project Falcon');
+
+    expect(setConsumptionHorizon).toHaveBeenCalledExactlyOnceWith(GROUP, String(T0 + 4 * MIN));
+    expect((data?.messages as Msg[]).map((m) => m.text)).toContain('fourth');
+    expect(data?.marked_read).toBe(true);
+  });
+
+  it('leaves the marker alone when limit cut off unread messages older than those returned', async () => {
+    const { chatsvc, setConsumptionHorizon } = withHorizonWrite();
+    // limit 2 returns +4 and +3.5 (mine); the unread "third" (+3) is past the horizon but was not returned.
+    const { preview, data } = await callConfirmed(chatsvc, { conversation: GROUP, mark_read: true, limit: 2 });
+
+    expect(preview).toBeUndefined();
+    expect(setConsumptionHorizon).not.toHaveBeenCalled();
+    expect((data?.messages as Msg[]).map((m) => m.text)).not.toContain('third');
+    expect(data?.truncated).toBeDefined();
+    expect(data?.marked_read).toEqual({ skipped: 'truncated', hint: expect.stringMatching(/limit/) });
+  });
+
+  it('with unread_only, a limit cut leaves the marker alone too', async () => {
+    const { chatsvc, setConsumptionHorizon } = withHorizonWrite();
+    const { preview, data } = await callConfirmed(chatsvc, { conversation: GROUP, mark_read: true, unread_only: true, limit: 1 });
+
+    expect(preview).toBeUndefined();
+    expect(setConsumptionHorizon).not.toHaveBeenCalled();
+    expect(data?.marked_read).toMatchObject({ skipped: 'truncated' });
+  });
+
+  it('still marks when limit cut only messages already read', async () => {
+    const { chatsvc, setConsumptionHorizon } = withHorizonWrite();
+    // limit 3 returns +4, +3.5 and +3 — every unread message; the cut falls at the horizon (+2).
+    const { data } = await callConfirmed(chatsvc, { conversation: GROUP, mark_read: true, limit: 3 });
+
+    expect(data?.truncated).toBeDefined();
+    expect(setConsumptionHorizon).toHaveBeenCalledExactlyOnceWith(GROUP, String(T0 + 4 * MIN));
+    expect(data?.marked_read).toBe(true);
+  });
+
+  it('leaves the marker alone when since cut off unread messages older than those returned', async () => {
+    const { chatsvc, setConsumptionHorizon } = withHorizonWrite();
+    const { preview, data } = await callConfirmed(chatsvc, {
+      conversation: GROUP,
+      mark_read: true,
+      since: new Date(T0 + 3.25 * MIN).toISOString(),
+    });
+
+    expect(preview).toBeUndefined();
+    expect(setConsumptionHorizon).not.toHaveBeenCalled();
+    expect(data?.marked_read).toEqual({ skipped: 'since', hint: expect.stringMatching(/since/) });
+  });
+
+  it('still marks when since stops at or below the read horizon', async () => {
+    const { chatsvc, setConsumptionHorizon } = withHorizonWrite();
+    const { data } = await callConfirmed(chatsvc, { conversation: GROUP, mark_read: true, since: new Date(T0 + 1.5 * MIN).toISOString() });
+
+    expect(setConsumptionHorizon).toHaveBeenCalledExactlyOnceWith(GROUP, String(T0 + 4 * MIN));
+    expect(data?.marked_read).toBe(true);
+  });
+
+  it('with an array, a truncated conversation is skipped while the others are marked under one confirmation', async () => {
+    const msgs = {
+      [GROUP]: GROUP_MSGS,
+      [CHANNEL]: [rawMsg(T0 + 4 * MIN, { conv: CHANNEL, text: 'channel news' })],
+    };
+    const setConsumptionHorizon = vi.fn(async () => undefined);
+    const getMessages = vi.fn(async (id: string, opts: GetMessagesOptions) => messagesFrom(msgs[id as keyof typeof msgs])(id, opts));
+    const { preview, data } = await callConfirmed(chatsvcWith(GROUP_MSGS, { getMessages, setConsumptionHorizon }), {
+      conversation: [GROUP, CHANNEL],
+      mark_read: true,
+      limit: 2,
+    });
+
+    const shown = JSON.stringify((preview?.preview as Record<string, unknown>).conversations);
+    expect(shown).toContain(CHANNEL);
+    expect(shown).not.toContain(GROUP);
+    expect(setConsumptionHorizon).toHaveBeenCalledExactlyOnceWith(CHANNEL, String(T0 + 4 * MIN));
+    const reads = data?.conversations as { conversation: { id: string }; marked_read?: unknown }[];
+    expect(reads.map((r) => [r.conversation.id, r.marked_read])).toEqual([
+      [GROUP, { skipped: 'truncated', hint: expect.any(String) }],
+      [CHANNEL, true],
+    ]);
+  });
+
+  it('marks nothing and asks nothing for a conversation with no messages', async () => {
+    const { chatsvc, setConsumptionHorizon } = withHorizonWrite({ getMessages: messagesFrom([]) });
+    const { preview, data } = await callConfirmed(chatsvc, { conversation: GROUP, mark_read: true });
+
+    expect(preview).toBeUndefined();
+    expect(setConsumptionHorizon).not.toHaveBeenCalled();
+    expect(data?.marked_read).toBe(false);
+  });
+
+  it('never lets an outside_window thread root drive the mark target', async () => {
+    const root = T0 + 1 * MIN;
+    const msgs = [
+      rawMsg(T0 + 3 * MIN, { conv: CHANNEL, rootId: root, text: 'late reply' }),
+      rawMsg(T0 + 4 * MIN, { conv: CHANNEL, rootId: root, text: 'later reply' }),
+    ];
+    // The root (+1) predates the window's replies; fetched by id, it is context, never the target.
+    const stored = rawMsg(root, { conv: CHANNEL, text: 'old root' });
+    const getMessage = vi.fn(async (_c: string, id: string) => (id === String(root) ? stored : undefined));
+    const setConsumptionHorizon = vi.fn(async () => undefined);
+    const { data } = await callConfirmed(chatsvcWith(msgs, { getMessage, setConsumptionHorizon }), {
+      conversation: CHANNEL,
+      mark_read: true,
+    });
+
+    expect(getMessage).toHaveBeenCalledWith(CHANNEL, String(root));
+    expect(JSON.stringify(data?.threads)).toContain('outside_window');
+    expect(setConsumptionHorizon).toHaveBeenCalledExactlyOnceWith(CHANNEL, String(T0 + 4 * MIN));
+  });
+
+  it('never moves the marker backwards: a read entirely before it is not marked', async () => {
+    const setConsumptionHorizon = vi.fn(async () => undefined);
+    // The only messages are at or before the horizon (+2 min) — every one is already read.
+    const old = [rawMsg(T0 + 1 * MIN, { text: 'first' }), rawMsg(T0 + 2 * MIN, { text: 'second' })];
+    const svc = chatsvcWith(old, { setConsumptionHorizon });
+    const { preview, data } = await callConfirmed(svc, { conversation: GROUP, mark_read: true });
+    expect(preview).toBeUndefined();
+    expect(setConsumptionHorizon).not.toHaveBeenCalled();
+    expect(data?.marked_read).toBe(false);
+  });
+
+  it('reports a move Teams did not confirm as marked_read false with a warning', async () => {
+    const { WriteOutcomeUnknownError } = await import('@chrischall/mcp-utils');
+    const setConsumptionHorizon = vi.fn(async () => {
+      throw new WriteOutcomeUnknownError('Teams', 'PUT', { cause: new Error('socket hang up') });
+    });
+    const { data } = await callConfirmed(chatsvcWith(GROUP_MSGS, { setConsumptionHorizon }), {
+      conversation: GROUP,
+      mark_read: true,
+    });
+    expect(data?.messages).toBeDefined();
+    expect(data?.marked_read).toBe(false);
+    expect(String(data?.mark_read_warning)).toMatch(/did not confirm/i);
+  });
+
+  it('with an array, one confirmation covers every conversation read, and each says marked_read', async () => {
+    const { chatsvc, setConsumptionHorizon } = withHorizonWrite();
+    const { preview, data } = await callConfirmed(chatsvc, { conversation: [GROUP, CHANNEL], mark_read: true });
+
+    expect(preview).not.toHaveProperty('conversations');
+    const shown = JSON.stringify((preview?.preview as Record<string, unknown>).conversations);
+    expect(shown).toContain(GROUP);
+    expect(shown).toContain(CHANNEL);
+    expect(setConsumptionHorizon.mock.calls.sort()).toEqual(
+      [
+        [GROUP, String(T0 + 4 * MIN)],
+        [CHANNEL, String(T0 + 4 * MIN)],
+      ].sort(),
+    );
+    const reads = data?.conversations as { conversation: { id: string }; marked_read?: boolean }[];
+    expect(reads.map((r) => [r.conversation.id, r.marked_read])).toEqual([
+      [GROUP, true],
+      [CHANNEL, true],
+    ]);
+  });
+
+  it('with an array, a conversation that could not be resolved is in errors and is not marked', async () => {
+    const { chatsvc, setConsumptionHorizon } = withHorizonWrite();
+    const { data } = await callConfirmed(chatsvc, { conversation: [GROUP, 'no such chat'], mark_read: true });
+
+    expect(setConsumptionHorizon).toHaveBeenCalledExactlyOnceWith(GROUP, String(T0 + 4 * MIN));
+    expect((data?.errors as { conversation: string }[]).map((e) => e.conversation)).toEqual(['no such chat']);
+  });
+
+  it('with an array, an ambiguous name comes back as its candidates and nothing of it is marked', async () => {
+    const { chatsvc, setConsumptionHorizon } = withHorizonWrite();
+    const { data } = await callConfirmed(chatsvc, { conversation: ['falcon', CHANNEL], mark_read: true });
+
+    expect(setConsumptionHorizon).toHaveBeenCalledExactlyOnceWith(CHANNEL, String(T0 + 4 * MIN));
+    const [ambiguous, channel] = data?.conversations as Record<string, unknown>[];
+    expect(ambiguous).toMatchObject({ ambiguous: true, query: 'falcon' });
+    expect(ambiguous).not.toHaveProperty('marked_read');
+    expect(channel).toMatchObject({ conversation: { id: CHANNEL }, marked_read: true });
+  });
+
+  it('refuses mark_read with format summary, reading and marking nothing', async () => {
+    for (const conversation of [GROUP, [GROUP, CHANNEL]]) {
+      const { chatsvc, setConsumptionHorizon } = withHorizonWrite();
+      const { first } = await callConfirmed(chatsvc, { conversation, mark_read: true, format: 'summary' });
+
+      expect(first.isError).toBe(true);
+      expect(errorText(first)).toMatch(/mark_read/);
+      expect(errorText(first)).toMatch(/summary/);
+      expect(chatsvc.getMessages).not.toHaveBeenCalled();
+      expect(setConsumptionHorizon).not.toHaveBeenCalled();
+    }
+  });
+
+  it('with format compact, marks up to the newest message returned', async () => {
+    const { chatsvc, setConsumptionHorizon } = withHorizonWrite();
+    const { data } = await callConfirmed(chatsvc, { conversation: GROUP, mark_read: true, format: 'compact' });
+
+    expect((data?.messages as Msg[]).map((m) => m.text)).toContain('fourth');
+    expect(setConsumptionHorizon).toHaveBeenCalledExactlyOnceWith(GROUP, String(T0 + 4 * MIN));
+    expect(data?.marked_read).toBe(true);
+  });
+
+  it('with after_message_id and nothing new, marks nothing and asks nothing', async () => {
+    const { chatsvc, setConsumptionHorizon } = withHorizonWrite();
+    const { preview, data } = await callConfirmed(chatsvc, {
+      conversation: GROUP,
+      mark_read: true,
+      after_message_id: String(T0 + 4 * MIN),
+    });
+
+    expect(preview).toBeUndefined();
+    expect(setConsumptionHorizon).not.toHaveBeenCalled();
+    expect(data?.marked_read).toBe(false);
+    expect(data?.next_cursor).toBe(String(T0 + 4 * MIN));
+  });
+
+  it('an ambiguous name with mark_read returns the candidates and marks nothing', async () => {
+    const { chatsvc, setConsumptionHorizon } = withHorizonWrite();
+    const { preview, data } = await callConfirmed(chatsvc, { conversation: 'falcon', mark_read: true });
+
+    expect(preview).toBeUndefined();
+    expect(data?.ambiguous).toBe(true);
+    expect(setConsumptionHorizon).not.toHaveBeenCalled();
   });
 });

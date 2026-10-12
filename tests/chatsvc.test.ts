@@ -607,6 +607,55 @@ describe('setReaction / removeReaction', () => {
   });
 });
 
+describe('setConsumptionHorizon', () => {
+  const CONV = '19:a@thread.v2';
+  const URL_ = `${BASE}/users/ME/conversations/${encodeURIComponent(CONV)}/properties?name=consumptionhorizon`;
+
+  it('PUTs the consumptionhorizon property as "<id>;<client ms>;<id>"', async () => {
+    const fetchImpl: FetchMock = vi.fn(async () => new Response('', { status: 200 }));
+    await client(fetchImpl).setConsumptionHorizon(CONV, '1760000000000', 1_760_000_123_456);
+    expect(urlOf(fetchImpl, 0)).toBe(URL_);
+    const init = fetchImpl.mock.calls[0]?.[1];
+    expect(init?.method).toBe('PUT');
+    expect(JSON.parse(String(init?.body))).toEqual({ consumptionhorizon: '1760000000000;1760000123456;1760000000000' });
+    expect(headersOf(fetchImpl, 0).get('content-type')).toBe('application/json');
+  });
+
+  it('encodes the self-chat id as one path segment', async () => {
+    const fetchImpl: FetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+    await client(fetchImpl).setConsumptionHorizon('48:notes', '1');
+    expect(urlOf(fetchImpl, 0)).toBe(`${BASE}/users/ME/conversations/48%3Anotes/properties?name=consumptionhorizon`);
+  });
+
+  it('maps a 4xx to a plain McpToolError with its status', async () => {
+    const fetchImpl: FetchMock = vi.fn(async () => jsonResponse({}, 403));
+    const p = client(fetchImpl).setConsumptionHorizon(CONV, '1');
+    await expect(p).rejects.toMatchObject({ status: 403 });
+    await expect(p).rejects.not.toBeInstanceOf(WriteOutcomeUnknownError);
+  });
+
+  it('reports a 5xx as an unknown outcome pointing at the read marker', async () => {
+    const fetchImpl: FetchMock = vi.fn(async () => jsonResponse({}, 502));
+    const err = await client(fetchImpl)
+      .setConsumptionHorizon(CONV, '1')
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(WriteOutcomeUnknownError);
+    expect(err).toMatchObject({ method: 'PUT' });
+    expect(outcomeUnknownStatus(err as WriteOutcomeUnknownError)).toBe(502);
+    expect((err as WriteOutcomeUnknownError).hint).toMatch(/read marker/i);
+  });
+
+  it('reports a timeout as an unknown outcome too', async () => {
+    const fetchImpl: FetchMock = vi.fn(async () => {
+      throw new RequestTimeoutError('Teams', 60_000);
+    });
+    await expect(client(fetchImpl).setConsumptionHorizon(CONV, '1')).rejects.toMatchObject({
+      outcomeUnknown: true,
+      timedOut: true,
+    });
+  });
+});
+
 describe('ensureToken', () => {
   it('captures a token without making any API request', async () => {
     const fetchImpl: FetchMock = vi.fn();

@@ -59,7 +59,7 @@ export function registerChannelTools(server: McpServer, { chatsvc }: Pick<TeamsD
         'keeps only channels whose newest unread post is from the last 14 days (since_days widens ' +
         'it); older ones are counted in older_unread_skipped, not listed. ' +
         UNREAD_HINT_DESCRIPTION +
-        ' Listing never marks anything read. query matches the channel title, team name or last-message preview. ' +
+        ' Listing never marks anything read (teams_mark_read does). query matches the channel title, team name or last-message preview. ' +
         MATCH_REASON_DESCRIPTION +
         ' ' +
         FAVORITES_DESCRIPTION +

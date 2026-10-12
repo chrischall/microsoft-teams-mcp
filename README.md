@@ -32,10 +32,13 @@ it like any chat — no Activity view (or any view) needs to be open, and
 nothing reads the page. The bridge is used for one thing only: capturing the
 token.
 
-Nothing here marks anything read. Reading a chat through this server leaves
-your Teams unread badges exactly as they were. The two writes —
-`teams_send_message` and `teams_react` — go through the same chat-service
-API and post nothing until you confirm (see [Writes](#writes)).
+By default nothing here marks anything read. Reading a chat through this
+server leaves your Teams unread badges exactly as they were — unless you ask
+for it: `teams_mark_read`, or `mark_read: true` on `teams_read_conversation`
+/ `teams_get_unread`, moves your read marker forward. The writes —
+`teams_send_message`, `teams_react` and marking read — go through the same
+chat-service API and change nothing until you confirm (see
+[Writes](#writes)).
 
 ## SharePoint file download
 
@@ -240,6 +243,18 @@ Everything is optional — by default the token is captured from your browser.
   read returns, one that cannot be resolved or read is listed in `errors`
   with its reason, and the rest still come back. A single string returns
   exactly the shape above.
+  By default it does not mark anything read; `mark_read: true` also moves
+  your read marker up to the newest message returned (never backwards;
+  `outside_window` roots do not count) and reports `marked_read` — a write,
+  so it asks you to confirm first. With an array, each conversation read is
+  marked up to its own newest message, and one confirmation covers them all.
+  It never marks a message you were not given: `mark_read` with
+  `format: "summary"` is refused (`compact` is fine), and when `limit` or
+  `since` cut off unread messages older than those returned, that
+  conversation's marker stays put and it reports
+  `marked_read: { skipped: "truncated" | "since", hint }` (a `limit` that cut
+  only messages you had already read still marks). An empty read, or an
+  `after_message_id` with nothing new, marks nothing (`marked_read: false`).
 - `teams_get_unread` — every unread message across your chats and channels,
   grouped by conversation, most recent first. Filter by `kinds` (`chat`,
   `channel`, `meeting`, `oneOnOne`) or `query` (title, channel or team
@@ -255,7 +270,16 @@ Everything is optional — by default the token is captured from your browser.
   max 3650) are returned; older ones are counted in `older_unread_skipped`,
   and `older_unread: true` also lists them (see below). An untitled group chat or 1:1 is titled after
   its participants, as in `teams_list_chats` — in `conversations`, in
-  `more_unread_conversations` and in `errors`. `tz` (default
+  `more_unread_conversations` and in `errors`. By default it does not mark
+  anything read; `mark_read: true` also moves the read marker of each
+  conversation returned with its messages (not `more_unread_conversations`)
+  up to its newest unread message returned, and reports `marked_read` per
+  conversation (with `mark_read_warning` when that move failed). One
+  confirmation covers every move. It never marks a message you were not
+  given: `mark_read` with `format: "summary"` is refused (`compact` is
+  fine), a conversation `per_conversation_limit` cut keeps its marker and
+  reports `marked_read: { skipped: "truncated", hint }`, and `outside_window`
+  roots never count. `tz` (default
   `TEAMS_TIME_ZONE`) adds each message's `time_local`, as in
   `teams_read_conversation`. A channel's unread replies come grouped under
   their root post; a root you had already read is fetched and marked
@@ -332,14 +356,15 @@ Everything is optional — by default the token is captured from your browser.
   `teams_read_conversation` to read it in context. Filter with
   `unread_only`, `kinds` and `since_days` (default 14, max 3650); `limit`
   (default 50, max 200). Read from the chat service, so the Activity view
-  does not need to be open; it never marks anything read.
+  does not need to be open; it never marks anything read (`teams_mark_read`
+  marks chats and channels read, not the Activity feed).
 - `teams_healthcheck` — resolves the token the way every tool does
   (capturing one on a cold start) and probes the chat service with one
   conversations listing. Reports where the token came from and when it
   expires (both `null` when no token is held, e.g. after a failed capture)
   and how many conversations the listing returned — never the token.
 
-**Write** (both ask you to confirm first — see [Writes](#writes)):
+**Write** (each asks you to confirm first — see [Writes](#writes)):
 
 - `teams_send_message` — post as you to any chat or channel, by id or name.
   `text` is plain text: it is escaped, newlines are kept, and `:key:`
@@ -356,18 +381,32 @@ Everything is optional — by default the token is captured from your browser.
   reaction key (`fire`, `1f389_partypopper`). The message is read back to
   verify the change (`verified: null` when it is not found again). It writes only that message's reaction — never your
   recent-reactions list or any other preference.
+- `teams_mark_read` — mark a chat or channel read in Teams, clearing its
+  unread badge: moves your read marker (the conversation's
+  `consumptionhorizon`) up to `up_to_message_id`, or by default up to the
+  newest message in the conversation. Returns the conversation,
+  `previous_horizon_message_id` (`null` if you never opened it) and
+  `new_horizon_message_id`. The marker never moves backwards: when it is
+  already at or past the target, nothing is written (no confirmation is
+  asked) and `status` is `already_read`. Only you see your read marker.
 
-Every other tool is read-only, and none of them marks anything read.
+`teams_read_conversation` and `teams_get_unread` also write when — and only
+when — you pass `mark_read: true` (see above). Every other tool is
+read-only, and nothing marks anything read unless you ask it to.
 
 ## Writes
 
-Both writes are visible to everyone in the conversation, so each asks you
-first. A client that can show a confirmation prompt (Claude Code) shows one.
-On a client that cannot, the first call posts nothing and returns a
+A post and a reaction are visible to everyone in the conversation, and
+marking read clears your unread badges, so each write asks you first. A
+client that can show a confirmation prompt (Claude Code) shows one. On a
+client that cannot, the first call changes nothing and returns a
 `confirmation-required` preview — the conversation, the exact text, any
-mentions, the quoted message or the reaction, with everything other people
-wrote (titles, names, quoted text) fenced as untrusted — plus a `confirmToken`; only a
-repeat call with that token posts. The token is single-use, expires, and is
+mentions, the quoted message, the reaction, or the message your read marker
+moves to and where it was, with everything other people wrote (titles,
+names, quoted text) fenced as untrusted — plus a `confirmToken`; only a
+repeat call with that token writes. With `mark_read` on
+`teams_read_conversation` / `teams_get_unread`, that first call returns just
+the preview (no messages); the repeat call reads and marks. The token is single-use, expires, and is
 bound to the exact arguments: change anything between the two calls and it
 is refused with a fresh preview.
 
@@ -383,8 +422,8 @@ itself, so keep `MCP_CONFIRM_MODE=ask-user` and approve each preview in chat
 as the real guard on what gets posted.
 
 **Try it in your own notes first.** The conversation `48:notes` (also by the
-name `notes` or `self`) is your Teams self-chat ("notes to self"): both writes
-accept it, `teams_read_conversation` reads it, nobody else sees it, and
+name `notes` or `self`) is your Teams self-chat ("notes to self"): every write
+accepts it, `teams_read_conversation` reads it, nobody else sees it, and
 it is the safe place to see what a message or reaction will look like. Every
 other `48:` system conversation (calendar and the like) is refused.
 
@@ -393,7 +432,11 @@ timeout, a dropped connection or a 5xx after the request went out), the
 result is `status: "unknown"` — the message may already be there, so read the
 conversation before sending again. A 4xx is a refusal and stays an error. A
 reaction Teams does not confirm is settled by reading the message back, and
-is `status: "unknown"` only when that does not show the change. Threaded channel replies, @mentions,
+is `status: "unknown"` only when that does not show the change. A read-marker
+move Teams does not confirm is `status: "unknown"` (`marked_read: false` with a
+`mark_read_warning` from the read tools); moving it again to the same message
+is harmless. Marking read (`PUT …/properties?name=consumptionhorizon`) was
+verified live on `48:notes` on 2026-10-12. Threaded channel replies, @mentions,
 removing a reaction and the ✅ reaction's key follow Teams' documented or
 inferred shapes but have not been verified against a live tenant yet.
 
@@ -492,6 +535,10 @@ instead.
 - **Muted chats in `teams_get_unread`:** chats you muted in Teams are left out
   and counted in `muted_skipped`. Pass `include_muted: true` for the old
   behaviour.
+- **Read tools are no longer annotated read-only:** `teams_read_conversation`
+  and `teams_get_unread` take an opt-in `mark_read` flag, so they are published
+  with `readOnly: false`. A client that auto-approves only read-only tools may
+  now ask before each read. Without `mark_read` they still never write.
 
 ## Upgrading from 0.3
 

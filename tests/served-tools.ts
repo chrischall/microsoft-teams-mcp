@@ -12,6 +12,7 @@ import { registerChangesTools } from '../src/tools/changes.js';
 import { registerAttachmentTools } from '../src/tools/attachment.js';
 import { registerSendTools } from '../src/tools/send.js';
 import { registerReactTools } from '../src/tools/react.js';
+import { registerMarkReadTools } from '../src/tools/markread.js';
 import { registerActivityTools } from '../src/tools/activity.js';
 import { registerHealthcheckTool } from '../src/tools/healthcheck.js';
 
@@ -30,6 +31,7 @@ export async function servedTools() {
     registerAttachmentTools(server, deps);
     registerSendTools(server, deps);
     registerReactTools(server, deps);
+    registerMarkReadTools(server, deps);
     registerActivityTools(server, deps);
     registerHealthcheckTool(server, deps);
   });

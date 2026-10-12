@@ -43,6 +43,7 @@
         "TEAMS_CAPTURE_TIMEOUT": "${user_config.capture_timeout}",
         "TEAMS_TOKEN_CACHE": "${user_config.token_cache}",
         "TEAMS_TOKEN_FILE": "${user_config.token_file}",
+        "TEAMS_TIME_ZONE": "${user_config.time_zone}",
         "MCP_CONFIRM_MODE": "${user_config.confirm_mode}",
         "MCP_CONFIRM_ELICITATION": "${user_config.confirm_elicitation}",
         "MCP_CONFIRM_TTL_SECONDS": "${user_config.confirm_ttl_seconds}",
@@ -112,10 +113,16 @@
       "description": "Optional. Where the captured token is cached. Defaults to ~/.microsoft-teams-mcp/token.json.",
       "required": false
     },
+    "time_zone": {
+      "type": "string",
+      "title": "Time zone (optional)",
+      "description": "Optional. Default IANA time zone (e.g. America/New_York) for the tz argument of teams_read_conversation and teams_get_unread: each message then carries time_local next to its UTC time. Leave blank for UTC only.",
+      "required": false
+    },
     "confirm_mode": {
       "type": "string",
       "title": "Write confirmation mode (optional)",
-      "description": "Optional. What teams_send_message and teams_react do on a client that cannot show a confirmation prompt (claude.ai, Claude Desktop): \"ask-user\" (default: the first call returns a preview and a confirmToken, and the model must get your approval in chat before using it), \"auto\" (the model may use the token after reviewing the preview itself) or \"refuse\". An unrecognised value is treated as refuse. Leave blank for the default.",
+      "description": "Optional. What the writes (teams_send_message, teams_react, teams_mark_read and the read tools' mark_read) do on a client that cannot show a confirmation prompt (claude.ai, Claude Desktop): \"ask-user\" (default: the first call returns a preview and a confirmToken, and the model must get your approval in chat before using it), \"auto\" (the model may use the token after reviewing the preview itself) or \"refuse\". An unrecognised value is treated as refuse. Leave blank for the default.",
       "required": false
     },
     "confirm_elicitation": {
@@ -149,11 +156,11 @@
     },
     {
       "name": "teams_read_conversation",
-      "description": "Read any chat or channel by id or name, without marking it read"
+      "description": "Read any chat or channel by id or name — leaves it unread unless you ask it to mark it read (asks you to confirm first)"
     },
     {
       "name": "teams_get_unread",
-      "description": "Get every unread message across chats and channels, without marking anything read"
+      "description": "Get every unread message across chats and channels — leaves them unread unless you ask it to mark them read (asks you to confirm first)"
     },
     {
       "name": "teams_get_changes",
@@ -170,6 +177,10 @@
     {
       "name": "teams_react",
       "description": "Add or remove your reaction on any message — asks you to confirm first"
+    },
+    {
+      "name": "teams_mark_read",
+      "description": "Mark a chat or channel read up to a message, clearing its unread badge (never backwards) — asks you to confirm first"
     },
     {
       "name": "teams_get_activity",

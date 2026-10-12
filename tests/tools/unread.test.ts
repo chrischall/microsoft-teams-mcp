@@ -704,7 +704,7 @@ describe('teams_get_unread', () => {
     expect(errorText(result)).toMatch(/rate-limiting/);
   });
 
-  it('describes itself as read-only, cross-conversation, and never marking anything read', async () => {
+  it('describes itself as cross-conversation, not marking anything read unless asked', async () => {
     const harness = await createTestHarness((server) => registerUnreadTools(server, { chatsvc: fakeChatsvc() }));
     const tools = (await harness.client.listTools()).tools;
     await harness.close();
@@ -712,20 +712,27 @@ describe('teams_get_unread', () => {
     expect(tools.map((t) => t.name)).toEqual(['teams_get_unread']);
     const tool = tools[0];
     expect(tool.description).toMatch(/every unread message/i);
-    expect(tool.description).toMatch(/does not mark/i);
+    expect(tool.description).toMatch(/by default this does NOT mark anything read/i);
     expect(tool.description).toMatch(/badges are unaffected/i);
-    expect(tool.annotations?.readOnlyHint).toBe(true);
-    expect(tool.annotations?.openWorldHint).toBe(true);
+    expect(tool.description).toMatch(/mark_read/);
+    expect(tool.description).toMatch(/teams_mark_read/);
+    expect(tool.description).toMatch(/refused with format "summary"/);
+    expect(tool.description).toMatch(/skipped: "truncated"/);
+    expect(tool.description).not.toMatch(/marks the older unread messages it left out read too/);
+    // mark_read makes it a write — a non-destructive, idempotent one.
+    expect(tool.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true });
     expect(tool.description).toMatch(/call recording/i);
     expect(tool.description).toMatch(/hidden/i);
     expect(tool.description).toMatch(/skipped_unreachable/);
     expect(tool.description).not.toMatch(/uncertain/);
     expect(Object.keys((tool.inputSchema as { properties?: object }).properties ?? {}).sort()).toEqual([
+      'confirmToken',
       'cursors',
       'format',
       'include_hidden',
       'include_muted',
       'kinds',
+      'mark_read',
       'max_conversations',
       'older_unread',
       'per_conversation_limit',
@@ -877,5 +884,186 @@ describe('teams_get_unread cursors', () => {
     expect(tool.description).toMatch(/next_cursor/);
     expect(tool.description).toMatch(/fetched_at/);
     expect(tool.description).toMatch(/no cache|not cached|never cached/i);
+  });
+});
+
+describe('teams_get_unread — mark_read', () => {
+  const ENV_KEYS = ['MCP_CONFIRM_MODE', 'MCP_CONFIRM_TTL_SECONDS', 'MCP_CONFIRM_SECRET'] as const;
+  let savedEnv: Record<string, string | undefined>;
+  beforeEach(() => {
+    savedEnv = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
+    for (const k of ENV_KEYS) delete process.env[k];
+  });
+  afterEach(() => {
+    for (const k of ENV_KEYS) {
+      if (savedEnv[k] === undefined) delete process.env[k];
+      else process.env[k] = savedEnv[k];
+    }
+  });
+
+  /** Phase 1, then (when phase 1 asked for one) phase 2 with its token. */
+  async function callConfirmed(chatsvc: ChatServiceClient, args: Record<string, unknown>) {
+    const harness = await createTestHarness((server) => registerUnreadTools(server, { chatsvc }));
+    try {
+      const first = await harness.callTool('teams_get_unread', args);
+      const one = first.isError ? undefined : (parseToolResult(first) as Record<string, unknown>);
+      if (typeof one?.confirmToken !== 'string') return { preview: undefined, data: one };
+      const second = await harness.callTool('teams_get_unread', { ...args, confirmToken: one.confirmToken });
+      return { preview: one, data: second.isError ? undefined : (parseToolResult(second) as Record<string, unknown>) };
+    } finally {
+      await harness.close();
+    }
+  }
+
+  type Marked = Entry & { marked_read?: boolean; mark_read_warning?: string };
+  const marked = (data: Record<string, unknown> | undefined, id: string) =>
+    (data?.conversations as Marked[]).find((e) => e.conversation.id === id)!;
+
+  it('never writes a read marker by default', async () => {
+    const setConsumptionHorizon = vi.fn(async () => undefined);
+    const { data } = await call(chatsvcWith({ setConsumptionHorizon }));
+    expect(setConsumptionHorizon).not.toHaveBeenCalled();
+    expect(entry(data, GROUP)).not.toHaveProperty('marked_read');
+  });
+
+  it('previews every move first, then marks each returned conversation up to its newest unread message', async () => {
+    const setConsumptionHorizon = vi.fn(async () => undefined);
+    const { preview, data } = await callConfirmed(chatsvcWith({ setConsumptionHorizon }), { mark_read: true });
+
+    expect(preview).not.toHaveProperty('conversations');
+    const shown = JSON.stringify((preview?.preview as Record<string, unknown>).conversations);
+    for (const id of [GROUP, DM, CHANNEL, MEETING]) expect(shown).toContain(id);
+
+    expect(setConsumptionHorizon.mock.calls.sort()).toEqual(
+      [
+        [GROUP, String(T0 + 4 * MIN)],
+        [DM, String(T0 + 6 * MIN)],
+        [CHANNEL, String(T0 + 5 * MIN)],
+        [MEETING, String(T0 + 3 * MIN)],
+      ].sort(),
+    );
+    for (const id of [GROUP, DM, CHANNEL, MEETING]) expect(marked(data, id).marked_read).toBe(true);
+  });
+
+  it('marks only the conversations returned with their messages, not more_unread_conversations', async () => {
+    const setConsumptionHorizon = vi.fn(async () => undefined);
+    const { data } = await callConfirmed(chatsvcWith({ setConsumptionHorizon }), { mark_read: true, max_conversations: 1 });
+    expect(ids(data)).toEqual([DM]);
+    expect(setConsumptionHorizon).toHaveBeenCalledExactlyOnceWith(DM, String(T0 + 6 * MIN));
+  });
+
+  it('asks nothing and writes nothing when nothing is unread', async () => {
+    const setConsumptionHorizon = vi.fn(async () => undefined);
+    const { preview, data } = await callConfirmed(chatsvcWith({ setConsumptionHorizon }), {
+      mark_read: true,
+      query: 'All caught up',
+    });
+    expect(preview).toBeUndefined();
+    expect(data?.conversations).toEqual([]);
+    expect(setConsumptionHorizon).not.toHaveBeenCalled();
+  });
+
+  it('keeps marking the others when one move fails, reporting it per conversation', async () => {
+    const setConsumptionHorizon = vi.fn(async (id: string) => {
+      if (id === DM) throw new McpToolError('Teams chat service returned HTTP 403.', { status: 403 });
+    });
+    const { data } = await callConfirmed(chatsvcWith({ setConsumptionHorizon }), { mark_read: true });
+    expect(marked(data, DM).marked_read).toBe(false);
+    expect(marked(data, DM).mark_read_warning).toMatch(/403/);
+    expect(marked(data, GROUP).marked_read).toBe(true);
+    expect((data?.conversations as Entry[]).length).toBe(4);
+  });
+
+  it('with cursors, marks only conversations with something new past the cursor, and next_cursors still advance', async () => {
+    const setConsumptionHorizon = vi.fn(async (_id: string, _target: string) => undefined);
+    const { data } = await callConfirmed(chatsvcWith({ setConsumptionHorizon }), {
+      mark_read: true,
+      cursors: { [GROUP]: String(T0 + 4 * MIN) },
+    });
+
+    expect(setConsumptionHorizon.mock.calls.map((c) => c[0])).not.toContain(GROUP);
+    expect(marked(data, DM).marked_read).toBe(true);
+    expect((data?.next_cursors as Record<string, string>)[GROUP]).toBe(String(T0 + 4 * MIN));
+  });
+
+  it('refuses mark_read with format summary, reading and marking nothing', async () => {
+    const setConsumptionHorizon = vi.fn(async () => undefined);
+    const chatsvc = chatsvcWith({ setConsumptionHorizon });
+    const { result } = await call(chatsvc, { mark_read: true, format: 'summary' });
+
+    expect(result.isError).toBe(true);
+    expect(errorText(result)).toMatch(/mark_read/);
+    expect(errorText(result)).toMatch(/summary/);
+    expect(chatsvc.getMessages).not.toHaveBeenCalled();
+    expect(setConsumptionHorizon).not.toHaveBeenCalled();
+  });
+
+  it('with format compact, marks each returned conversation up to its newest unread message', async () => {
+    const setConsumptionHorizon = vi.fn(async () => undefined);
+    const { data } = await callConfirmed(chatsvcWith({ setConsumptionHorizon }), { mark_read: true, format: 'compact' });
+
+    expect(entry(data, GROUP).messages!.map((m) => m.text)).toContain('group unread 2');
+    expect(marked(data, GROUP).marked_read).toBe(true);
+    expect(setConsumptionHorizon).toHaveBeenCalledWith(GROUP, String(T0 + 4 * MIN));
+  });
+
+  it('leaves the marker alone for a conversation per_conversation_limit cut, marking the rest', async () => {
+    const setConsumptionHorizon = vi.fn(async (_id: string, _target: string) => undefined);
+    // GROUP and CHANNEL hold more unread messages than one; DM and MEETING hold exactly one.
+    const { preview, data } = await callConfirmed(chatsvcWith({ setConsumptionHorizon }), {
+      mark_read: true,
+      per_conversation_limit: 1,
+    });
+
+    const shown = JSON.stringify((preview?.preview as Record<string, unknown>).conversations);
+    for (const id of [GROUP, CHANNEL]) expect(shown).not.toContain(id);
+    expect(setConsumptionHorizon.mock.calls.map((c) => c[0]).sort()).toEqual([DM, MEETING].sort());
+    for (const id of [GROUP, CHANNEL]) {
+      expect(entry(data, id).truncated).toBeDefined();
+      expect(marked(data, id).marked_read).toEqual({
+        skipped: 'truncated',
+        hint: expect.stringMatching(/per_conversation_limit/),
+      });
+    }
+    for (const id of [DM, MEETING]) expect(marked(data, id).marked_read).toBe(true);
+  });
+
+  it('asks nothing and writes nothing when every returned conversation was truncated', async () => {
+    const setConsumptionHorizon = vi.fn(async () => undefined);
+    const { preview, data } = await callConfirmed(chatsvcWith({ setConsumptionHorizon }), {
+      mark_read: true,
+      per_conversation_limit: 1,
+      kinds: ['channel'],
+    });
+    expect(preview).toBeUndefined();
+    expect(setConsumptionHorizon).not.toHaveBeenCalled();
+    expect(marked(data, CHANNEL).marked_read).toMatchObject({ skipped: 'truncated' });
+  });
+
+  it('with cursors and nothing new past them, asks nothing and writes nothing', async () => {
+    const setConsumptionHorizon = vi.fn(async () => undefined);
+    const { preview, data } = await callConfirmed(chatsvcWith({ setConsumptionHorizon }), {
+      mark_read: true,
+      kinds: ['chat'],
+      query: 'Falcon',
+      cursors: { [GROUP]: String(T0 + 4 * MIN) },
+    });
+    expect(preview).toBeUndefined();
+    expect(data?.conversations).toEqual([]);
+    expect(setConsumptionHorizon).not.toHaveBeenCalled();
+  });
+
+  it('never lets an outside_window thread root drive the mark target', async () => {
+    const getMessage = vi.fn(async (_c: string, id: string) =>
+      id === String(T0 - 10 * MIN) ? rawMsg(T0 - 10 * MIN, { conv: CHANNEL, text: 'old root' }) : undefined,
+    );
+    const setConsumptionHorizon = vi.fn(async () => undefined);
+    const { data } = await callConfirmed(chatsvcWith({ getMessage, setConsumptionHorizon }), {
+      mark_read: true,
+      kinds: ['channel'],
+    });
+
+    expect(entry(data, CHANNEL).threads![0].root).toMatchObject({ outside_window: true });
+    expect(setConsumptionHorizon).toHaveBeenCalledExactlyOnceWith(CHANNEL, String(T0 + 5 * MIN));
   });
 });

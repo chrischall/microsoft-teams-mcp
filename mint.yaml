@@ -67,6 +67,11 @@ env:
     help: >-
       Path to the cached token file. Defaults to
       ~/.microsoft-teams-mcp/token.json.
+  - name: TEAMS_TIME_ZONE
+    required: false
+    help: >-
+      Default IANA time zone (e.g. America/New_York) for the tz argument of
+      the read tools; messages then carry time_local. Unset means UTC only.
 state:
   dataDir: true
   reason: >-

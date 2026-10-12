@@ -87,8 +87,15 @@
           "isSecret": false
         },
         {
+          "name": "TEAMS_TIME_ZONE",
+          "description": "Default IANA time zone (e.g. America/New_York) for time_local on read results. Unset means UTC only.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
           "name": "MCP_CONFIRM_MODE",
-          "description": "What teams_send_message and teams_react do on a client that cannot show a confirmation prompt (claude.ai, Claude Desktop): \"ask-user\" (default: the first call returns a preview and a confirmToken, and the model must get your approval in chat before using it), \"auto\" (the model may use the token after reviewing the preview itself) or \"refuse\". An unrecognised value is treated as refuse.",
+          "description": "What the writes (teams_send_message, teams_react, teams_mark_read and the read tools' mark_read) do on a client that cannot show a confirmation prompt (claude.ai, Claude Desktop): \"ask-user\" (default: the first call returns a preview and a confirmToken, and the model must get your approval in chat before using it), \"auto\" (the model may use the token after reviewing the preview itself) or \"refuse\". An unrecognised value is treated as refuse.",
           "isRequired": false,
           "format": "string",
           "isSecret": false
