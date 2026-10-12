@@ -480,6 +480,19 @@ instead.
   extension's approved scope is behind the server's declared one — revoke
   and re-pair `microsoft-teams-mcp` in the ContextMint Bridge popup.
 
+## Upgrading from 0.4
+
+0.5 only adds arguments and fields, except for these changes in behaviour:
+
+- **Ambiguous names in `teams_read_conversation`:** a name that matches
+  several conversations used to fail with an error listing the candidates. It
+  now succeeds with `{ ambiguous: true, query, match_count, candidates, hint }`
+  and no messages. Check for `ambiguous` before reading `messages` or
+  `threads`. Send, react and attachment still fail on an ambiguous name.
+- **Muted chats in `teams_get_unread`:** chats you muted in Teams are left out
+  and counted in `muted_skipped`. Pass `include_muted: true` for the old
+  behaviour.
+
 ## Upgrading from 0.3
 
 0.4 moves every tool onto the Teams chat-service API, and several outputs
