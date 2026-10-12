@@ -524,6 +524,17 @@ instead.
 
 ## Things worth knowing
 
+- **Corporate networks.** The server talks to several hosts:
+  `teams.cloud.microsoft` (chats), the regional `*.asm.skype.com` image store
+  (inline images), `*.sharepoint.com` (shared files) and
+  `substrate.office.com` (search). If one is unreachable while the others
+  work, the error names that host and the network cause (`ENOTFOUND`,
+  `ECONNREFUSED`, a certificate code, …) with a hint, instead of a bare
+  "fetch failed". Two settings fix most cases, because Node reads neither the
+  system keychain nor the system proxy:
+  - TLS inspection: `NODE_EXTRA_CA_CERTS=/path/to/corporate-root-ca.pem`.
+  - A required proxy: `HTTPS_PROXY=<proxy URL>` together with
+    `NODE_USE_ENV_PROXY=1` (Node 22.21+ / 24.5+).
 - <a id="cursors-only-what-is-new"></a>**Cursors: only what is new.** A
   message id is its arrival time in epoch milliseconds, so "newer than the
   last message I saw" is a numeric comparison and a cursor is just that

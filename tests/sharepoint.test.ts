@@ -122,6 +122,21 @@ describe('SharePointClient.downloadFile', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
+  it('names the SharePoint host and the cause when the driveItem request never got a response', async () => {
+    const cause = Object.assign(new Error('unable to get local issuer certificate'), {
+      code: 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+    });
+    const fetchImpl = vi.fn(async () => {
+      throw new TypeError('fetch failed', { cause });
+    });
+    const err = await client(fetchImpl).downloadFile(OBJECT_URL, 25 * 1024 * 1024).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(McpToolError);
+    expect((err as McpToolError).kind).toBe('transport');
+    expect((err as McpToolError).message).toContain(new URL(OBJECT_URL).hostname);
+    expect((err as McpToolError).message).toContain('UNABLE_TO_GET_ISSUER_CERT_LOCALLY');
+    expect((err as McpToolError).hint).toContain('NODE_EXTRA_CA_CERTS');
+  });
+
   it('maps a 404 on the driveItem call to a not-found McpToolError', async () => {
     const fetchImpl = twoStep(jsonResponse({}, 404), bytesResponse([1]));
     await expect(client(fetchImpl).downloadFile(OBJECT_URL, 25 * 1024 * 1024)).rejects.toMatchObject({ status: 404 });

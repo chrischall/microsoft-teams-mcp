@@ -171,6 +171,18 @@ describe('other failures', () => {
     await expect(p).rejects.toMatchObject({ status });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
+
+  it('turns a read that never got a response into a transport error naming the host and cause', async () => {
+    const cause = Object.assign(new Error('connect ECONNREFUSED 52.0.0.1:443'), { code: 'ECONNREFUSED' });
+    const fetchImpl: FetchMock = vi.fn(async () => {
+      throw new TypeError('fetch failed', { cause });
+    });
+    const err = await client(fetchImpl).listConversations().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(McpToolError);
+    expect(err).not.toBeInstanceOf(WriteOutcomeUnknownError);
+    expect((err as McpToolError).message).toMatch(/teams\.cloud\.microsoft.*ECONNREFUSED/);
+    expect((err as McpToolError).kind).toBe('transport');
+  });
 });
 
 describe('listConversations', () => {
@@ -396,6 +408,21 @@ describe('fetchImage', () => {
       async () => new Response(big, { status: 200, headers: { 'content-type': 'image/png' } }),
     );
     await expect(client(fetchImpl).fetchImage(IMG)).rejects.toBeInstanceOf(McpToolError);
+  });
+
+  it('names the image host and the network cause when the request never got a response', async () => {
+    const cause = Object.assign(new Error('getaddrinfo ENOTFOUND in-api.asm.skype.com'), { code: 'ENOTFOUND' });
+    const fetchImpl: FetchMock = vi.fn(async () => {
+      throw new TypeError('fetch failed', { cause });
+    });
+    const err = await client(fetchImpl)
+      .fetchImage('https://in-api.asm.skype.com/v1/objects/0-sin-d3-abc/views/imgo')
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(McpToolError);
+    expect((err as McpToolError).message).toMatch(/in-api\.asm\.skype\.com.*ENOTFOUND/);
+    expect((err as McpToolError).message).not.toContain('/v1/objects');
+    expect((err as McpToolError).kind).toBe('transport');
+    expect((err as McpToolError).hint).toMatch(/DNS|VPN/);
   });
 
   it('re-captures once on a 401 for an image too', async () => {

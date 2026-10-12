@@ -23,6 +23,7 @@
  * `fetch` — the bridge is only ever touched to capture the token.
  */
 import { decodeJwtExp, fetchBounded, McpToolError, parseBoolEnv } from '@chrischall/mcp-utils';
+import { describeTransportFailure } from './network-error.js';
 import { TokenManager, type BearerTokens } from '@chrischall/mcp-utils/session';
 import { createSharePointTokenCache, type SharePointTokenCache } from './sharepoint-token-cache.js';
 
@@ -57,6 +58,15 @@ const RECAPTURE_SENTINEL = 'fetchproxy:recapture';
 
 /** Per-request deadline, covering the body read. */
 const REQUEST_TIMEOUT_MS = 60_000;
+
+/** Run one fetch, turning "never got a response" into an error naming the host and cause. */
+async function reachable<T>(url: string, run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (e) {
+    throw describeTransportFailure(e, url, 'SharePoint') ?? e;
+  }
+}
 
 /** Copied faithfully from `chatsvc.ts`: a captured token as `TokenManager` input. */
 function toBearerTokens(accessToken: string): BearerTokens {
@@ -230,18 +240,20 @@ export class SharePointClient {
   async #getDriveItem(captureHost: string, url: string): Promise<DriveItemMeta> {
     let body = '';
     const res = await this.#managerFor(captureHost).withAuth(async (token) => {
-      const r = await fetchBounded(
-        url,
-        {
-          method: 'GET',
-          headers: {
-            authorization: `Bearer ${token}`,
-            accept: 'application/json',
-            behavioroverride: 'redirectAs404',
+      const r = await reachable(url, () =>
+        fetchBounded(
+          url,
+          {
+            method: 'GET',
+            headers: {
+              authorization: `Bearer ${token}`,
+              accept: 'application/json',
+              behavioroverride: 'redirectAs404',
+            },
+            redirect: 'error',
           },
-          redirect: 'error',
-        },
-        { read: 'text', service: 'SharePoint', timeoutMs: REQUEST_TIMEOUT_MS, fetchImpl: this.#fetchImpl },
+          { read: 'text', service: 'SharePoint', timeoutMs: REQUEST_TIMEOUT_MS, fetchImpl: this.#fetchImpl },
+        ),
       );
       body = r.body;
       return r.res;
@@ -288,10 +300,12 @@ export class SharePointClient {
       });
     }
 
-    const r = await fetchBounded(
-      target.toString(),
-      { method: 'GET', headers: { accept: '*/*' }, redirect: 'follow' },
-      { read: 'bytes', maxBytes, service: 'SharePoint', timeoutMs: REQUEST_TIMEOUT_MS, fetchImpl: this.#fetchImpl },
+    const r = await reachable(target.toString(), () =>
+      fetchBounded(
+        target.toString(),
+        { method: 'GET', headers: { accept: '*/*' }, redirect: 'follow' },
+        { read: 'bytes', maxBytes, service: 'SharePoint', timeoutMs: REQUEST_TIMEOUT_MS, fetchImpl: this.#fetchImpl },
+      ),
     );
     this.#checkStatus(r.status);
     const mimeType = (r.headers.get('content-type') ?? 'application/octet-stream').split(';')[0].trim();
