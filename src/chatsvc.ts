@@ -23,6 +23,7 @@ import {
   decodeJwtClaim,
   decodeJwtExp,
   fetchBounded,
+  errorKindOf,
   McpToolError,
   parseBoolEnv,
   readEnvVar,
@@ -98,10 +99,24 @@ const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
  */
 const IMAGE_HOST_SUFFIX = '.asm.skype.com';
 
+/**
+ * The Teams gateway in front of the same image store. Verified live
+ * 2026-10-12: `GET https://us-prod.asyncgw.teams.microsoft.com/v1/objects/<id>/views/imgo`
+ * with the chat-service bearer returns the identical bytes for objects of
+ * either region (`0-sin-…` and `0-eus-…`). Some networks reset every
+ * connection to `*.asm.skype.com` while allowing teams.microsoft.com, so an
+ * image the store cannot be REACHED at is retried here — never one the store
+ * answered. Only ever reached by rewriting a vetted `*.asm.skype.com` URL,
+ * never from a URL in message content.
+ */
+const IMAGE_GATEWAY_HOST = 'us-prod.asyncgw.teams.microsoft.com';
+
 /** What a transport failure calls the far side: the image store, or the chat service. */
 function serviceFor(url: string): string {
   try {
-    return new URL(url).hostname.endsWith(IMAGE_HOST_SUFFIX) ? "Teams' image store" : 'the Teams chat service';
+    const host = new URL(url).hostname;
+    if (host.endsWith(IMAGE_HOST_SUFFIX)) return "Teams' image store";
+    return host === IMAGE_GATEWAY_HOST ? 'the Teams image gateway' : 'the Teams chat service';
   } catch {
     return 'the Teams chat service';
   }
@@ -551,6 +566,24 @@ export class ChatServiceClient {
         hint: `Only https images on *${IMAGE_HOST_SUFFIX} (Teams' own image store) are fetched.`,
       });
     }
+    try {
+      return await this.#getImage(target);
+    } catch (e) {
+      if (errorKindOf(e) !== 'transport') throw e;
+      const viaGateway = new URL(target.pathname + target.search, `https://${IMAGE_GATEWAY_HOST}`);
+      try {
+        return await this.#getImage(viaGateway);
+      } catch (e2) {
+        if (errorKindOf(e2) !== 'transport') throw e2;
+        throw new McpToolError(
+          `${(e as McpToolError).message} The Teams gateway was tried too: ${(e2 as McpToolError).message}`,
+          { kind: 'transport', hint: (e as McpToolError).hint, cause: e },
+        );
+      }
+    }
+  }
+
+  async #getImage(target: URL): Promise<{ mimeType: string; data: Buffer }> {
     const { status, headers, body } = await this.#send(target.toString(), 'bytes', MAX_IMAGE_BYTES);
     this.#checkStatus(status);
     const mimeType = (headers.get('content-type') ?? 'application/octet-stream').split(';')[0].trim();

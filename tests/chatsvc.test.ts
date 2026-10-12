@@ -425,6 +425,54 @@ describe('fetchImage', () => {
     expect((err as McpToolError).hint).toMatch(/DNS|VPN/);
   });
 
+  describe('gateway fallback', () => {
+    const GATEWAY = 'https://us-prod.asyncgw.teams.microsoft.com/v1/objects/0-sin-d3-abc/views/imgo';
+    const SIN = 'https://in-api.asm.skype.com/v1/objects/0-sin-d3-abc/views/imgo';
+    const reset = () =>
+      new TypeError('fetch failed', {
+        cause: Object.assign(new Error('Client network socket disconnected before secure TLS connection was established'), {
+          code: 'ECONNRESET',
+        }),
+      });
+
+    it('retries the same object through the Teams gateway when the image store cannot be reached', async () => {
+      const fetchImpl: FetchMock = vi.fn(async (input) => {
+        if (String(input).includes('.asm.skype.com')) throw reset();
+        return new Response(new Uint8Array([0xff, 0xd8]), { headers: { 'content-type': 'image/jpeg' } });
+      });
+      const img = await client(fetchImpl).fetchImage(SIN);
+      expect(img.mimeType).toBe('image/jpeg');
+      expect([...img.data]).toEqual([0xff, 0xd8]);
+      expect(urlOf(fetchImpl, 0)).toBe(SIN);
+      expect(urlOf(fetchImpl, 1)).toBe(GATEWAY);
+      expect(headersOf(fetchImpl, 1).get('authorization')).toMatch(/^Bearer /);
+    });
+
+    it('does not fall back on an answer from the image store, only on no answer', async () => {
+      const fetchImpl: FetchMock = vi.fn(async () => new Response('gone', { status: 404 }));
+      await expect(client(fetchImpl).fetchImage(SIN)).rejects.toMatchObject({ status: 404 });
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    });
+
+    it('names both hosts when the gateway cannot be reached either', async () => {
+      const fetchImpl: FetchMock = vi.fn(async () => {
+        throw reset();
+      });
+      const err = await client(fetchImpl).fetchImage(SIN).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(McpToolError);
+      expect((err as McpToolError).kind).toBe('transport');
+      expect((err as McpToolError).message).toContain('in-api.asm.skype.com');
+      expect((err as McpToolError).message).toContain('us-prod.asyncgw.teams.microsoft.com');
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    });
+
+    it('still refuses a gateway url handed in from message content', async () => {
+      const fetchImpl: FetchMock = vi.fn(async () => new Response('x'));
+      await expect(client(fetchImpl).fetchImage(GATEWAY)).rejects.toBeInstanceOf(McpToolError);
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
+  });
+
   it('re-captures once on a 401 for an image too', async () => {
     const capture = vi.fn(async () => jwt());
     let n = 0;

@@ -88,10 +88,12 @@ state:
 egress:
   # teams.cloud.microsoft serves the chat-service API (src/chatsvc.ts). Inline
   # images download from Teams' image store on a regional *.asm.skype.com host
-  # (us-api.asm.skype.com and the like) — the client sends its token nowhere
-  # else. Message search goes to Microsoft Substrate (src/substrate.ts) with
-  # its own token.
+  # (us-api.asm.skype.com and the like), retried through the Teams gateway
+  # (us-prod.asyncgw.teams.microsoft.com) when the store cannot be reached —
+  # the client sends its token nowhere else. Message search goes to Microsoft
+  # Substrate (src/substrate.ts) with its own token.
   allow:
     - teams.cloud.microsoft
     - '*.asm.skype.com'
+    - us-prod.asyncgw.teams.microsoft.com
     - substrate.office.com
