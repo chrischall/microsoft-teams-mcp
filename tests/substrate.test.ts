@@ -180,6 +180,19 @@ describe('SubstrateClient.searchMessages', () => {
     expect(JSON.parse(String(init?.body))).toMatchObject({ entityRequests: [{ query: { queryString: 'deploy' } }] });
   });
 
+  it('names substrate.office.com and the cause when the request never got a response', async () => {
+    const cause = Object.assign(new Error('getaddrinfo EAI_AGAIN substrate.office.com'), { code: 'EAI_AGAIN' });
+    const fetchImpl: FetchMock = vi.fn(async () => {
+      throw new TypeError('fetch failed', { cause });
+    });
+    const err = await client(fetchImpl)
+      .searchMessages({ query: 'deploy', from: 0, size: 25 })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(McpToolError);
+    expect((err as McpToolError).kind).toBe('transport');
+    expect((err as McpToolError).message).toMatch(/substrate\.office\.com.*EAI_AGAIN/);
+  });
+
   it('re-captures once and replays on a 401', async () => {
     const capture = vi.fn(async () => jwt());
     const fetchImpl: FetchMock = vi.fn();

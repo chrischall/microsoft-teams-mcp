@@ -32,6 +32,7 @@ import {
 import { TokenManager, type BearerTokens } from '@chrischall/mcp-utils/session';
 import { createTokenCache, reportCacheWriteFailure } from './token-cache.js';
 import { SELF_CHAT } from './model.js';
+import { describeTransportFailure } from './network-error.js';
 
 /**
  * Load the bridge bootstrap lazily.
@@ -96,6 +97,15 @@ const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
  * host varies by region). The bearer is sent ONLY to hosts under this suffix.
  */
 const IMAGE_HOST_SUFFIX = '.asm.skype.com';
+
+/** What a transport failure calls the far side: the image store, or the chat service. */
+function serviceFor(url: string): string {
+  try {
+    return new URL(url).hostname.endsWith(IMAGE_HOST_SUFFIX) ? "Teams' image store" : 'the Teams chat service';
+  } catch {
+    return 'the Teams chat service';
+  }
+}
 
 /**
  * A write that failed after it may have reached Teams. A timeout or a
@@ -642,7 +652,8 @@ export class ChatServiceClient {
       try {
         r = await fetchBounded(url, init, opts);
       } catch (e) {
-        throw write ? outcomeUnknown(method, e, write.hint) : e;
+        if (write) throw outcomeUnknown(method, e, write.hint);
+        throw describeTransportFailure(e, url, serviceFor(url)) ?? e;
       }
       body = r.body as string | Uint8Array;
       return r.res;

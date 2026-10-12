@@ -51,6 +51,7 @@
  * (`substrate-auth.ts`); every request is a plain Node `fetch`.
  */
 import { decodeJwtExp, fetchBounded, McpToolError, parseBoolEnv } from '@chrischall/mcp-utils';
+import { describeTransportFailure } from './network-error.js';
 import { TokenManager, type BearerTokens } from '@chrischall/mcp-utils/session';
 import { createSubstrateTokenCache } from './substrate-token-cache.js';
 
@@ -328,26 +329,31 @@ export class SubstrateClient implements SubstrateSearch {
 
     let text = '';
     const res = await this.#manager.withAuth(async (token) => {
-      const r = await fetchBounded(
-        SUBSTRATE_QUERY_URL,
-        {
-          method: 'POST',
-          headers: {
-            authorization: `Bearer ${token}`,
-            'content-type': 'application/json',
-            accept: 'application/json',
+      let r: Awaited<ReturnType<typeof fetchBounded<'text'>>>;
+      try {
+        r = await fetchBounded(
+          SUBSTRATE_QUERY_URL,
+          {
+            method: 'POST',
+            headers: {
+              authorization: `Bearer ${token}`,
+              'content-type': 'application/json',
+              accept: 'application/json',
+            },
+            body: JSON.stringify(buildQueryBody(req)),
+            redirect: 'error',
           },
-          body: JSON.stringify(buildQueryBody(req)),
-          redirect: 'error',
-        },
-        {
-          read: 'text',
-          maxBytes: MAX_RESPONSE_BYTES,
-          service: 'Substrate',
-          timeoutMs: REQUEST_TIMEOUT_MS,
-          fetchImpl: this.#fetchImpl,
-        },
-      );
+          {
+            read: 'text',
+            maxBytes: MAX_RESPONSE_BYTES,
+            service: 'Substrate',
+            timeoutMs: REQUEST_TIMEOUT_MS,
+            fetchImpl: this.#fetchImpl,
+          },
+        );
+      } catch (e) {
+        throw describeTransportFailure(e, SUBSTRATE_QUERY_URL, 'Substrate search') ?? e;
+      }
       text = r.body;
       return r.res;
     });

@@ -218,6 +218,11 @@ function degradeHint(err: unknown, host: string): string {
   if (errorKindOf(err) === 'no_credential') {
     return 'SharePoint file download is disabled here (no token source). Unset TEAMS_DISABLE_FETCHPROXY, then retry.';
   }
+  // A network failure is about this machine's route to the host, not the token:
+  // say which host and why, never "open the file once in Teams".
+  if (errorKindOf(err) === 'transport' && err instanceof McpToolError) {
+    return err.hint !== undefined ? `${err.message} ${err.hint}` : err.message;
+  }
   if (err instanceof McpToolError && err.hint !== undefined) return err.hint;
   return (
     `Couldn't mint a SharePoint token for ${host} — open the shared file once in a signed-in Teams ` +

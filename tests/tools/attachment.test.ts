@@ -164,6 +164,44 @@ describe('teams_get_attachment', () => {
     expect(data.hint).toMatch(/cannot open/i);
   });
 
+  it('says which host could not be reached, and why, when a file degrades on a network failure', async () => {
+    const downloadFile = vi.fn().mockRejectedValue(
+      new McpToolError('Could not reach SharePoint at contoso.sharepoint.com (ECONNREFUSED: connect ECONNREFUSED).', {
+        kind: 'transport',
+        hint: 'The connection to contoso.sharepoint.com was refused — set HTTPS_PROXY and NODE_USE_ENV_PROXY=1.',
+      }),
+    );
+    const result = await call(
+      chatsvcWith(),
+      { conversation: GROUP, message_id: String(TARGET), ref: FILE_NAME },
+      fakeSharepoint(downloadFile),
+    );
+
+    expect(result.isError).toBeFalsy();
+    const data = parseToolResult(result) as Record<string, unknown>;
+    expect(data).toMatchObject({ name: FILE_NAME, content_available: false });
+    expect(data.hint).toContain('contoso.sharepoint.com');
+    expect(data.hint).toContain('ECONNREFUSED');
+    expect(data.hint).toContain('NODE_USE_ENV_PROXY');
+    expect(data.hint).not.toMatch(/open the (shared )?file once/i);
+  });
+
+  it('names the image host and cause when an inline image cannot be reached', async () => {
+    const chatsvc = chatsvcWith();
+    chatsvc.fetchImage = vi.fn().mockRejectedValue(
+      new McpToolError("Could not reach Teams' image store at in-api.asm.skype.com (ENOTFOUND).", {
+        kind: 'transport',
+        hint: 'This machine could not resolve in-api.asm.skype.com. Check DNS and VPN.',
+      }),
+    );
+    const result = await call(chatsvc, { conversation: GROUP, message_id: String(TARGET), ref: IMAGE_REF });
+    expect(result.isError).toBe(true);
+    const text = JSON.stringify(result.content);
+    expect(text).toContain('in-api.asm.skype.com');
+    expect(text).toContain('ENOTFOUND');
+    expect(text).not.toMatch(/: fetch failed/);
+  });
+
   it('degrades a token-capture failure to metadata and its link, not a thrown error', async () => {
     const downloadFile = vi.fn().mockRejectedValue(new Error('could not capture a SharePoint token (timed out).'));
     const result = await call(
