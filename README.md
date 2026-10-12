@@ -530,7 +530,10 @@ instead.
   `substrate.office.com` (search). If one is unreachable while the others
   work, the error names that host and the network cause (`ENOTFOUND`,
   `ECONNREFUSED`, a certificate code, …) with a hint, instead of a bare
-  "fetch failed". Two settings fix most cases, because Node reads neither the
+  "fetch failed". An inline image the image store cannot be reached for is
+  retried through the Teams gateway (`us-prod.asyncgw.teams.microsoft.com`),
+  which serves the same bytes and is often allowed where `*.asm.skype.com` is
+  not. Two settings fix most other cases, because Node reads neither the
   system keychain nor the system proxy:
   - TLS inspection: `NODE_EXTRA_CA_CERTS=/path/to/corporate-root-ca.pem`.
   - A required proxy: `HTTPS_PROXY=<proxy URL>` together with
