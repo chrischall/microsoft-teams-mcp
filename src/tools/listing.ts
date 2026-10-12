@@ -7,12 +7,24 @@
  */
 import { z } from 'zod';
 import type { ChatServiceClient } from '../chatsvc.js';
-import { confirmedSummary, confirmUnreadCandidates, olderUnreadReport, sinceCutoff, sinceDaysArg } from './confirm.js';
+import {
+  confirmedSummary,
+  confirmUnreadCandidates,
+  olderUnreadArg,
+  olderUnreadConversations,
+  olderUnreadReport,
+  sinceCutoff,
+  sinceDaysArg,
+  type OlderUnreadRow,
+} from './confirm.js';
 import { wrapApiError } from './errors.js';
+import { searchRecentMessages, type MessageHit } from './search.js';
 import { enrichTitles } from './titles.js';
 import {
   conversationSummary,
   matchConversations,
+  SELF_CHAT,
+  SELF_CHAT_ALIASES,
   type ConversationKind,
   type ConversationSummary,
 } from '../model.js';
@@ -24,11 +36,37 @@ export interface ListFilter {
   include_hidden?: boolean;
   /** With `unread_only`, the window (days) the newest unread message must fall in (default 14). */
   since_days?: number;
+  /** With `unread_only`: also list what `since_days` left out (`older_unread_conversations`). */
+  older_unread?: boolean;
   query?: string;
+  /**
+   * With `query`: also read each chat no name or preview matched and match its
+   * recent messages (`search.ts`).
+   */
+  searchMessages?: boolean;
+  /** Epoch ms: keep conversations whose last activity is at or after it; one with none is dropped. */
+  activeSince?: number;
+  /** Epoch ms: keep conversations whose last activity is at or before it; one with none is dropped. */
+  activeUntil?: number;
+}
+
+/**
+ * Whether a conversation's last activity falls in `[since, until]` (either
+ * end open when undefined). With either end given, a conversation with no
+ * readable last activity is out: nothing places it in the window.
+ */
+export function activeWithin(s: Pick<ConversationSummary, 'lastActivity'>, since?: number, until?: number): boolean {
+  if (since === undefined && until === undefined) return true;
+  const t = s.lastActivity === undefined ? Number.NaN : Date.parse(s.lastActivity);
+  if (Number.isNaN(t)) return false;
+  return (since === undefined || t >= since) && (until === undefined || t <= until);
 }
 
 /** The list tools' `since_days`: it narrows `unread_only` only. */
 export const listSinceDaysArg = sinceDaysArg('With unread_only: ');
+
+/** The list tools' `older_unread`: it needs `unread_only`. */
+export const listOlderUnreadArg = olderUnreadArg('With unread_only: ');
 
 export const unreadOnlyArg = z
   .boolean()
@@ -76,6 +114,12 @@ export function queryArg(what: string) {
     .describe(`Case-insensitive substring of the ${what}, or an exact conversation id.`);
 }
 
+/** Description text on the match_reason a query adds to each row. */
+export const MATCH_REASON_DESCRIPTION =
+  'With a query, each row carries match_reason — the first of "id" (exact id), "title", "team", ' +
+  '"participant" (an untitled chat\'s participant) or "message" (what was said, not what the ' +
+  'conversation is called) that applies.';
+
 /** Description text on how an untitled group chat or 1:1 is titled. */
 export const GROUP_TITLE_DESCRIPTION =
   'A group chat with no topic is titled "Group chat: " and up to three of its recent senders other ' +
@@ -99,7 +143,12 @@ export const FAVORITES_DESCRIPTION =
   'Conversations the user marked a favorite or pinned in Teams carry favorite: true / pinned: true ' +
   'and, without unread_only, are listed first (favorites, then pinned); unread_only keeps its usual order.';
 
-export type ListedRow = ConversationSummary & { unread_count?: number; unread_count_exact?: false };
+export type ListedRow = ConversationSummary & {
+  unread_count?: number;
+  unread_count_exact?: false;
+  /** With `search_messages`: the newest recent message that matched the query. */
+  matched_message?: MessageHit;
+};
 
 export interface Listing {
   rows: ListedRow[];
@@ -108,8 +157,12 @@ export interface Listing {
   /** With `unread_only`: conversations left out because their unread activity is older than `since_days`. */
   older_unread_skipped?: number;
   older_unread_hint?: string;
+  /** With `unread_only` and `older_unread`: the conversations `older_unread_skipped` counts, titled. */
+  older_unread_conversations?: OlderUnreadRow[];
   /** With `unread_only`: candidates whose confirming read failed; they are left out of `rows`. */
   errors?: { conversation: { id: string; title: string }; error: string }[];
+  /** With `search_messages`: chats whose recent messages could not be read, so were matched by name only. */
+  messages_not_searched?: number;
 }
 
 /**
@@ -130,11 +183,26 @@ export type ListingWithRetitle = Listing & {
  */
 export async function listSummaries(chatsvc: ChatServiceClient, filter: ListFilter): Promise<ListingWithRetitle> {
   const [raw, me] = await Promise.all([chatsvc.listConversations(), chatsvc.meMri()]);
-  let rows = raw.map((c) => conversationSummary(c, me, raw)).filter((s) => filter.kinds.includes(s.kind));
+  let rows = raw
+    .map((c) => conversationSummary(c, me, raw))
+    .filter((s) => filter.kinds.includes(s.kind) && activeWithin(s, filter.activeSince, filter.activeUntil));
   if (filter.unread_only) rows = rows.filter((s) => isUnreadCandidateFor(s, filter.include_hidden));
-  // A query can name a group chat or 1:1 by a participant, so every untitled one is titled first.
-  if (filter.query !== undefined) rows = matchConversations(await enrichTitles(chatsvc, raw, me, rows), filter.query);
-  if (!filter.unread_only) return { rows, retitle: async (kept) => ({ rows: await enrichTitles(chatsvc, raw, me, kept) }) };
+  let searched: Pick<Listing, 'messages_not_searched'> = {};
+  if (filter.query !== undefined) {
+    // A query can name a group chat or 1:1 by a participant, so every untitled one is titled first.
+    const titled = await enrichTitles(chatsvc, raw, me, rows);
+    const matched: ListedRow[] = matchConversations(titled, filter.query, { messages: true });
+    if (filter.searchMessages && !namesOne(matched, filter.query)) {
+      const found = await searchUnmatched(chatsvc, me, titled, matched, filter.query);
+      rows = found.rows;
+      if (found.failed > 0) searched = { messages_not_searched: found.failed };
+    } else {
+      rows = matched;
+    }
+  }
+  if (!filter.unread_only) {
+    return { rows, ...searched, retitle: async (kept) => ({ rows: await enrichTitles(chatsvc, raw, me, kept) }) };
+  }
 
   const outcome = await confirmUnreadCandidates(chatsvc, raw, me, rows, {
     limit: CONFIRM_LIMIT,
@@ -158,6 +226,9 @@ export async function listSummaries(chatsvc: ChatServiceClient, filter: ListFilt
     return { rows, ...(errs ? { errors: errs } : {}) };
   };
   const errs = errors(failedSummaries);
+  // Listed only on request; titled now, since nothing later trims them.
+  const listedOlder = filter.older_unread ? outcome.older : [];
+  const olderTitled = await enrichTitles(chatsvc, raw, me, listedOlder.map((o) => o.summary));
   return {
     retitle,
     rows: outcome.confirmed.map(({ summary, read }) => ({
@@ -166,7 +237,39 @@ export async function listSummaries(chatsvc: ChatServiceClient, filter: ListFilt
       ...(read.truncated ? { unread_count_exact: false as const } : {}),
     })),
     skipped_unreachable: outcome.skippedUnreachable,
-    ...olderUnreadReport(outcome.olderSkipped, filter.since_days),
+    ...olderUnreadReport(outcome.older.length, filter.since_days),
+    ...olderUnreadConversations(listedOlder, olderTitled),
     ...(errs ? { errors: errs } : {}),
+    ...searched,
   };
+}
+
+/** Whether the match is an exact id or a self-chat alias — a named chat, not a search. */
+function namesOne(matched: readonly ListedRow[], query: string): boolean {
+  if (matched.length !== 1) return false;
+  const [m] = matched;
+  return m.match_reason === 'id' || (m.id === SELF_CHAT && SELF_CHAT_ALIASES.has(query.trim().toLowerCase()));
+}
+
+/**
+ * `matched` plus every other row in `all` whose recent messages contain the
+ * query (`match_reason: "message"`, with `matched_message`), in `all`'s order.
+ */
+async function searchUnmatched(
+  chatsvc: ChatServiceClient,
+  me: string,
+  all: readonly ConversationSummary[],
+  matched: readonly ListedRow[],
+  query: string,
+): Promise<{ rows: ListedRow[]; failed: number }> {
+  const byId = new Map(matched.map((m) => [m.id, m]));
+  const rest = all.filter((s) => !byId.has(s.id));
+  const { hits, failed } = await searchRecentMessages(chatsvc, me, rest.map((s) => s.id), query);
+  const rows = all.flatMap((s): ListedRow[] => {
+    const named = byId.get(s.id);
+    if (named !== undefined) return [named];
+    const hit = hits.get(s.id);
+    return hit !== undefined ? [{ ...s, match_reason: 'message', matched_message: hit }] : [];
+  });
+  return { rows, failed };
 }

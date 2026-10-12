@@ -134,8 +134,17 @@ Everything is optional — by default the token is captured from your browser.
   recent activity first: id, kind,
   title, unread hint, ISO-8601 last-activity time, last-message preview and
   sender. `unread_only` (exact — see below), `since_days` (with
-  `unread_only`; default 14), `query` (title, or a participant's name) and
-  `limit` (default 50, max 500). A group chat with no topic is titled after
+  `unread_only`; default 14), `older_unread` (with `unread_only`; lists what
+  `since_days` left out — see below), `query` (title, a participant's name, or the
+  last-message preview), `search_messages`,
+  `since` / `until` (ISO 8601 date-times: keep chats whose last activity is
+  at or after / at or before them; a chat with no last activity is left out
+  when either is given), `sort` and `limit` (default 50, max 500; keeps the
+  head of the sort order). `sort` is `activity` (default — favorites, pinned,
+  then most recent; with `unread_only`, most recent), `activity_only` (most
+  recent first, ignoring favorites and pinned) or `title` (alphabetical,
+  case-insensitive — this titles every untitled chat in the listing before
+  `limit` applies, so it reads more than the other orders). A group chat with no topic is titled after
   who is in it — `Group chat: <up to three recent senders other than you,
   most recent first>` plus `+N` for more, with every recent sender in
   `participants` — rather than after whoever posted last, so chats that
@@ -148,25 +157,49 @@ Everything is optional — by default the token is captured from your browser.
   last one, `(1:1 chat)` if they wrote nothing recently. `query` matches such
   chats by their participants, never by the made-up `Group chat:` or
   `(1:1 chat)` titles, so `group` or `chat` does not hit every untitled chat.
+  With a `query`, every row carries `match_reason` — the first of `id` (an
+  exact id), `title`, `team`, `participant` (an untitled chat's participant,
+  including a 1:1's other person) or `message` that applies. `message` means
+  the query was found in what was said, not in what the chat is called: by
+  default only the last-message preview the listing already carries is
+  checked (no extra reads). `search_messages: true` (needs `query`) also
+  reads the last 50 messages of every chat no name or preview matched, four
+  at a time, and returns the ones where a message a person wrote contains
+  the query, with the newest such message as `matched_message` (`id`,
+  `time`, `sender`, `text` cut to a window around the match). It is one read
+  per chat, so narrow a large listing with `since` / `until` or
+  `unread_only`; chats whose read failed are counted in
+  `messages_not_searched`.
   Conversations the chat service marks favorite or pinned carry
   `favorite: true` / `pinned: true` and lead the plain listing (favorites,
   then pinned); `unread_only` keeps most-recent-first order but carries the
   flags. Note the new Teams **Favorites section for chats** is kept by a
   different Teams service this MCP does not read, so a chat you put there is
   not flagged (verified live 2026-10-10) — the flags mostly reflect favorited
-  channels and pinned conversations.
+  channels and pinned conversations. A chat you muted in Teams carries
+  `muted: true`.
 - `teams_list_teams_and_channels` — every channel you are in, by team then
   title, with the same fields — favorite and pinned channels first, flagged
   as in `teams_list_chats`. Channels you have hidden in Teams are listed
   after the rest with `hidden: true`, and left out of `unread_only` unless
   `include_hidden` is set. `unread_only`, `include_hidden`, `since_days`
-  (with `unread_only`; default 14), `query` (channel or team name) and
+  (with `unread_only`; default 14), `query` (channel or team name, or the
+  last-message preview; each match carries `match_reason`, as in
+  `teams_list_chats`) and
   `limit` (default 50, max 500).
 - `teams_read_conversation` — read any chat or channel by id or name,
   oldest first: sender, ISO-8601 time, text, subject, edited/deleted flags
   and attachments. A channel comes back as threads (root post + replies).
   `unread_only`, `since` (ISO 8601) and `limit` (default 50, max 500, newest
-  kept). An ambiguous name lists the candidates and asks for the id; an
+  kept). The resolved `conversation` carries `match_reason` (`id`, `title`,
+  `team` or `participant`); a name never resolves by what was said in a
+  chat, since `teams_send_message` and `teams_react` name their target the
+  same way. An ambiguous name is not an error here: the result is
+  `{ambiguous: true, query, match_count, candidates, hint}` — up to 10
+  candidates, each with `id`, `title`, `kind`, `team` (channels),
+  `lastActivity` and `match_reason` — and no messages, so you can read again
+  by one candidate's id (`teams_send_message` and `teams_react` still refuse
+  an ambiguous name outright, since a write never guesses); an
   untitled group chat can be named by one of its participants, and a 1:1 by
   the other person (this, and the same naming in `teams_send_message` /
   `teams_react`, titles every untitled chat first).
@@ -174,13 +207,17 @@ Everything is optional — by default the token is captured from your browser.
 - `teams_get_unread` — every unread message across your chats and channels,
   grouped by conversation, most recent first. Filter by `kinds` (`chat`,
   `channel`, `meeting`, `oneOnOne`) or `query` (title, channel or team
-  name, or an untitled chat's participant name); `per_conversation_limit`
+  name, an untitled chat's participant name, or the last-message preview —
+  each conversation then carries `match_reason`, as in `teams_list_chats`);
+  `per_conversation_limit`
   (default 50) and `max_conversations` (default 20 returned with their
   messages — the rest are named, with their `unread_count`, in
   `more_unread_conversations`). Hidden channels are left out unless
-  `include_hidden`. Only conversations with unread messages from the last
-  `since_days` (default 14, max 3650) are returned; older ones are counted
-  in `older_unread_skipped`. An untitled group chat or 1:1 is titled after
+  `include_hidden`; chats you muted in Teams (`muted: true`) are left out
+  unread and counted in `muted_skipped` unless `include_muted`. Only
+  conversations with unread messages from the last `since_days` (default 14,
+  max 3650) are returned; older ones are counted in `older_unread_skipped`,
+  and `older_unread: true` also lists them (see below). An untitled group chat or 1:1 is titled after
   its participants, as in `teams_list_chats` — in `conversations`, in
   `more_unread_conversations` and in `errors`.
 - `teams_get_attachment` — one attachment of a message: an inline image is
@@ -304,7 +341,19 @@ instead.
   you never open. A candidate with no activity at all inside the window is
   not even read. Whatever the window leaves out is counted in
   `older_unread_skipped` (with a hint to widen `since_days`), never dropped
-  silently. `teams_read_conversation` is not windowed: it takes an explicit
+  silently. `older_unread: true` (on `teams_get_unread`, and on
+  `teams_list_chats` with `unread_only`) also lists them in
+  `older_unread_conversations` — `id`, `kind`, `title`, `team` (a channel's),
+  `lastActivity`, most recent first — with an `unread_count` for each one
+  whose messages were already read to place it outside the window; one with
+  no activity at all inside the window is not read just to count it, and
+  carries `unread_count_known: false` instead (its news past the marker may
+  be only system events). Muted chats: the conversation listing marks a chat
+  you muted with `properties.alerts: "false"` (verified live 2026-10-12: 8 of
+  1,435 conversations, every other one `"true"` or absent), surfaced as
+  `muted: true`. `teams_get_unread` leaves them out without reading them and
+  counts them in `muted_skipped`; `include_muted` adds them back. The list
+  tools' `unread_only` still includes them. `teams_read_conversation` is not windowed: it takes an explicit
   `since` and `limit`. This server only reads the marker; it never moves it.
 - **The token only goes to Teams.** The chat-service token is sent to the
   chat-service base and, for inline images, only to https hosts under

@@ -90,30 +90,59 @@ describe('teams_read_conversation', () => {
   it('resolves a conversation by a unique name', async () => {
     const { data } = await call(chatsvcWith(), { conversation: 'project falcon' });
 
-    expect((data?.conversation as { id: string }).id).toBe(GROUP);
+    expect(data?.conversation).toMatchObject({ id: GROUP, match_reason: 'title' });
   });
 
-  it('refuses an ambiguous name, naming the candidates and asking for the id', async () => {
-    const chatsvc = chatsvcWith();
-    const { result } = await call(chatsvc, { conversation: 'falcon' });
+  it('never resolves a name by what was said in a chat (its last-message preview)', async () => {
+    const convs = [...CONVS, rawConv('19:said0001@thread.v2', { topic: 'Lunch', at: T0, text: 'quarterly offsite agenda' })];
+    const { result } = await call(fakeChatsvc(convs, { getMessages: messagesFrom(GROUP_MSGS) }), { conversation: 'offsite' });
 
     expect(result.isError).toBe(true);
-    const text = errorText(result);
-    expect(text).toContain(GROUP);
-    expect(text).toContain(OTHER_GROUP);
-    expect(text).toContain('Falcon launch party');
-    expect(text).toMatch(/\bid\b/);
+    expect(errorText(result)).toMatch(/No chat or channel matches/);
+  });
+
+  it('returns an ambiguous name\'s candidates as data, not an error, reading nothing', async () => {
+    const chatsvc = chatsvcWith();
+    const { result, data } = await call(chatsvc, { conversation: 'falcon' });
+
+    expect(result.isError).toBeFalsy();
+    expect(data).toMatchObject({ ambiguous: true, query: 'falcon', hint: 'pass one id as conversation' });
+    const candidates = data?.candidates as Record<string, unknown>[];
+    expect(candidates.map((c) => c.id).sort()).toEqual([GROUP, OTHER_GROUP].sort());
+    expect(candidates.find((c) => c.id === OTHER_GROUP)).toEqual({
+      id: OTHER_GROUP,
+      title: 'Falcon launch party',
+      kind: 'group',
+      lastActivity: new Date(T0).toISOString(),
+      match_reason: 'title',
+    });
+    expect(data).not.toHaveProperty('messages');
     expect(chatsvc.getMessages).not.toHaveBeenCalled();
   });
 
-  it('names at most 10 candidates for a very ambiguous name', async () => {
-    const many = Array.from({ length: 14 }, (_, i) => rawConv(`19:dup${i}@thread.v2`, { topic: `Standup ${i}` }));
-    const { result } = await call(fakeChatsvc(many), { conversation: 'standup' });
+  it('names a channel candidate\'s team', async () => {
+    const convs = [...CONVS, rawConv('19:chan0002@thread.tacv2', { topic: 'Design reviews', at: T0, spaceId: TEAM })];
+    const { data } = await call(fakeChatsvc(convs), { conversation: 'design' });
 
-    const text = errorText(result);
-    expect(text).toContain('19:dup9@thread.v2');
-    expect(text).not.toContain('19:dup10@thread.v2');
-    expect(text).toMatch(/14/);
+    const candidates = data?.candidates as Record<string, unknown>[];
+    expect(candidates.find((c) => c.id === CHANNEL)).toMatchObject({ kind: 'channel', team: 'Platform Team' });
+  });
+
+  it('lists at most 10 candidates for a very ambiguous name, saying how many matched', async () => {
+    const many = Array.from({ length: 14 }, (_, i) => rawConv(`19:dup${i}@thread.v2`, { topic: `Standup ${i}` }));
+    const { data } = await call(fakeChatsvc(many), { conversation: 'standup' });
+
+    const ids = (data?.candidates as { id: string }[]).map((c) => c.id);
+    expect(ids).toHaveLength(10);
+    expect(ids).toContain('19:dup9@thread.v2');
+    expect(ids).not.toContain('19:dup10@thread.v2');
+    expect(data?.match_count).toBe(14);
+  });
+
+  it('marks the candidates untrusted, since their titles are Teams text', async () => {
+    const { result } = await call(chatsvcWith(), { conversation: 'falcon' });
+
+    expect(errorText(result)).toMatch(/untrusted/i);
   });
 
   it('resolves an untitled group chat by a participant name, though every one has the same last sender', async () => {
@@ -134,8 +163,10 @@ describe('teams_read_conversation', () => {
     const chatsvc = fakeChatsvc(convs, { getMessages });
 
     const ambiguous = await call(chatsvc, { conversation: 'king' });
-    expect(ambiguous.result.isError).toBe(true);
-    expect(errorText(ambiguous.result)).toContain('Group chat: King, Greg; Bravo, Bob');
+    expect(ambiguous.data?.ambiguous).toBe(true);
+    expect((ambiguous.data?.candidates as { title: string }[]).map((c) => c.title)).toContain(
+      'Group chat: King, Greg; Bravo, Bob',
+    );
 
     const { data } = await call(chatsvc, { conversation: 'bravo' });
     expect(data?.conversation).toMatchObject({
@@ -143,6 +174,16 @@ describe('teams_read_conversation', () => {
       title: 'Group chat: King, Greg; Bravo, Bob',
       participants: ['King, Greg', 'Bravo, Bob'],
     });
+  });
+
+  it('still throws on an ambiguous name for the write tools that resolve through resolveListed', async () => {
+    const err = await resolveListed(chatsvcWith(), CONVS, ME, 'falcon', 'post to').catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(McpToolError);
+    expect((err as McpToolError).message).toContain(GROUP);
+    expect((err as McpToolError).message).toContain(OTHER_GROUP);
+    expect((err as McpToolError).message).toContain('matched by title');
+    expect((err as McpToolError).hint).toMatch(/id of the one to post to/);
   });
 
   it.each(['notes', 'Self', ' self ', '48:notes'])(

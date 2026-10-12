@@ -123,6 +123,18 @@ describe('teams_list_teams_and_channels', () => {
     expect((byTitle.channels as Row[]).map((c) => c.id)).toEqual([ALPHA_DESIGN]);
   });
 
+  it('says why each channel matched, matching the last-message preview when no name does', async () => {
+    const convs = [...CONVS, rawConv('19:said@thread.tacv2', { topic: 'Random', spaceId: ALPHA, at: T0, text: 'Bravo for shipping!' })];
+    const { data } = await call(fakeChatsvc(convs), { query: 'bravo' });
+    const rows = data!.channels as (Row & { match_reason?: string })[];
+
+    expect(rows.map((c) => [c.id, c.match_reason])).toEqual([
+      ['19:said@thread.tacv2', 'message'],
+      [BRAVO, 'team'],
+      [BRAVO_OPS, 'team'],
+    ]);
+  });
+
   it('honours limit and says what was left out', async () => {
     const { data } = await call(fakeChatsvc(CONVS), { limit: 2 });
 

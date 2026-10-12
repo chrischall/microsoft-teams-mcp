@@ -44,6 +44,12 @@ export interface ConversationSummary {
    * `NotInterested`). Teams shows it nowhere, unread or not.
    */
   hidden?: true;
+  /**
+   * Muted in Teams (`properties.alerts` is `"false"`; live 2026-10-12: 8 of
+   * 1,435 conversations, meeting chats and a 1:1, every other one `"true"` or
+   * absent). Teams sends no notification for it; absent otherwise.
+   */
+  muted?: true;
   /** Marked a favorite in Teams (`properties.favorite`); absent otherwise. */
   favorite?: true;
   /** Pinned in Teams (`properties.ispinned`); absent otherwise. */
@@ -59,6 +65,8 @@ export interface ConversationSummary {
    * listing or a read of its messages found someone.
    */
   participants?: string[];
+  /** With a query: why this conversation matched it (see {@link matchConversations}). */
+  match_reason?: MatchReason;
 }
 
 export interface FileAttachment {
@@ -299,6 +307,12 @@ function flag(c: RawConversation, name: string): boolean {
   return v === true || (typeof v === 'string' && v.trim().toLowerCase() === 'true');
 }
 
+/** A `properties` flag Teams sends as `"false"` / `"False"` (or a boolean) — absent is not false. */
+function flagOff(c: RawConversation, name: string): boolean {
+  const v: unknown = c.properties?.[name];
+  return v === false || (typeof v === 'string' && v.trim().toLowerCase() === 'false');
+}
+
 /** A channel the user has hidden in Teams. */
 function isHiddenChannel(c: RawConversation): boolean {
   return c.memberProperties?.interest === 'NotInterested';
@@ -355,6 +369,7 @@ export function conversationSummary(
     unread,
     unread_confirmed: false,
     ...(hidden ? { hidden: true as const } : {}),
+    ...(flagOff(c, 'alerts') ? { muted: true as const } : {}),
     ...(flag(c, 'favorite') ? { favorite: true as const } : {}),
     ...(flag(c, 'ispinned') ? { pinned: true as const } : {}),
     ...(lastActivity !== undefined ? { lastActivity } : {}),
@@ -580,36 +595,66 @@ export function summariseAll(raw: readonly RawConversation[], meMri: string): Co
   return out;
 }
 
+/** Why a conversation matched a query, in the order the reasons are tried. */
+export type MatchReason = 'id' | 'title' | 'team' | 'participant' | 'message';
+
+export interface MatchOptions {
+  /**
+   * Also match the listing's last-message preview when nothing else does
+   * (`match_reason: "message"`). For the list tools only: a name given to a
+   * tool that writes must not resolve to a chat because of what was said in it.
+   */
+  messages?: boolean;
+}
+
+type Matchable = Pick<ConversationSummary, 'id' | 'title' | 'team' | 'participants' | 'lastMessagePreview'>;
+
 /**
  * Resolve a user's `conversation` argument: an exact id wins outright, then
  * `notes` / `self` name the self-chat, else a case-insensitive substring of
- * the title, team name, or one of an untitled group chat's participants. A
- * title this server made up — "Group chat: …" or "(untitled group chat)" — is
- * not itself matched, so "group" or "chat" does not hit every untitled group
- * chat: such a chat matches by its participants instead.
+ * the title, team name, or one of an untitled group chat's participants (and,
+ * with `messages`, the last-message preview). A title this server made up —
+ * "Group chat: …", "(untitled group chat)", or an untitled 1:1's other person
+ * — is not itself matched, so "group" or "chat" does not hit every untitled
+ * group chat: such a chat matches by its participants instead. Each match is a
+ * copy carrying its {@link MatchReason} — the first that applies, in order.
  */
-export function matchConversations<T extends Pick<ConversationSummary, 'id' | 'title' | 'team' | 'participants'>>(
+export function matchConversations<T extends Matchable>(
   summaries: readonly T[],
   query: string,
-): T[] {
+  { messages = false }: MatchOptions = {},
+): (T & { match_reason: MatchReason })[] {
   const exact = summaries.find((s) => s.id === query);
-  if (exact) return [exact];
+  if (exact) return [{ ...exact, match_reason: 'id' }];
   const q = query.trim().toLowerCase();
   if (q === '') return [];
   if (SELF_CHAT_ALIASES.has(q)) {
     const self = summaries.find((s) => s.id === SELF_CHAT);
-    if (self) return [self];
+    if (self) return [{ ...self, match_reason: 'title' }];
   }
-  return summaries.filter(
-    (s) =>
-      (hasRealTitle(s) && s.title.toLowerCase().includes(q)) ||
-      (s.team?.toLowerCase().includes(q) ?? false) ||
-      (s.participants?.some((p) => p.toLowerCase().includes(q)) ?? false),
-  );
+  return summaries.flatMap((s) => {
+    const reason = matchReason(s, q, messages);
+    return reason === undefined ? [] : [{ ...s, match_reason: reason }];
+  });
 }
 
-/** False for a title made from participants, or an untitled-group / untitled-1:1 stand-in. */
+/** The first reason `s` matches the lower-cased query `q`, or `undefined`. */
+function matchReason(s: Matchable, q: string, messages: boolean): MatchReason | undefined {
+  if (hasRealTitle(s) && s.title.toLowerCase().includes(q)) return 'title';
+  if (s.team?.toLowerCase().includes(q)) return 'team';
+  if (s.participants?.some((p) => p.toLowerCase().includes(q))) return 'participant';
+  if (messages && s.lastMessagePreview !== undefined && s.lastMessagePreview !== SYSTEM_EVENT_PREVIEW) {
+    if (s.lastMessagePreview.toLowerCase().includes(q)) return 'message';
+  }
+  return undefined;
+}
+
+/**
+ * False for a title made from participants (an untitled group chat's, or an
+ * untitled 1:1's other person — only such chats carry `participants`), or an
+ * untitled-group / untitled-1:1 stand-in.
+ */
 function hasRealTitle(s: Pick<ConversationSummary, 'title' | 'participants'>): boolean {
   if (s.title === UNTITLED_GROUP_TITLE || s.title === UNTITLED_ONE_ON_ONE_TITLE) return false;
-  return !(s.participants !== undefined && s.title.startsWith(GROUP_TITLE_PREFIX));
+  return s.participants === undefined;
 }

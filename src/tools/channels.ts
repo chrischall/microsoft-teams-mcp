@@ -17,6 +17,7 @@ import {
   includeHiddenArg,
   listSinceDaysArg,
   listSummaries,
+  MATCH_REASON_DESCRIPTION,
   queryArg,
   UNREAD_HINT_DESCRIPTION,
   unreadOnlyArg,
@@ -58,7 +59,9 @@ export function registerChannelTools(server: McpServer, { chatsvc }: Pick<TeamsD
         'keeps only channels whose newest unread post is from the last 14 days (since_days widens ' +
         'it); older ones are counted in older_unread_skipped, not listed. ' +
         UNREAD_HINT_DESCRIPTION +
-        ' Listing never marks anything read. query matches the channel title or team name. ' +
+        ' Listing never marks anything read. query matches the channel title, team name or last-message preview. ' +
+        MATCH_REASON_DESCRIPTION +
+        ' ' +
         FAVORITES_DESCRIPTION +
         UNTRUSTED_DESCRIPTION_SUFFIX,
       annotations: toolAnnotations({ readOnly: true, openWorld: true }),
@@ -66,7 +69,7 @@ export function registerChannelTools(server: McpServer, { chatsvc }: Pick<TeamsD
         unread_only: unreadOnlyArg,
         since_days: listSinceDaysArg,
         include_hidden: includeHiddenArg,
-        query: queryArg('channel title or team name'),
+        query: queryArg('channel title, team name or last-message preview'),
         limit: limitArg(MAX_CHANNELS, 'channels', 'favorites and pinned first, then by team and title, kept'),
       },
     },

@@ -619,6 +619,67 @@ describe('matchConversations', () => {
     expect(matchConversations(rows, 'group chat').map((s) => s.id)).toEqual([]);
     expect(matchConversations(rows, 'untitled').map((s) => s.id)).toEqual([]);
   });
+
+  describe('match_reason', () => {
+    const reasons = (rows: { id: string; match_reason?: string }[]) => rows.map((s) => [s.id, s.match_reason]);
+
+    it('is "id" for an exact id, and "title" for a self-chat alias', () => {
+      expect(reasons(matchConversations(summaries, CHANNEL))).toEqual([[CHANNEL, 'id']]);
+      const self = conversationSummary({ id: '48:notes' }, ME);
+      expect(reasons(matchConversations([...summaries, self], 'notes'))).toEqual([['48:notes', 'title']]);
+    });
+
+    it('is the first of title, team, participant that applies', () => {
+      const rows = [
+        { id: 'title', title: 'Falcon launch', team: 'Falcon team' },
+        { id: 'team', title: 'General', team: 'Falcon team' },
+        { id: 'participant', title: 'Group chat: Falcone, Ann', participants: ['Falcone, Ann'] },
+        { id: 'none', title: 'Other' },
+      ];
+      expect(reasons(matchConversations(rows, 'falcon'))).toEqual([
+        ['title', 'title'],
+        ['team', 'team'],
+        ['participant', 'participant'],
+      ]);
+    });
+
+    it('is "participant", not "title", for a 1:1 titled after the other person', () => {
+      const rows = [{ id: 'dm', title: 'Rivera, Sam', participants: ['Rivera, Sam'] }];
+      expect(reasons(matchConversations(rows, 'rivera'))).toEqual([['dm', 'participant']]);
+    });
+
+    it('returns a copy, leaving the summaries passed in untouched', () => {
+      const rows = [{ id: 'a', title: 'Falcon' }];
+      matchConversations(rows, 'falcon');
+      expect(rows[0]).not.toHaveProperty('match_reason');
+    });
+  });
+
+  describe('with messages: the last-message preview', () => {
+    const rows = [
+      { id: 'named', title: 'Budget', lastMessagePreview: 'the budget is due' },
+      { id: 'said', title: 'Standup', lastMessagePreview: 'Budget draft attached' },
+      { id: 'quiet', title: 'Lunch', lastMessagePreview: 'tacos?' },
+      { id: 'event', title: 'Call', lastMessagePreview: '(system event)' },
+      { id: 'empty', title: 'Empty' },
+    ];
+
+    it('matches a conversation by its preview only when nothing else does, as "message"', () => {
+      expect(matchConversations(rows, 'budget', { messages: true }).map((s) => [s.id, s.match_reason])).toEqual([
+        ['named', 'title'],
+        ['said', 'message'],
+      ]);
+    });
+
+    it('never matches the system-event stand-in', () => {
+      expect(matchConversations(rows, 'system event', { messages: true })).toEqual([]);
+    });
+
+    it('ignores previews without messages (name resolution)', () => {
+      expect(matchConversations(rows, 'tacos')).toEqual([]);
+      expect(matchConversations(rows, 'tacos', { messages: true }).map((s) => s.id)).toEqual(['quiet']);
+    });
+  });
 });
 
 describe('oneOnOnePeerMri', () => {
@@ -676,6 +737,20 @@ describe('1:1 titles', () => {
     expect(matchConversations(rows, 'chat').map((s) => s.id)).toEqual([]);
     expect(matchConversations(rows, '1:1').map((s) => s.id)).toEqual([]);
     expect(matchConversations(rows, 'rivera').map((s) => s.id)).toEqual(['b']);
+  });
+});
+
+describe('muted chats', () => {
+  const withAlerts = (alerts: unknown): RawConversation =>
+    ({ ...conv(GROUP), properties: { ...conv(GROUP).properties, alerts } }) as unknown as RawConversation;
+
+  it.each(['false', 'False', false])('marks a conversation whose properties.alerts is %j muted: true (live)', (v) => {
+    expect(conversationSummary(withAlerts(v), ME, CONVS)).toMatchObject({ muted: true });
+  });
+
+  it('does not mark one whose alerts are on or absent', () => {
+    expect(conversationSummary(withAlerts('true'), ME, CONVS)).not.toHaveProperty('muted');
+    expect(conversationSummary(conv(GROUP), ME, CONVS)).not.toHaveProperty('muted');
   });
 });
 

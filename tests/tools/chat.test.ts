@@ -384,6 +384,110 @@ describe('teams_list_chats', () => {
     });
   });
 
+  describe('since / until', () => {
+    const iso = (ms: number) => new Date(ms).toISOString();
+    const SILENT = '19:silent0001@thread.v2';
+    const { lastMessage: _drop, ...silent } = rawConv(SILENT, { topic: 'No messages yet' });
+    const convs = [...CONVS, silent];
+
+    it('keeps chats whose last activity is at or after since', async () => {
+      const { data } = await call(fakeChatsvc(convs), { since: iso(T0 + 20 * MIN) });
+      expect((data?.chats as Row[]).map((c) => c.id)).toEqual([GROUP, MEETING]);
+    });
+
+    it('keeps chats whose last activity is at or before until', async () => {
+      const { data } = await call(fakeChatsvc(convs), { until: iso(T0 + 20 * MIN) });
+      expect((data?.chats as Row[]).map((c) => c.id)).toEqual([MEETING, DM]);
+    });
+
+    it('combines since and until into one window', async () => {
+      const { data } = await call(fakeChatsvc(convs), { since: iso(T0 + 15 * MIN), until: iso(T0 + 25 * MIN) });
+      expect((data?.chats as Row[]).map((c) => c.id)).toEqual([MEETING]);
+    });
+
+    it('lists a chat with no last activity only when neither is given', async () => {
+      const plain = await call(fakeChatsvc(convs));
+      expect((plain.data?.chats as Row[]).map((c) => c.id)).toContain(SILENT);
+      const { data } = await call(fakeChatsvc(convs), { since: iso(0) });
+      expect((data?.chats as Row[]).map((c) => c.id)).not.toContain(SILENT);
+    });
+
+    it('filters before confirming unread_only, so chats outside the window are never read', async () => {
+      const chatsvc = chatsvcWith();
+      const { data } = await call(chatsvc, { unread_only: true, since: iso(T0 + 20 * MIN) });
+
+      expect((data?.chats as Row[]).map((c) => c.id)).toEqual([GROUP]);
+      expect(vi.mocked(chatsvc.getMessages).mock.calls.map((c) => c[0])).toEqual([GROUP]);
+    });
+
+    it('rejects a since or until that is not an ISO 8601 date-time', async () => {
+      for (const args of [{ since: 'yesterday' }, { until: 'not a date' }]) {
+        const { result } = await call(fakeChatsvc(convs), args);
+        expect(result.isError).toBe(true);
+        expect((result.content?.[0] as { text?: string })?.text).toMatch(/ISO 8601/);
+      }
+    });
+
+    it('rejects a since later than until', async () => {
+      const { result } = await call(fakeChatsvc(convs), { since: iso(T0 + 30 * MIN), until: iso(T0) });
+      expect(result.isError).toBe(true);
+      expect((result.content?.[0] as { text?: string })?.text).toMatch(/since .*after until/i);
+    });
+  });
+
+  describe('sort', () => {
+    const FAV = '19:fav0001@thread.v2';
+    const PIN = '19:pin0001@thread.v2';
+    const LOWER = '19:lower0001@thread.v2';
+    const convs = [
+      ...CONVS,
+      rawConv(FAV, { topic: 'Favorite chat', at: T0 + MIN, favorite: 'true' }),
+      rawConv(PIN, { topic: 'Pinned chat', at: T0 + 2 * MIN, pinned: 'True' }),
+      rawConv(LOWER, { topic: 'alpha team', at: T0 + 3 * MIN }),
+    ];
+
+    it('defaults to activity: favorites, pinned, then most recent', async () => {
+      const dflt = await call(fakeChatsvc(convs));
+      const explicit = await call(fakeChatsvc(convs), { sort: 'activity' });
+      expect((dflt.data?.chats as Row[]).map((c) => c.id)).toEqual([FAV, PIN, GROUP, MEETING, DM, LOWER]);
+      expect((explicit.data?.chats as Row[]).map((c) => c.id)).toEqual([FAV, PIN, GROUP, MEETING, DM, LOWER]);
+    });
+
+    it('activity_only orders by most recent activity alone, ignoring favorites and pinned', async () => {
+      const { data } = await call(fakeChatsvc(convs), { sort: 'activity_only' });
+      expect((data?.chats as Row[]).map((c) => c.id)).toEqual([GROUP, MEETING, DM, LOWER, PIN, FAV]);
+    });
+
+    it('title orders alphabetically, case-insensitively, by the title returned (an untitled 1:1 by its person)', async () => {
+      const { data } = await call(fakeChatsvc(convs), { sort: 'title' });
+      const chats = data?.chats as Row[];
+      expect(chats.map((c) => c.title)).toEqual([
+        'alpha team',
+        'Favorite chat',
+        'Pat Example',
+        'Pinned chat',
+        'Project Falcon',
+        'Weekly sync',
+      ]);
+    });
+
+    it('limit keeps the head of the chosen order', async () => {
+      const { data } = await call(fakeChatsvc(convs), { sort: 'title', limit: 2 });
+      expect((data?.chats as Row[]).map((c) => c.id)).toEqual([LOWER, FAV]);
+      expect(data?.truncated).toMatchObject({ total: 6, returned: 2 });
+    });
+
+    it('applies to unread_only too', async () => {
+      const { data } = await call(chatsvcWith(), { unread_only: true, sort: 'title' });
+      expect((data?.chats as Row[]).map((c) => c.id)).toEqual([DM, GROUP]);
+    });
+
+    it('rejects an unknown sort', async () => {
+      const { result } = await call(fakeChatsvc(convs), { sort: 'newest' });
+      expect(result.isError).toBe(true);
+    });
+  });
+
   it('returns its result inside the untrusted-data envelope', async () => {
     const { data } = await call(fakeChatsvc(CONVS));
 
@@ -419,6 +523,141 @@ describe('teams_list_chats', () => {
     expect(text).toMatch(/Wait a minute/);
   });
 
+  describe('match_reason and message matching', () => {
+    type Matched = Row & { match_reason?: string; matched_message?: Record<string, unknown> };
+    const LUNCH = '19:lunch0001@thread.v2';
+    const PLANS = '19:plans0001@thread.v2';
+    const convs = [
+      ...CONVS,
+      rawConv(LUNCH, { topic: 'Lunch crew', at: T0 + 5 * MIN, text: '<p>Falcon budget review moved to 3pm</p>' }),
+      rawConv(PLANS, { topic: 'Weekend plans', at: T0 + 4 * MIN, text: 'see you there' }),
+    ];
+    const reasons = (data: Record<string, unknown> | undefined) =>
+      (data?.chats as Matched[]).map((c) => [c.id, c.match_reason]);
+
+    it('says why each row matched a query: id, title, or participant', async () => {
+      expect(reasons((await call(fakeChatsvc(CONVS), { query: MEETING })).data)).toEqual([[MEETING, 'id']]);
+      expect(reasons((await call(fakeChatsvc(CONVS), { query: 'falcon' })).data)).toEqual([[GROUP, 'title']]);
+      // An untitled 1:1 is titled after the other person, who is its participant.
+      expect(reasons((await call(fakeChatsvc(CONVS), { query: 'pat' })).data)).toEqual([[DM, 'participant']]);
+    });
+
+    it('adds no match_reason without a query', async () => {
+      const { data } = await call(fakeChatsvc(CONVS));
+      for (const c of data?.chats as Matched[]) expect(c).not.toHaveProperty('match_reason');
+    });
+
+    it('matches the listing\'s last-message preview when no name does, as "message", reading nothing', async () => {
+      const chatsvc = chatsvcWith(convs);
+      const { data } = await call(chatsvc, { query: 'budget review' });
+
+      expect(reasons(data)).toEqual([[LUNCH, 'message']]);
+      expect(chatsvc.getMessages).not.toHaveBeenCalled();
+    });
+
+    it('keeps the name reason when the preview matches too', async () => {
+      const { data } = await call(chatsvcWith(convs), { query: 'falcon' });
+      expect(reasons(data)).toEqual([
+        [GROUP, 'title'],
+        [LUNCH, 'message'],
+      ]);
+    });
+
+    describe('search_messages', () => {
+      const older = (conv: string, at: number, text: string, opts: Parameters<typeof rawMsg>[1] = {}) =>
+        rawMsg(at, { ...opts, conv, text, sender: 'Lee Example' });
+      const byId: Record<string, RawMessage[]> = {
+        ...MESSAGES,
+        [PLANS]: [
+          older(PLANS, T0 + MIN, '<p>The <b>offsite</b> agenda is in the wiki</p>'),
+          older(PLANS, T0 + 2 * MIN, 'nothing to see'),
+          older(PLANS, T0 + 4 * MIN, 'see you there'),
+        ],
+        [MEETING]: [
+          older(MEETING, T0 + MIN, 'offsite (deleted)', { deleted: true }),
+          older(MEETING, T0 + 2 * MIN, 'offsite recording', { type: 'RichText/Media_CallRecording' }),
+        ],
+      };
+
+      it('scans the recent messages of every chat no name or preview matched, as "message", with the message', async () => {
+        const chatsvc = chatsvcWith(convs, byId);
+        const { data } = await call(chatsvc, { query: 'OFFSITE', search_messages: true });
+        const chats = data?.chats as Matched[];
+
+        expect(reasons(data)).toEqual([[PLANS, 'message']]);
+        expect(chats[0].matched_message).toEqual({
+          id: String(T0 + MIN),
+          time: new Date(T0 + MIN).toISOString(),
+          sender: 'Lee Example',
+          text: 'The offsite agenda is in the wiki',
+        });
+        // Each unmatched chat is read once, one page of at most 50; deleted and system messages never match.
+        const read = (chatsvc.getMessages as ReturnType<typeof vi.fn>).mock.calls;
+        expect(read.map(([id]) => id).sort()).toEqual([DM, GROUP, LUNCH, MEETING, PLANS].sort());
+        for (const [, opts] of read) expect(opts).toMatchObject({ max: 50, pageSize: 50 });
+      });
+
+      it('does not read a chat a name or preview already matched', async () => {
+        const chatsvc = chatsvcWith(convs, byId);
+        const { data } = await call(chatsvc, { query: 'falcon', search_messages: true });
+
+        expect(reasons(data)).toEqual([
+          [GROUP, 'title'],
+          [LUNCH, 'message'],
+        ]);
+        const read = (chatsvc.getMessages as ReturnType<typeof vi.fn>).mock.calls.map(([id]) => id);
+        expect(read).not.toContain(GROUP);
+        expect(read).not.toContain(LUNCH);
+      });
+
+      it('reads nothing for an exact id', async () => {
+        const chatsvc = chatsvcWith(convs, byId);
+        const { data } = await call(chatsvc, { query: PLANS, search_messages: true });
+
+        expect(reasons(data)).toEqual([[PLANS, 'id']]);
+        expect(chatsvc.getMessages).not.toHaveBeenCalled();
+      });
+
+      it('counts chats whose read failed in messages_not_searched and still returns the rest', async () => {
+        const { data } = await call(chatsvcWith(convs, { ...byId, [MEETING]: new Error('boom') }), {
+          query: 'offsite',
+          search_messages: true,
+        });
+
+        expect(reasons(data)).toEqual([[PLANS, 'message']]);
+        expect(data?.messages_not_searched).toBe(1);
+      });
+
+      it('adds no messages_not_searched when every read succeeded', async () => {
+        const { data } = await call(chatsvcWith(convs, byId), { query: 'offsite', search_messages: true });
+        expect(data).not.toHaveProperty('messages_not_searched');
+      });
+
+      it('reads at most four chats at once', async () => {
+        const many = Array.from({ length: 12 }, (_, i) => rawConv(`19:m${i}@thread.v2`, { topic: `chat ${i}`, at: T0 + i * MIN }));
+        let inFlight = 0;
+        let peak = 0;
+        const getMessages = vi.fn(async () => {
+          peak = Math.max(peak, ++inFlight);
+          await new Promise((r) => setTimeout(r, 5));
+          inFlight--;
+          return [];
+        });
+        await call(fakeChatsvc(many, { getMessages }), { query: 'zzz', search_messages: true });
+
+        expect(getMessages).toHaveBeenCalledTimes(12);
+        expect(peak).toBeLessThanOrEqual(4);
+      });
+
+      it('needs a query', async () => {
+        const { result } = await call(chatsvcWith(convs, byId), { search_messages: true });
+
+        expect(result.isError).toBe(true);
+        expect((result.content?.[0] as { text?: string })?.text).toMatch(/query/);
+      });
+    });
+  });
+
   describe('since_days (with unread_only)', () => {
     const OLD = '19:old0001@thread.v2';
     const DORMANT = '19:dormant0001@thread.v2';
@@ -449,6 +688,24 @@ describe('teams_list_chats', () => {
       expect(data).not.toHaveProperty('older_unread_hint');
     });
 
+    it('with older_unread, lists the chats the window left out, counting only those it read', async () => {
+      const chatsvc = chatsvcWith(convs, msgs);
+      const { data } = await call(chatsvc, { unread_only: true, older_unread: true });
+
+      expect(data?.older_unread_conversations).toEqual([
+        { id: OLD, kind: 'group', title: 'Old news', lastActivity: new Date(NOW - 20 * DAY).toISOString(), unread_count: 1 },
+        { id: DORMANT, kind: 'group', title: 'Dormant', lastActivity: new Date(NOW - 400 * DAY).toISOString(), unread_count_known: false },
+      ]);
+      expect(vi.mocked(chatsvc.getMessages).mock.calls.map((c) => c[0])).not.toContain(DORMANT);
+    });
+
+    it('older_unread needs unread_only', async () => {
+      const { result } = await call(chatsvcWith(convs, msgs), { older_unread: true });
+
+      expect(result.isError).toBe(true);
+      expect((result.content?.[0] as { text?: string })?.text).toMatch(/unread_only/);
+    });
+
     it('changes nothing without unread_only', async () => {
       const chatsvc = chatsvcWith(convs, msgs);
       const { data } = await call(chatsvc, { since_days: 1 });
@@ -470,11 +727,18 @@ describe('teams_list_chats', () => {
     expect(tool?.annotations?.readOnlyHint).toBe(true);
     expect(Object.keys((tool?.inputSchema as { properties?: object }).properties ?? {}).sort()).toEqual([
       'limit',
+      'older_unread',
       'query',
+      'search_messages',
+      'since',
       'since_days',
+      'sort',
       'unread_only',
+      'until',
     ]);
     expect(tool?.description).toMatch(/since_days/);
+    expect(tool?.description).toMatch(/older_unread_conversations/);
+    expect(tool?.description).toMatch(/muted: true/);
     await harness.close();
   });
 
