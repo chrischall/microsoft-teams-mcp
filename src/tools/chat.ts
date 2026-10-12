@@ -12,7 +12,7 @@ import type { ConversationSummary } from '../model.js';
 import { wrapApiError } from './errors.js';
 import { untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
 import { limitArg, trimRows } from './limit.js';
-import { SEARCH_FETCH_MESSAGES } from './search.js';
+import { SEARCH_FETCH_MESSAGES } from './chat-search.js';
 import {
   FAVORITES_DESCRIPTION,
   favoritesFirst,

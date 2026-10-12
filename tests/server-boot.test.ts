@@ -85,6 +85,7 @@ describe('built server boots', () => {
         'teams_mark_read',
         'teams_react',
         'teams_read_conversation',
+        'teams_search_messages',
         'teams_send_message',
       ]);
     },

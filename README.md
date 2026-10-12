@@ -338,6 +338,25 @@ Everything is optional — by default the token is captured from your browser.
   cursor, since an old message edited after it is served ahead of new ones.
   A hidden channel's listing entry stops moving altogether, so with
   `include_hidden` every hidden channel is read.
+- `teams_search_messages` — find messages by text across your chats and
+  channels, newest first: each hit names its conversation (id, title, kind,
+  team) and carries the message's id, ISO-8601 time, sender, `fromMe`, plain
+  text, subject and `replyTo` (a channel reply's root) — read it in context
+  with `teams_read_conversation`. Every word of `query` must appear (any
+  order, ignoring case; `"quoted words"` match as a phrase). `conversation`
+  narrows to one chat or channel (id or name, as in
+  `teams_read_conversation`), `from` to senders whose display name contains
+  it, `since` (ISO 8601; default the last 30 days) sets how far back to look,
+  `limit` caps the hits (default 25, max 200; `total_hits` and `truncated`
+  say when there were more). The chat service has no search, and Teams' own
+  search (Microsoft Substrate) needs a second token this MCP does not capture
+  yet, so this **scans**: the `max_conversations` (default 100, max 500) most
+  recently active conversations with activity since the cutoff are read back
+  to it, four at a time, and `scan` reports how many were read, how many the
+  window or the cap left out, and any read only partly (1,000 messages each).
+  Live, 100 conversations took about 15 seconds — narrow with `conversation`
+  or `since` when you can. Channels hidden in Teams are skipped unless named;
+  deleted messages and system events never match.
 - `teams_get_attachment` — one attachment of a message: an inline image is
   returned as the image itself; a shared file is downloaded from SharePoint and
   returned as its contents — an image as the image, anything else as an embedded

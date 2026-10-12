@@ -14,6 +14,7 @@ import { registerSendTools } from './tools/send.js';
 import { registerReactTools } from './tools/react.js';
 import { registerMarkReadTools } from './tools/markread.js';
 import { registerActivityTools } from './tools/activity.js';
+import { registerSearchTools } from './tools/search.js';
 import { registerHealthcheckTool } from './tools/healthcheck.js';
 
 loadDotenvSafely();
@@ -48,6 +49,7 @@ await runMcp({
     registerReactTools,
     registerMarkReadTools,
     registerActivityTools,
+    registerSearchTools,
     registerHealthcheckTool,
   ],
 });

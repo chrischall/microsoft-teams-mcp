@@ -159,6 +159,10 @@
       "description": "Read any chat or channel by id or name — leaves it unread unless you ask it to mark it read (asks you to confirm first)"
     },
     {
+      "name": "teams_search_messages",
+      "description": "Search messages by text across chats and channels (a bounded scan of recent conversations), without marking anything read"
+    },
+    {
       "name": "teams_get_unread",
       "description": "Get every unread message across chats and channels — leaves them unread unless you ask it to mark them read (asks you to confirm first)"
     },

@@ -14,6 +14,7 @@ import { registerSendTools } from '../src/tools/send.js';
 import { registerReactTools } from '../src/tools/react.js';
 import { registerMarkReadTools } from '../src/tools/markread.js';
 import { registerActivityTools } from '../src/tools/activity.js';
+import { registerSearchTools } from '../src/tools/search.js';
 import { registerHealthcheckTool } from '../src/tools/healthcheck.js';
 
 export async function servedTools() {
@@ -33,6 +34,7 @@ export async function servedTools() {
     registerReactTools(server, deps);
     registerMarkReadTools(server, deps);
     registerActivityTools(server, deps);
+    registerSearchTools(server, deps);
     registerHealthcheckTool(server, deps);
   });
   try {
