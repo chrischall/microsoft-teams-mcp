@@ -819,6 +819,17 @@ describe('teams_read_conversation — mark_read', () => {
     expect((data?.errors as { conversation: string }[]).map((e) => e.conversation)).toEqual(['no such chat']);
   });
 
+  it('with an array, an ambiguous name comes back as its candidates and nothing of it is marked', async () => {
+    const { chatsvc, setConsumptionHorizon } = withHorizonWrite();
+    const { data } = await callConfirmed(chatsvc, { conversation: ['falcon', CHANNEL], mark_read: true });
+
+    expect(setConsumptionHorizon).toHaveBeenCalledExactlyOnceWith(CHANNEL, String(T0 + 4 * MIN));
+    const [ambiguous, channel] = data?.conversations as Record<string, unknown>[];
+    expect(ambiguous).toMatchObject({ ambiguous: true, query: 'falcon' });
+    expect(ambiguous).not.toHaveProperty('marked_read');
+    expect(channel).toMatchObject({ conversation: { id: CHANNEL }, marked_read: true });
+  });
+
   it('with format summary, still marks up to the newest message read, though none is shown', async () => {
     const { chatsvc, setConsumptionHorizon } = withHorizonWrite();
     const { data } = await callConfirmed(chatsvc, { conversation: GROUP, mark_read: true, format: 'summary' });
