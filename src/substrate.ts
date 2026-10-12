@@ -4,30 +4,48 @@
  * chat-service scan in `tools/search.ts` is the fallback).
  *
  *   POST https://substrate.office.com/searchservice/api/v2/query
- *        [Authorization: Bearer <Substrate token>]
+ *        [Authorization: Bearer <token>, Content-Type: application/json]
  *        { entityRequests: [{ entityType: "Message", contentSources: ["Teams"],
- *          query: { queryString }, from, size, sort: [DateTime desc] }], … }
+ *            query: { queryString, displayQueryString }, from, size,
+ *            sort: [{ Field: "Time", SortDirection: "Desc" }] }],
+ *          cvid, logicalId, scenario: { Name: "powerbar", … } }
  *   → { EntitySets: [{ ResultSets: [{ Total, MoreResultsAvailable,
- *          Results: [{ HitHighlightedSummary, Source: { … } }] }] }] }
+ *          Results: [{ HitHighlightedSummary, Source: {
+ *            ClientThreadId, ClientConversationId, InternetMessageId,
+ *            DateTimeSent, Sender: { EmailAddress: { Name, Address } },
+ *            Preview, Subject, ChannelName, TeamName, … } }] }] }] }
  *
- * LIVE STATUS, 2026-10-12 — only partly verified:
- *   - VERIFIED: the Teams web tab's search box issues exactly
- *     `POST https://substrate.office.com/searchservice/api/v2/query` (seen
- *     twice, status 200 on the earlier probe; no query string).
- *   - NOT VERIFIED: everything past the URL. The request is made from a worker,
- *     so its body and response were not observable from the page, and the
- *     token could not be captured to replay it: the capture never reached the
- *     extension, because the fetchproxy server refused the answering
- *     extension — its identity did not match the one `microsoft-teams-mcp` had
- *     pinned, and re-pinning (`FETCHPROXY_TRUST_NEW_EXTENSION=1`) is the
- *     user's decision, not this code's. So the request body, the required
- *     headers (if any beyond the bearer: `x-client-flights`, `Prefer`, …),
- *     the response field names below and the paging behaviour are the best
- *     public evidence of Substrate's v2 query API, not observed fact. The
- *     parser is deliberately defensive (every field optional, a hit without a
- *     Teams conversation id is counted as `unmapped` rather than guessed), and
- *     `teams_search_messages` in mode "auto" falls back to the scan on any
- *     failure here, so a wrong guess degrades to the old behaviour.
+ * Verified live 2026-10-12 (token captured off the Teams tab, replayed from
+ * Node; read-only queries such as "deploy"; a redacted response is
+ * `tests/fixtures/substrate-query-response.json`):
+ *   - No header beyond the bearer and the JSON content type is needed. The
+ *     token `substrate-auth.ts` captures off `/searchservice/*` worked (an
+ *     app-GUID audience, ~1.4h lifetime); so did one captured off another
+ *     substrate.office.com path (audience `https://outlook.office.com/`).
+ *   - Body: `cvid`/`logicalId` and `scenario.Name` are REQUIRED (400 without);
+ *     the sort must be `Field: "Time"` with capitalised keys (`DateTime`, or
+ *     `field`/`sortDirection`, is a 400). `size` up to 200 works; `from`
+ *     pages without overlap, newest first.
+ *   - Response: the Teams conversation is `Source.ClientThreadId`;
+ *     `ClientConversationId` is the same plus `;messageid=<root>` for a
+ *     channel post or reply. `InternetMessageId` is the Teams message id
+ *     (equal to the root id on a root post). `Sender` (= `From`) carries a
+ *     display name and an SMTP address — NO MRI, and the address need not be
+ *     the token's UPN, so `fromMe` cannot be decided from a hit. `Preview`
+ *     (= `HitHighlightedSummary`, no highlight markup) is PLAIN TEXT capped
+ *     at ~255 characters; there is no body. `Subject` is set on a channel
+ *     root post with a subject. A query with no hits has no `Results` key.
+ *     `Total` is an estimate (one phrase query said 86 and paged to 11).
+ *   - Matching is Substrate's: words ANDed with stemming ("deploy" matches
+ *     "deployed", "deployment"), `"phrases"`, `OR`; not window-bound (all
+ *     history unless restricted).
+ *   - Server-side restrictions in the query string, ANDed with a
+ *     parenthesised user query: `ClientThreadId:"<conversation id>"` (also
+ *     for `48:notes`) and `sent>=<ISO date-time, UNQUOTED>` (a quoted value
+ *     was mis-read). `from:<word>` exists but matches name/address word
+ *     PREFIXES, not the "display name contains" the tool promises, so `from`
+ *     stays client-side.
+ *   - A bad token is a 401.
  *
  * As with the other clients, the bridge is touched only to capture the token
  * (`substrate-auth.ts`); every request is a plain Node `fetch`.
@@ -39,7 +57,8 @@ import { createSubstrateTokenCache } from './substrate-token-cache.js';
 export const SUBSTRATE_QUERY_URL = 'https://substrate.office.com/searchservice/api/v2/query';
 
 /**
- * How long after a failed capture an unforced search skips straight to failing
+ * How long after a failed capture (or a 401 on a freshly captured token) an
+ * unforced search skips straight to failing
  * (so mode "auto" falls back to the scan at once) instead of holding the call
  * for another capture window. Mode "substrate" forces a fresh attempt.
  */
@@ -74,29 +93,31 @@ async function captureSubstrateTokenLazily(): Promise<string> {
 }
 
 export interface SubstrateSearchRequest {
-  /** Passed to Substrate as the query string, as typed. */
+  /** The user's query, passed through as typed (Substrate's own query syntax: words AND'ed, "phrases", OR). */
   query: string;
   /** Zero-based offset of the page. */
   from: number;
-  /** Results per page. */
+  /** Results per page (verified up to 200). */
   size: number;
+  /** Server-side: only this Teams conversation (`19:…`, `48:notes`), via `ClientThreadId:"…"`. */
+  conversationId?: string;
+  /** Server-side: only messages sent at or after this epoch-ms instant, via `sent>=…` (whole seconds). */
+  sentAfter?: number;
 }
 
 /** One message hit, normalised from a Substrate result. Every field but the conversation is best-effort. */
 export interface SubstrateMessage {
   /** The Teams conversation (`19:…@thread.v2`, `48:notes`, …), without any `;messageid=` suffix. */
   conversationId: string;
+  /** The Teams message id (`InternetMessageId`: the epoch-ms id the chat service uses). */
   messageId?: string;
   /** UTC ISO 8601. */
   time?: string;
   sender?: string;
+  /** The sender's SMTP address. Substrate carries no MRI, so `fromMe` cannot be decided from a hit. */
   senderEmail?: string;
-  /** The sender's MRI (`8:orgid:<oid>`), when the hit carries one. */
-  senderMri?: string;
-  /** The message body (HTML), or the best excerpt of it Substrate returned. */
-  html: string;
-  /** True when `html` is a preview or highlighted summary rather than the whole body. */
-  excerpt?: true;
+  /** Substrate's PLAIN-TEXT preview of the message (not HTML; at most ~255 characters, so often cut short). */
+  text: string;
   subject?: string;
   /** A channel reply's root post id. */
   replyTo?: string;
@@ -104,7 +125,7 @@ export interface SubstrateMessage {
 
 export interface SubstratePage {
   results: SubstrateMessage[];
-  /** Substrate's own estimate of all matches, when it gives one. */
+  /** Substrate's own estimate of all matches (approximate: it can exceed what paging returns). */
   total?: number;
   moreAvailable: boolean;
   /** Results that carried no Teams conversation id (and so were left out). */
@@ -117,7 +138,34 @@ export interface SubstrateSearch {
   searchMessages(req: SubstrateSearchRequest, opts?: { force?: boolean }): Promise<SubstratePage>;
 }
 
-/** The query body. See the module note: best evidence, not observed live. */
+/** `sent>=` takes an unquoted ISO date-time (a quoted one was mis-read live); whole seconds, rounded down. */
+function sentBound(ms: number): string {
+  return new Date(Math.floor(ms / 1000) * 1000).toISOString().replace(/\.000Z$/, 'Z');
+}
+
+/**
+ * The query string: the user's query, ANDed with the verified KQL-style
+ * property restrictions. With a restriction, the user's query is
+ * parenthesised so an `OR` in it cannot escape the filter (verified live).
+ */
+export function buildQueryString(req: Pick<SubstrateSearchRequest, 'query' | 'conversationId' | 'sentAfter'>): string {
+  const filters: string[] = [];
+  if (req.conversationId !== undefined) {
+    if (/["\s]/.test(req.conversationId)) {
+      throw new McpToolError('That conversation id cannot be expressed as a Substrate filter.', { kind: 'unknown' });
+    }
+    filters.push(`ClientThreadId:"${req.conversationId}"`);
+  }
+  if (req.sentAfter !== undefined && Number.isFinite(req.sentAfter)) filters.push(`sent>=${sentBound(req.sentAfter)}`);
+  return filters.length === 0 ? req.query : [`(${req.query})`, ...filters].join(' ');
+}
+
+/**
+ * The query body, as verified live 2026-10-12. Required (400 without them):
+ * `cvid` + `logicalId`, and a `scenario` with a `Name`. `sort` must be
+ * `{ Field: "Time", SortDirection: "Desc" }` — `DateTime`, or lower-case keys,
+ * are a 400.
+ */
 export function buildQueryBody(req: SubstrateSearchRequest): Record<string, unknown> {
   const cvid = crypto.randomUUID();
   return {
@@ -125,12 +173,10 @@ export function buildQueryBody(req: SubstrateSearchRequest): Record<string, unkn
       {
         entityType: 'Message',
         contentSources: ['Teams'],
-        propertySet: 'Optimized',
-        query: { queryString: req.query, displayQueryString: req.query },
+        query: { queryString: buildQueryString(req), displayQueryString: req.query },
         from: req.from,
         size: req.size,
-        sort: [{ field: 'DateTime', sortDirection: 'Desc' }],
-        topResultsCount: 0,
+        sort: [{ Field: 'Time', SortDirection: 'Desc' }],
       },
     ],
     cvid,
@@ -163,36 +209,25 @@ function isoOf(v: unknown): string | undefined {
   return Number.isFinite(ms) ? new Date(ms).toISOString() : undefined;
 }
 
-/** The first non-empty string among an extensions bag's keys ending in `suffix`. */
-function extension(source: Obj, suffix: string): string | undefined {
-  const ext = obj(source.Extensions);
-  if (ext === undefined) return undefined;
-  for (const [k, v] of Object.entries(ext)) if (k.endsWith(suffix) && str(v) !== undefined) return v as string;
-  return undefined;
-}
-
 function mapResult(raw: unknown): SubstrateMessage | undefined {
   const r = obj(raw);
   const source = obj(r?.Source);
   if (r === undefined || source === undefined) return undefined;
 
-  // `19:x@thread.tacv2;messageid=<root>` for a channel thread; a bare id for a chat.
+  // `19:x@thread.tacv2;messageid=<root>` for a channel post or reply; the bare id for a chat.
   const clientConv = str(source.ClientConversationId) ?? str(source.ClientThreadId);
   if (clientConv === undefined) return undefined;
   const [conversationId, ...params] = clientConv.split(';');
   if (str(conversationId) === undefined) return undefined;
   const root = params.map((p) => /^messageid=(.+)$/i.exec(p.trim())?.[1]).find((v) => v !== undefined);
 
-  const messageId = str(source.ClientMessageId) ?? extension(source, '_SkypeMessageId');
-  const from = obj(obj(source.From)?.EmailAddress) ?? obj(obj(source.Sender)?.EmailAddress);
-  const body = str(obj(source.Body)?.Content);
-  const preview = str(source.Preview);
-  const summary = str(r.HitHighlightedSummary) ?? str(r.Summary);
-  const html = body ?? preview ?? summary ?? '';
+  const messageId = str(source.InternetMessageId);
+  // `Sender` and `From` were identical on every hit seen live.
+  const from = obj(obj(source.Sender)?.EmailAddress) ?? obj(obj(source.From)?.EmailAddress);
+  const text = str(source.Preview) ?? str(r.HitHighlightedSummary) ?? '';
   const time = isoOf(source.DateTimeSent) ?? isoOf(source.DateTimeReceived) ?? isoOf(source.DateTimeCreated);
-  const sender = str(from?.Name) ?? str(source.FromName);
+  const sender = str(from?.Name);
   const senderEmail = str(from?.Address);
-  const senderMri = extension(source, '_FromSkypeInternalId');
   const subject = str(source.Subject);
 
   return {
@@ -201,9 +236,7 @@ function mapResult(raw: unknown): SubstrateMessage | undefined {
     ...(time !== undefined ? { time } : {}),
     ...(sender !== undefined ? { sender } : {}),
     ...(senderEmail !== undefined ? { senderEmail } : {}),
-    ...(senderMri !== undefined ? { senderMri } : {}),
-    html,
-    ...(body === undefined ? { excerpt: true as const } : {}),
+    text,
     ...(subject !== undefined ? { subject } : {}),
     ...(root !== undefined && root !== messageId ? { replyTo: root } : {}),
   };
@@ -217,6 +250,7 @@ export function parseQueryResponse(body: unknown): SubstratePage {
   const rs = Array.isArray(resultSets) ? obj(resultSets[0]) : undefined;
   if (rs === undefined) return { results: [], moreAvailable: false, unmapped: 0 };
 
+  // A query with no hits has no `Results` key at all (seen live).
   const raw = Array.isArray(rs.Results) ? rs.Results : [];
   const results: SubstrateMessage[] = [];
   let unmapped = 0;
@@ -244,7 +278,10 @@ export class SubstrateClient implements SubstrateSearch {
   readonly #fetchImpl: typeof fetch;
   readonly #configError: McpToolError | null = null;
   readonly #manager: TokenManager;
-  /** When the last capture failed, and how; cleared by a successful one. */
+  /**
+   * When the last capture failed, or a freshly captured token was still
+   * refused (401), and how; cleared by a successful capture.
+   */
   #captureFailure: { at: number; error: unknown } | null = null;
 
   constructor(opts: SubstrateClientOptions = {}) {
@@ -315,7 +352,15 @@ export class SubstrateClient implements SubstrateSearch {
       return r.res;
     });
 
-    checkStatus(res.status);
+    try {
+      checkStatus(res.status);
+    } catch (error) {
+      // A 401 here is on a token `withAuth` just re-captured: the capture itself
+      // is not yielding a usable token. Cool down like a failed capture, so each
+      // unforced search does not hold the call for another capture window.
+      if (res.status === 401) this.#captureFailure = { at: Date.now(), error };
+      throw error;
+    }
     try {
       return parseQueryResponse(JSON.parse(text));
     } catch {

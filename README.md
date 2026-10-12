@@ -90,11 +90,23 @@ read only from the request header, never from page storage.
   another capture for 10 minutes. `mode: "substrate"` fails instead;
   `mode: "scan"` never touches Substrate.
 
-> **Not yet verified live.** The Substrate endpoint was seen live (2026-10-12),
-> but its token could not be captured to replay it, so the request body and
-> response fields this server uses are best evidence rather than observed
-> fact. Until that is confirmed, expect `auto` to fall back to the scan if
-> Substrate rejects what it is sent.
+- **It does not re-capture in a loop.** If a freshly captured token is still
+  refused (401), the same 10-minute cooldown applies, so `auto` goes straight
+  to the scan instead of waiting on the bridge every call.
+
+> **Verified live 2026-10-12.** A token captured off the Teams tab's own
+> search request (it lives about 1.4 hours) was replayed from Node against
+> read-only queries such as `deploy`. Confirmed: the request body (`cvid`, `logicalId`
+> and a `scenario` are required; the sort is `{ Field: "Time", SortDirection:
+> "Desc" }`), that no header beyond the bearer is needed, the response fields
+> (conversation in `ClientThreadId`, a channel root in `ClientConversationId`'s
+> `;messageid=`, the message id in `InternetMessageId`, sender name and SMTP
+> address but no MRI, a plain-text `Preview` of at most ~255 characters, an
+> approximate `Total`), paging by `from`/`size` (up to 200), and that
+> `conversation` and `since` can be sent server-side as `ClientThreadId:"…"`
+> and an unquoted `sent>=…`. `from` stays client-side: Substrate's own `from:`
+> matches word prefixes, not "display name contains". A redacted response is
+> in `tests/fixtures/substrate-query-response.json`.
 
 ## Install
 
@@ -371,8 +383,8 @@ Everything is optional — by default the token is captured from your browser.
   `include_hidden` every hidden channel is read.
 - `teams_search_messages` — find messages by text across your chats and
   channels, newest first: each hit names its conversation (id, title, kind,
-  team) and carries the message's id, ISO-8601 time, sender, `fromMe`, plain
-  text, subject and `replyTo` (a channel reply's root) — read it in context
+  team) and carries the message's id, ISO-8601 time, sender, `fromMe` (scan
+  only), plain text, subject and `replyTo` (a channel reply's root) — read it in context
   with `teams_read_conversation`. `conversation` narrows to one chat or
   channel (id or name, as in `teams_read_conversation`), `from` to senders
   whose display name contains it, `since` (ISO 8601; default the last 30 days)
@@ -381,12 +393,15 @@ Everything is optional — by default the token is captured from your browser.
   path answered:
   - `"substrate"` (the default, `mode: "auto"`) — Teams' own search through
     [Microsoft Substrate](#substrate-search): matched the way the Teams search
-    box matches, not bound to recent conversations. `conversation`, `from` and
-    `since` are applied to what it returns, 50 results a page, up to 10 pages;
-    a hit whose text is a preview rather than the whole message is marked
-    `excerpt: true`, and `substrate` reports the pages read and how many
-    results the filters dropped. A conversation missing from your listing is
-    named by its id.
+    box matches (words ANDed with stemming, so `deploy` also finds
+    "deployed"; `"quoted phrases"`; `OR`), across all of your conversations
+    rather than the most recent ones. `conversation` and `since` are sent to
+    Substrate itself; `from` is applied to what it returns, 50 results a page,
+    up to 10 pages. Its text is Substrate's plain-text preview of the message
+    (at most ~255 characters), so every hit is marked `excerpt: true`, and its
+    hits carry no `fromMe` (Substrate does not say who you are on a hit).
+    `substrate` reports the pages read and how many results the filters
+    dropped. A conversation missing from your listing is named by its id.
   - `"scan"` — when Substrate is unavailable or fails (`fallback_reason` says
     why), or with `mode: "scan"`. Every word of `query` must appear (any
     order, ignoring case; `"quoted words"` match as a phrase); the

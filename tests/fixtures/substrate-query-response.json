@@ -1,0 +1,274 @@
+{
+  "ApiVersion": "2.0",
+  "SearchTerms": [
+    "deploy"
+  ],
+  "EntitySets": [
+    {
+      "ResultSets": [
+        {
+          "Provenance": "Teams",
+          "ContentSources": [
+            "Teams"
+          ],
+          "Results": [
+            {
+              "Id": "opaque-id-0",
+              "Provenance": "Teams",
+              "ContentSource": "Teams",
+              "ReferenceId": "00000000-0000-4000-8000-000000000000.1000.1",
+              "HitHighlightedSummary": "Has anyone got the staging deploy checklist handy?",
+              "Rank": 1,
+              "SearchKey": "opaque-searchkey-0",
+              "SortOrderSource": "DateTime",
+              "Source": {
+                "Id": "opaque-id-0",
+                "SortOrderSource": "DateTime",
+                "ItemId": {
+                  "Id": "opaque-id-0"
+                },
+                "ImmutableId": "opaque-immutable-0",
+                "AnnouncementTitle": "",
+                "ClientConversationId": "19:channel0001@thread.tacv2;messageid=1791813781971",
+                "ClientThreadId": "19:channel0001@thread.tacv2",
+                "ConversationTopic": "Release planning",
+                "DateTimeCreated": "2026-10-12T14:03:04.3899952Z",
+                "DateTimeReceived": "2026-10-12T14:03:01.971Z",
+                "DateTimeSent": "2026-10-12T14:03:01.971Z",
+                "DisplayTo": "Person Two; Person Three",
+                "HasAttachments": false,
+                "Importance": "Normal",
+                "InternetMessageId": "1791813781971",
+                "ParentFolderDisplayName": "TeamsMessagesData",
+                "Preview": "Has anyone got the staging deploy checklist handy?",
+                "Sender": {
+                  "EmailAddress": {
+                    "Name": "Person 1",
+                    "Address": "person1@example.test"
+                  }
+                },
+                "Subject": "Staging deploy",
+                "ConversationId": {
+                  "Id": "opaque-conversation-0"
+                },
+                "From": {
+                  "EmailAddress": {
+                    "Name": "Person 1",
+                    "Address": "person1@example.test"
+                  }
+                },
+                "MailboxGuids": [
+                  "00000000-0000-0000-0000-000000000000"
+                ],
+                "MentionsPreview": {
+                  "IsMentioned": false
+                },
+                "ChannelName": "General",
+                "TeamName": "Platform Team"
+              },
+              "Type": "Message",
+              "ResultSearchType": "Lexical",
+              "ProviderType": "FanoutTeamsB2"
+            },
+            {
+              "Id": "opaque-id-1",
+              "Provenance": "Teams",
+              "ContentSource": "Teams",
+              "ReferenceId": "00000000-0000-4000-8000-000000000001.1000.1",
+              "HitHighlightedSummary": "Please deploy the service to QA after the review.",
+              "Rank": 2,
+              "SearchKey": "opaque-searchkey-1",
+              "SortOrderSource": "DateTime",
+              "Source": {
+                "Id": "opaque-id-1",
+                "SortOrderSource": "DateTime",
+                "ItemId": {
+                  "Id": "opaque-id-1"
+                },
+                "ImmutableId": "opaque-immutable-1",
+                "AnnouncementTitle": "",
+                "ClientConversationId": "19:channel0002@thread.tacv2;messageid=1791790117331",
+                "ClientThreadId": "19:channel0002@thread.tacv2",
+                "DateTimeCreated": "2026-10-12T13:44:19.9297993Z",
+                "DateTimeReceived": "2026-10-12T13:44:18.351Z",
+                "DateTimeSent": "2026-10-12T13:44:18.351Z",
+                "DisplayTo": "Person Two; Person Three",
+                "HasAttachments": false,
+                "Importance": "Normal",
+                "InternetMessageId": "1791812658351",
+                "ParentFolderDisplayName": "TeamsMessagesData",
+                "Preview": "Please deploy the service to QA after the review.",
+                "Sender": {
+                  "EmailAddress": {
+                    "Name": "Person 2",
+                    "Address": "person2@example.test"
+                  }
+                },
+                "Subject": "",
+                "ConversationId": {
+                  "Id": "opaque-conversation-1"
+                },
+                "From": {
+                  "EmailAddress": {
+                    "Name": "Person 2",
+                    "Address": "person2@example.test"
+                  }
+                },
+                "MailboxGuids": [
+                  "00000000-0000-0000-0000-000000000000"
+                ],
+                "MentionsPreview": {
+                  "IsMentioned": false
+                },
+                "ChannelName": "General",
+                "TeamName": "Platform Team",
+                "ConversationTopic": ""
+              },
+              "Type": "Message",
+              "ResultSearchType": "Lexical",
+              "ProviderType": "FanoutTeamsB2"
+            },
+            {
+              "Id": "opaque-id-2",
+              "Provenance": "Teams",
+              "ContentSource": "Teams",
+              "ReferenceId": "00000000-0000-4000-8000-000000000002.1000.1",
+              "HitHighlightedSummary": "They have been deployed to QA last week.",
+              "Rank": 4,
+              "SearchKey": "opaque-searchkey-2",
+              "SortOrderSource": "DateTime",
+              "Source": {
+                "Id": "opaque-id-2",
+                "SortOrderSource": "DateTime",
+                "ItemId": {
+                  "Id": "opaque-id-2"
+                },
+                "ImmutableId": "opaque-immutable-2",
+                "AnnouncementTitle": "",
+                "ClientConversationId": "19:group0003@thread.v2",
+                "ClientThreadId": "19:group0003@thread.v2",
+                "DateTimeCreated": "2026-10-12T13:31:13.5078844Z",
+                "DateTimeReceived": "2026-10-12T13:31:10.502Z",
+                "DateTimeSent": "2026-10-12T13:31:10.502Z",
+                "DisplayTo": "Person Two; Person Three",
+                "HasAttachments": false,
+                "Importance": "Normal",
+                "InternetMessageId": "1791811870502",
+                "ParentFolderDisplayName": "TeamsMessagesData",
+                "Preview": "They have been deployed to QA last week.",
+                "Sender": {
+                  "EmailAddress": {
+                    "Name": "Person 3",
+                    "Address": "person3@example.test"
+                  }
+                },
+                "Subject": "",
+                "ConversationId": {
+                  "Id": "opaque-conversation-2"
+                },
+                "From": {
+                  "EmailAddress": {
+                    "Name": "Person 3",
+                    "Address": "person3@example.test"
+                  }
+                },
+                "MailboxGuids": [
+                  "00000000-0000-0000-0000-000000000000"
+                ],
+                "MentionsPreview": {
+                  "IsMentioned": false
+                },
+                "ConversationTopic": "",
+                "ChannelName": "",
+                "TeamName": ""
+              },
+              "Type": "Message",
+              "ResultSearchType": "Lexical",
+              "ProviderType": "FanoutTeamsB2"
+            },
+            {
+              "Id": "opaque-id-3",
+              "Provenance": "Teams",
+              "ContentSource": "Teams",
+              "ReferenceId": "00000000-0000-4000-8000-000000000003.1000.1",
+              "HitHighlightedSummary": "note to self: deploy notes",
+              "Rank": 1,
+              "SearchKey": "opaque-searchkey-3",
+              "SortOrderSource": "DateTime",
+              "Source": {
+                "Id": "opaque-id-3",
+                "SortOrderSource": "DateTime",
+                "ItemId": {
+                  "Id": "opaque-id-3"
+                },
+                "ImmutableId": "opaque-immutable-3",
+                "AnnouncementTitle": "",
+                "ClientConversationId": "48:notes",
+                "ClientThreadId": "48:notes",
+                "DateTimeCreated": "2026-10-12T15:10:57.9924458Z",
+                "DateTimeReceived": "2026-10-12T15:10:56.736Z",
+                "DateTimeSent": "2026-10-12T15:10:56.736Z",
+                "DisplayTo": "Person Two; Person Three",
+                "HasAttachments": false,
+                "Importance": "Normal",
+                "InternetMessageId": "1791817856736",
+                "ParentFolderDisplayName": "TeamsMessagesData",
+                "Preview": "note to self: deploy notes",
+                "Sender": {
+                  "EmailAddress": {
+                    "Name": "Me Myself",
+                    "Address": "me@example.test"
+                  }
+                },
+                "Subject": "",
+                "ConversationId": {
+                  "Id": "opaque-conversation-3"
+                },
+                "From": {
+                  "EmailAddress": {
+                    "Name": "Me Myself",
+                    "Address": "me@example.test"
+                  }
+                },
+                "MailboxGuids": [
+                  "00000000-0000-0000-0000-000000000000"
+                ],
+                "MentionsPreview": {
+                  "IsMentioned": false
+                },
+                "ConversationTopic": "",
+                "ChannelName": "",
+                "TeamName": ""
+              },
+              "Type": "Message",
+              "ResultSearchType": "Lexical",
+              "ProviderType": "FanoutTeamsB2"
+            }
+          ],
+          "Total": 4821,
+          "TotalWithoutCollapsing": 4821,
+          "MoreResultsAvailable": true,
+          "QueryId": "00000000-0000-4000-8000-000000000999",
+          "Rank": 0,
+          "Properties": {
+            "RenderTemplateId": "~sitecollection/_catalogs/masterpage/Display Templates/Search/Group_Default.js"
+          }
+        }
+      ],
+      "EntityType": "Message",
+      "SearchTerms": [
+        "deploy"
+      ],
+      "Properties": {
+        "WordBreakerLanguage": "en",
+        "HasParseException": false
+      },
+      "QueryId": "00000000-0000-4000-8000-000000000999",
+      "IsPartial": true
+    }
+  ],
+  "RestrictedSearchMode": "Off",
+  "Instrumentation": {
+    "TraceId": "00000000-0000-4000-8000-000000000998"
+  }
+}

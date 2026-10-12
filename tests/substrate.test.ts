@@ -1,9 +1,11 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { McpToolError } from '@chrischall/mcp-utils';
 import {
   SubstrateClient,
   SUBSTRATE_QUERY_URL,
   buildQueryBody,
+  buildQueryString,
   parseQueryResponse,
   CAPTURE_RETRY_COOLDOWN_MS,
 } from '../src/substrate.js';
@@ -23,13 +25,12 @@ function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 }
 
-const CHAT = '19:group0001@thread.v2';
-const CHANNEL = '19:chan0001@thread.tacv2';
+/** A real response (2026-10-12), redacted: names, addresses, text and ids are placeholders. */
+const FIXTURE = JSON.parse(
+  readFileSync(new URL('./fixtures/substrate-query-response.json', import.meta.url), 'utf8'),
+) as { EntitySets: { ResultSets: { Results: { Source: Record<string, unknown> }[] }[] }[] };
 
-/** One Substrate result, in the shape the client parses (invented values only). */
-function result(source: Record<string, unknown>, summary = 'the <c0>deploy</c0> is done'): Record<string, unknown> {
-  return { Id: 'opaque-id', ReferenceId: 'opaque-ref', HitHighlightedSummary: summary, Source: source };
-}
+const CHAT = '19:group0001@thread.v2';
 
 function responseOf(results: unknown[], extra: Record<string, unknown> = {}): unknown {
   return { EntitySets: [{ ResultSets: [{ Total: results.length, MoreResultsAvailable: false, Results: results, ...extra }] }] };
@@ -40,96 +41,120 @@ function client(fetchImpl: FetchMock, capture: () => Promise<string> = async () 
 }
 
 describe('buildQueryBody', () => {
-  it('asks for Teams messages, newest first, one page at from/size', () => {
+  it('asks for Teams messages, newest first by Time, one page at from/size, with the required cvid and scenario', () => {
     const body = buildQueryBody({ query: 'deploy plan', from: 50, size: 25 }) as {
       entityRequests: Record<string, unknown>[];
+      cvid: string;
+      logicalId: string;
+      scenario: { Name: string };
     };
     expect(body.entityRequests).toHaveLength(1);
-    expect(body.entityRequests[0]).toMatchObject({
+    expect(body.entityRequests[0]).toEqual({
       entityType: 'Message',
       contentSources: ['Teams'],
-      query: { queryString: 'deploy plan' },
+      query: { queryString: 'deploy plan', displayQueryString: 'deploy plan' },
       from: 50,
       size: 25,
-      sort: [{ field: 'DateTime', sortDirection: 'Desc' }],
+      sort: [{ Field: 'Time', SortDirection: 'Desc' }],
     });
+    expect(body.cvid).toMatch(/^[0-9a-f-]{36}$/);
+    expect(body.logicalId).toBe(body.cvid);
+    expect(body.scenario.Name).toBe('powerbar');
+  });
+
+  it('shows the user their own query, not the filtered one', () => {
+    const body = buildQueryBody({ query: 'deploy', from: 0, size: 5, conversationId: CHAT }) as {
+      entityRequests: { query: { queryString: string; displayQueryString: string } }[];
+    };
+    expect(body.entityRequests[0].query.displayQueryString).toBe('deploy');
+    expect(body.entityRequests[0].query.queryString).toContain('ClientThreadId:');
   });
 });
 
-describe('parseQueryResponse', () => {
-  it('maps a chat hit: conversation, message id, time, sender, body', () => {
-    const page = parseQueryResponse(
-      responseOf([
-        result({
-          ClientConversationId: CHAT,
-          ClientMessageId: '1760000000000',
-          DateTimeSent: '2025-10-09T08:53:20Z',
-          DateTimeReceived: '2025-10-09T08:53:21Z',
-          From: { EmailAddress: { Name: 'Ada Example', Address: 'ada@example.test' } },
-          Preview: 'The deploy is done',
-        }),
-      ]),
+describe('buildQueryString', () => {
+  it('passes an unrestricted query through as typed', () => {
+    expect(buildQueryString({ query: 'deploy OR "release plan"' })).toBe('deploy OR "release plan"');
+  });
+
+  it('restricts to one conversation with a quoted ClientThreadId, parenthesising the query', () => {
+    expect(buildQueryString({ query: 'deploy OR ship', conversationId: '48:notes' })).toBe('(deploy OR ship) ClientThreadId:"48:notes"');
+  });
+
+  it('restricts by time with an UNQUOTED sent>= in whole seconds, rounded down', () => {
+    expect(buildQueryString({ query: 'deploy', sentAfter: Date.parse('2026-10-12T13:40:00.900Z') })).toBe(
+      '(deploy) sent>=2026-10-12T13:40:00Z',
     );
-    expect(page.results).toEqual([
-      {
-        conversationId: CHAT,
-        messageId: '1760000000000',
-        time: '2025-10-09T08:53:20.000Z',
-        sender: 'Ada Example',
-        senderEmail: 'ada@example.test',
-        html: 'The deploy is done',
-        excerpt: true,
-      },
-    ]);
-    expect(page.moreAvailable).toBe(false);
-    expect(page.total).toBe(1);
   });
 
-  it('prefers the full body over the preview, and the preview over the highlighted summary', () => {
-    const [withBody, withSummary] = parseQueryResponse(
-      responseOf([
-        result({ ClientConversationId: CHAT, Body: { Content: '<p>full <b>body</b></p>' }, Preview: 'full body' }),
-        result({ ClientConversationId: CHAT }, 'only <c0>summary</c0>'),
-      ]),
-    ).results;
-    expect(withBody).toMatchObject({ html: '<p>full <b>body</b></p>' });
-    expect(withBody).not.toHaveProperty('excerpt');
-    expect(withSummary).toMatchObject({ html: 'only <c0>summary</c0>', excerpt: true });
+  it('combines both', () => {
+    expect(buildQueryString({ query: 'deploy', conversationId: CHAT, sentAfter: Date.parse('2026-10-01T00:00:00Z') })).toBe(
+      `(deploy) ClientThreadId:"${CHAT}" sent>=2026-10-01T00:00:00Z`,
+    );
   });
 
-  it("reads a channel reply's root off the conversation id's ;messageid= suffix", () => {
-    const [reply, root] = parseQueryResponse(
-      responseOf([
-        result({ ClientConversationId: `${CHANNEL};messageid=1759000000000`, ClientMessageId: '1759000000500', Subject: 'Release' }),
-        result({ ClientConversationId: `${CHANNEL};messageid=1759000000000`, ClientMessageId: '1759000000000' }),
-      ]),
-    ).results;
-    expect(reply).toMatchObject({ conversationId: CHANNEL, replyTo: '1759000000000', subject: 'Release' });
-    expect(root.conversationId).toBe(CHANNEL);
-    expect(root).not.toHaveProperty('replyTo');
+  it('refuses a conversation id that would break out of the quoted filter', () => {
+    expect(() => buildQueryString({ query: 'x', conversationId: '19:a" OR "b' })).toThrow(McpToolError);
+  });
+});
+
+describe('parseQueryResponse (real, redacted response)', () => {
+  const page = parseQueryResponse(FIXTURE);
+
+  it('reads Total and MoreResultsAvailable', () => {
+    expect(page).toMatchObject({ total: 4821, moreAvailable: true, unmapped: 0 });
+    expect(page.results).toHaveLength(4);
   });
 
-  it('carries the sender MRI when the hit has one, so fromMe can be decided', () => {
-    const [hit] = parseQueryResponse(
-      responseOf([
-        result({
-          ClientConversationId: CHAT,
-          Extensions: { SkypeSpaces_ConversationPost_Extension_FromSkypeInternalId: '8:orgid:abc' },
-        }),
-      ]),
-    ).results;
-    expect(hit.senderMri).toBe('8:orgid:abc');
+  it('maps a channel root post: thread id, message id, subject, no replyTo', () => {
+    expect(page.results[0]).toEqual({
+      conversationId: '19:channel0001@thread.tacv2',
+      messageId: '1791813781971',
+      time: '2026-10-12T14:03:01.971Z',
+      sender: 'Person 1',
+      senderEmail: 'person1@example.test',
+      text: 'Has anyone got the staging deploy checklist handy?',
+      subject: 'Staging deploy',
+    });
+  });
+
+  it("maps a channel reply, reading its root off ClientConversationId's ;messageid=", () => {
+    expect(page.results[1]).toMatchObject({
+      conversationId: '19:channel0002@thread.tacv2',
+      messageId: '1791812658351',
+      replyTo: '1791790117331',
+      text: 'Please deploy the service to QA after the review.',
+    });
+    expect(page.results[1]).not.toHaveProperty('subject');
+  });
+
+  it('maps a group chat hit and a self-chat hit by their bare conversation id', () => {
+    expect(page.results[2]).toMatchObject({ conversationId: '19:group0003@thread.v2', messageId: '1791811870502', sender: 'Person 3' });
+    expect(page.results[2]).not.toHaveProperty('replyTo');
+    expect(page.results[3]).toMatchObject({ conversationId: '48:notes', sender: 'Me Myself' });
+  });
+
+  it('keeps the preview as plain text, never treating it as HTML', () => {
+    const raw = structuredClone(FIXTURE);
+    raw.EntitySets[0].ResultSets[0].Results[0].Source.Preview = 'use <b> for bold & keep it';
+    expect(parseQueryResponse(raw).results[0].text).toBe('use <b> for bold & keep it');
   });
 
   it('counts a hit with no Teams conversation id as unmapped rather than inventing one', () => {
-    const page = parseQueryResponse(responseOf([result({ Subject: 'an email' }), result({ ClientConversationId: CHAT })]));
-    expect(page.results).toHaveLength(1);
-    expect(page.unmapped).toBe(1);
+    const raw = structuredClone(FIXTURE);
+    delete raw.EntitySets[0].ResultSets[0].Results[0].Source.ClientConversationId;
+    delete raw.EntitySets[0].ResultSets[0].Results[0].Source.ClientThreadId;
+    const p = parseQueryResponse(raw);
+    expect(p.results).toHaveLength(3);
+    expect(p.unmapped).toBe(1);
   });
 
-  it('reads MoreResultsAvailable and Total', () => {
-    const page = parseQueryResponse(responseOf([], { Total: 340, MoreResultsAvailable: true }));
-    expect(page).toMatchObject({ total: 340, moreAvailable: true, results: [] });
+  it('treats a result set with no Results key (a query with no hits, as seen live) as empty', () => {
+    expect(parseQueryResponse({ EntitySets: [{ ResultSets: [{ Total: 0, MoreResultsAvailable: false }] }] })).toEqual({
+      results: [],
+      total: 0,
+      moreAvailable: false,
+      unmapped: 0,
+    });
   });
 
   it('treats a response with no result sets as an empty page', () => {
@@ -163,6 +188,45 @@ describe('SubstrateClient.searchMessages', () => {
     await client(fetchImpl, capture).searchMessages({ query: 'deploy', from: 0, size: 25 });
     expect(capture).toHaveBeenCalledTimes(2);
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('after a 401 on a freshly captured token, does not re-capture again for a cooldown unless forced', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const capture = vi.fn(async () => jwt());
+      const fetchImpl: FetchMock = vi.fn(async () => new Response('', { status: 401 }));
+      const c = client(fetchImpl, capture);
+      await expect(c.searchMessages({ query: 'x', from: 0, size: 25 })).rejects.toMatchObject({ status: 401, kind: 'credential_rejected' });
+      expect(capture).toHaveBeenCalledTimes(2); // the initial capture and the one re-capture on 401
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+
+      // Inside the cooldown: fails at once — no capture, no request.
+      await expect(c.searchMessages({ query: 'x', from: 0, size: 25 })).rejects.toMatchObject({ status: 401 });
+      expect(capture).toHaveBeenCalledTimes(2);
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+
+      // Forced (mode "substrate"): tries again, re-capturing on the 401.
+      await expect(c.searchMessages({ query: 'x', from: 0, size: 25 }, { force: true })).rejects.toMatchObject({ status: 401 });
+      expect(capture).toHaveBeenCalledTimes(3);
+
+      // After the cooldown, an unforced call tries again too.
+      vi.setSystemTime(Date.now() + CAPTURE_RETRY_COOLDOWN_MS + 1);
+      await expect(c.searchMessages({ query: 'x', from: 0, size: 25 })).rejects.toMatchObject({ status: 401 });
+      expect(capture).toHaveBeenCalledTimes(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a 401 that a re-capture cures sets no cooldown', async () => {
+    const capture = vi.fn(async () => jwt());
+    const fetchImpl: FetchMock = vi.fn();
+    fetchImpl.mockResolvedValueOnce(new Response('', { status: 401 }));
+    fetchImpl.mockImplementation(async () => json(responseOf([])));
+    const c = client(fetchImpl, capture);
+    await c.searchMessages({ query: 'x', from: 0, size: 25 });
+    await c.searchMessages({ query: 'x', from: 0, size: 25 });
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
   });
 
   it('maps a non-2xx to an McpToolError with its status and no body', async () => {

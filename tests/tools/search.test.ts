@@ -339,6 +339,19 @@ describe('teams_search_messages', () => {
     }
   });
 
+  it('describes since as applying to both paths and the every-word rule as the scan\'s alone', async () => {
+    const harness = await createTestHarness((server) => registerSearchTools(server, { chatsvc: chatsvcWith() }));
+    try {
+      const tool = (await harness.client.listTools()).tools.find((t) => t.name === 'teams_search_messages');
+      expect(tool?.description).not.toMatch(/window-bound/);
+      expect(tool?.description).toMatch(/conversation and since apply to it too/);
+      const query = (tool?.inputSchema.properties as Record<string, { description?: string }>).query;
+      expect(query.description).toMatch(/The scan requires every word/);
+    } finally {
+      await harness.close();
+    }
+  });
+
   it('rejects a since that is not a date-time', async () => {
     const { result } = await call(chatsvcWith(), { query: 'deploy', since: 'last tuesday' });
     expect(result.isError).toBe(true);
@@ -371,7 +384,7 @@ function sub(at: number, conv: string, extra: Partial<SubstrateMessage> = {}): S
     messageId: String(at),
     time: new Date(at).toISOString(),
     sender: 'Ada Example',
-    html: '<p>the <b>deploy</b> is done</p>',
+    text: 'the deploy is done',
     ...extra,
   };
 }
@@ -381,8 +394,8 @@ describe('teams_search_messages via Substrate', () => {
     pinClock(NOW);
     const chatsvc = chatsvcWith();
     const substrate = fakeSubstrate([
-      sub(NOW - 1 * MIN, GROUP, { senderMri: ME, sender: 'Me Myself' }),
-      sub(NOW - 3 * DAY, CHANNEL, { replyTo: String(NOW - 4 * DAY), subject: 'Release', excerpt: true }),
+      sub(NOW - 1 * MIN, GROUP, { sender: 'Me Myself', senderEmail: 'me@example.test', text: 'use <b> literally' }),
+      sub(NOW - 3 * DAY, CHANNEL, { replyTo: String(NOW - 4 * DAY), subject: 'Release' }),
     ]);
     const { data } = await call(chatsvc, { query: 'deploy' }, substrate);
 
@@ -393,7 +406,8 @@ describe('teams_search_messages via Substrate', () => {
     const hits = data?.hits as Hit[];
     expect(hits[0]).toEqual({
       conversation: { id: GROUP, title: 'Project Falcon', kind: 'group' },
-      message: { id: String(NOW - 1 * MIN), time: new Date(NOW - 1 * MIN).toISOString(), sender: 'Me Myself', fromMe: true, text: 'the deploy is done' },
+      // Plain text kept as is; no fromMe (a hit carries no MRI); always an excerpt.
+      message: { id: String(NOW - 1 * MIN), time: new Date(NOW - 1 * MIN).toISOString(), sender: 'Me Myself', text: 'use <b> literally', excerpt: true },
     });
     expect(hits[1]).toEqual({
       conversation: { id: CHANNEL, title: 'Design', kind: 'channel', team: 'Platform Team' },
@@ -401,7 +415,6 @@ describe('teams_search_messages via Substrate', () => {
         id: String(NOW - 3 * DAY),
         time: new Date(NOW - 3 * DAY).toISOString(),
         sender: 'Ada Example',
-        fromMe: false,
         text: 'the deploy is done',
         excerpt: true,
         subject: 'Release',
@@ -409,7 +422,7 @@ describe('teams_search_messages via Substrate', () => {
       },
     });
     expect(data?.substrate).toMatchObject({ pages_read: 1, results_read: 2 });
-    expect(substrate.searchMessages.mock.calls[0][0]).toMatchObject({ query: 'deploy', from: 0 });
+    expect(substrate.searchMessages.mock.calls[0][0]).toEqual({ query: 'deploy', from: 0, size: 50, sentAfter: NOW - 30 * DAY });
   });
 
   it('names a conversation missing from the listing by its id and a kind read off the id', async () => {
@@ -418,7 +431,7 @@ describe('teams_search_messages via Substrate', () => {
     expect((data?.hits as Hit[])[0].conversation).toEqual({ id: '19:gone0001@thread.tacv2', title: '19:gone0001@thread.tacv2', kind: 'channel' });
   });
 
-  it('applies since client-side, and stops paging once a whole page is older than it', async () => {
+  it('sends since server-side, re-checks it, and stops paging once a whole page is older than it', async () => {
     pinClock(NOW);
     const results = [
       ...Array.from({ length: 50 }, (_, i) => sub(NOW - (i + 1) * MIN, GROUP)),
@@ -442,14 +455,20 @@ describe('teams_search_messages via Substrate', () => {
     expect((data?.hits as Hit[]).map((h) => h.message.sender)).toEqual(['Bob Example']);
   });
 
-  it('narrows to one named conversation', async () => {
+  it('narrows to one named conversation server-side (and re-checks it), never falling to the scan', async () => {
     pinClock(NOW);
-    const { data } = await call(
-      chatsvcWith(),
-      { query: 'deploy', conversation: 'launch' },
-      fakeSubstrate([sub(NOW - MIN, GROUP), sub(NOW - 2 * DAY, OTHER_GROUP)]),
-    );
+    const chatsvc = chatsvcWith();
+    const substrate = fakeSubstrate([sub(NOW - MIN, GROUP), sub(NOW - 2 * DAY, OTHER_GROUP)]);
+    const since = new Date(NOW - 7 * DAY).toISOString();
+    const { data } = await call(chatsvc, { query: 'deploy', conversation: 'launch', since }, substrate);
+    expect(data?.source).toBe('substrate');
     expect((data?.hits as Hit[]).map((h) => h.conversation.id)).toEqual([OTHER_GROUP]);
+    expect(substrate.searchMessages.mock.calls[0][0]).toMatchObject({
+      query: 'deploy',
+      conversationId: OTHER_GROUP,
+      sentAfter: NOW - 7 * DAY,
+    });
+    expect(vi.mocked(chatsvc.getMessages)).not.toHaveBeenCalled();
   });
 
   it('pages until limit is filled and says when there were more', async () => {
@@ -461,6 +480,15 @@ describe('teams_search_messages via Substrate', () => {
     expect(substrate.searchMessages.mock.calls.map(([r]) => (r as SubstrateSearchRequest).from)).toEqual([0, 50]);
     expect(data?.truncated).toMatchObject({ returned: 60 });
     expect(data?.total_hits).toBe(120);
+  });
+
+  it('reports an exact count, not Substrate\'s estimate, once Substrate has run out', async () => {
+    pinClock(NOW);
+    // Live, a phrase query said Total 86 and paged to 11 with MoreResultsAvailable false.
+    const substrate = fakeSubstrate([sub(NOW - MIN, GROUP), sub(NOW - 2 * MIN, GROUP)], { total: 86 });
+    const { data } = await call(chatsvcWith(), { query: 'deploy' }, substrate);
+    expect(data?.total_hits).toBe(2);
+    expect(data).not.toHaveProperty('truncated');
   });
 
   it('reports Substrate\'s own total only when no client-side filter applied', async () => {

@@ -5,21 +5,19 @@
  * Two paths, chosen by `mode` ("auto" by default):
  *
  * 1. SUBSTRATE (primary). Teams' own search box searches through Microsoft
- *    Substrate — `POST https://substrate.office.com/searchservice/api/v2/query`
- *    (seen live 2026-10-12, 200). `substrate.ts` is the client; its token is a
- *    third one, captured off the Teams tab's own search request
- *    (`substrate-auth.ts`) and cached in `substrate-token.json`. Hits are mapped
- *    to the same shape the scan returns; `since`, `from` and `conversation` are
- *    applied client-side to what Substrate returns (no server-side filter
- *    syntax has been verified), paging {@link SUBSTRATE_PAGE_SIZE} at a time
- *    until `limit` is filled, Substrate runs out, a whole page falls before
- *    `since`, or {@link MAX_SUBSTRATE_PAGES} pages were read.
- *
- *    NOT VERIFIED LIVE: the token could not be captured on 2026-10-12 (the
- *    fetchproxy server refused the answering extension: its identity did not
- *    match the one this MCP had pinned, and re-pinning is the user's call), so
- *    the request body and response fields are best evidence — see
- *    `substrate.ts`. That is why "auto" falls back to the scan on ANY Substrate
+ *    Substrate — `POST https://substrate.office.com/searchservice/api/v2/query`.
+ *    `substrate.ts` is the client; its token is a third one, captured off the
+ *    Teams tab's own search request (`substrate-auth.ts`) and cached in
+ *    `substrate-token.json`. Verified live 2026-10-12 (see `substrate.ts` for
+ *    the request and response shapes): `conversation` and `since` are sent
+ *    SERVER-SIDE (`ClientThreadId:"…"`, `sent>=…`), and also re-checked here;
+ *    `from` is applied client-side, because Substrate's `from:` matches word
+ *    prefixes rather than "display name contains". Pages of
+ *    {@link SUBSTRATE_PAGE_SIZE} are read until `limit` is filled, Substrate
+ *    runs out, a whole page falls before `since`, or
+ *    {@link MAX_SUBSTRATE_PAGES} pages were read. Hit text is Substrate's
+ *    plain-text preview (`excerpt: true`), and hits carry no `fromMe` (no
+ *    sender MRI). "auto" still falls back to the scan on ANY Substrate
  *    failure, reporting `fallback_reason`.
  *
  * 2. SCAN (fallback, or `mode: "scan"`). The chat service has no search
@@ -49,7 +47,6 @@ import type { TeamsDeps } from '../deps.js';
 import {
   conversationKind,
   conversationSummary,
-  htmlToText,
   isUserMessage,
   newestActivityMs,
   normaliseMessage,
@@ -124,13 +121,14 @@ type HitMessage = Omit<NormalisedMessage, 'attachments' | 'reactions' | 'deleted
 
 /**
  * A Substrate hit's message: the scan's fields, less what Substrate may not
- * say (`id`, `time`, `edited`), plus `excerpt` when the text is a preview or
- * highlighted summary rather than the whole body.
+ * say (`id`, `time`) or never says (`edited`, `fromMe` — a hit carries no
+ * MRI), plus `excerpt: true`, since its text is always Substrate's plain-text
+ * preview (at most ~255 characters), never the whole body.
  */
-type SubstrateHitMessage = Omit<HitMessage, 'id' | 'time' | 'edited' | 'time_local'> & {
+type SubstrateHitMessage = Omit<HitMessage, 'id' | 'time' | 'edited' | 'time_local' | 'fromMe'> & {
   id?: string;
   time?: string;
-  excerpt?: true;
+  excerpt: true;
 };
 
 interface Hit {
@@ -168,15 +166,16 @@ export function registerSearchTools(
       description:
         'Find messages by text across the chats and channels the signed-in user is in. Hits come ' +
         'newest first, each with its conversation (id, title, kind, team) and the message (id, time ' +
-        'ISO 8601, sender, fromMe, text, subject, replyTo for a channel reply); read a hit in context ' +
+        'ISO 8601, sender, fromMe (scan only), text, subject, replyTo for a channel reply); read a hit in context ' +
         'with teams_read_conversation. conversation narrows to one chat or channel (id or name); from ' +
         'keeps messages whose sender display name contains it; since (ISO 8601) sets how far back to ' +
         `look (default the last ${DEFAULT_SINCE_DAYS} days); limit caps the hits (default ` +
         `${DEFAULT_LIMIT}, max ${MAX_LIMIT}; total_hits and truncated say when there were more). ` +
         'source says which path answered. mode "auto" (default) uses Teams\' own search (Microsoft ' +
-        'Substrate: matched the way the Teams search box matches, fast, not window-bound; text may be an ' +
-        'excerpt, marked excerpt: true) and falls back to a scan, with fallback_reason, when Substrate ' +
-        'is unavailable or fails — its token is captured from a Teams tab the first time, so a first ' +
+        'Substrate: matched the way the Teams search box matches — words ANDed with stemming, "quoted ' +
+        'phrases", OR — and fast; conversation and since apply to it too; its text is a plain-text preview ' +
+        'of up to ~255 characters, marked excerpt: true, and its hits carry no fromMe) and falls back to a ' +
+        'scan, with fallback_reason, when Substrate is unavailable or fails — its token is captured from a Teams tab the first time, so a first ' +
         'search may need you to run any search in the Teams search box. mode "substrate" uses only ' +
         'Substrate (an error rather than a fallback); mode "scan" only scans. The SCAN requires every ' +
         'word of query to appear in the message text (any order, ignoring case; "quoted words" match ' +
@@ -193,8 +192,9 @@ export function registerSearchTools(
           .string()
           .refine((s) => queryTerms(s).length > 0, { message: 'query must contain a word to search for' })
           .describe(
-            'Words to find in the message text, ignoring case; every word must appear. Wrap words in ' +
-              'double quotes to match them as one phrase.',
+            'Words to find in the message text, ignoring case. Substrate (the default) matches the way the ' +
+              'Teams search box does (words ANDed with stemming, "quoted phrases", OR). The scan requires ' +
+              'every word to appear verbatim, any order; words in double quotes match as one phrase.',
           ),
         conversation: z
           .string()
@@ -326,7 +326,17 @@ async function substrateSearch(
   let more = false;
 
   for (let offset = 0; pages < MAX_SUBSTRATE_PAGES; offset += SUBSTRATE_PAGE_SIZE) {
-    const page = await substrate.searchMessages({ query, from: offset, size: SUBSTRATE_PAGE_SIZE }, force ? { force } : undefined);
+    const page = await substrate.searchMessages(
+      {
+        query,
+        from: offset,
+        size: SUBSTRATE_PAGE_SIZE,
+        // Both restrictions are verified server-side; the checks below stay as a backstop.
+        ...(target !== undefined ? { conversationId: target.id } : {}),
+        sentAfter: cutoff,
+      },
+      force ? { force } : undefined,
+    );
     pages++;
     resultsRead += page.results.length;
     unmapped += page.unmapped;
@@ -367,16 +377,17 @@ async function substrateSearch(
       ...(hit.messageId !== undefined ? { id: hit.messageId } : {}),
       ...(hit.time !== undefined ? { time: hit.time } : {}),
       sender: hit.sender ?? '',
-      fromMe: hit.senderMri !== undefined && hit.senderMri === me,
-      text: htmlToText(hit.html),
-      ...(hit.excerpt ? { excerpt: true as const } : {}),
+      // No fromMe: a Substrate hit names its sender by display name and SMTP address only.
+      text: hit.text,
+      excerpt: true as const,
       ...(hit.subject !== undefined ? { subject: hit.subject } : {}),
       ...(hit.replyTo !== undefined ? { replyTo: hit.replyTo } : {}),
     },
   }));
 
-  // Substrate's own count is only meaningful when nothing was filtered out of what it returned.
-  const totalHits = filteredOut === 0 && total !== undefined ? Math.max(total, found.length) : found.length;
+  // Exact when Substrate ran out; otherwise its own (approximate) count, which
+  // only means anything when nothing was filtered out of what it returned.
+  const totalHits = more && filteredOut === 0 && total !== undefined ? Math.max(total, found.length) : found.length;
   const sinceIso = new Date(cutoff).toISOString();
   const pageCapped = pages >= MAX_SUBSTRATE_PAGES && more && found.length <= cap;
 

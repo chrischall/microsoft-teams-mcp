@@ -16,12 +16,13 @@
  * off one of those could fail on the search API in ways that look like a
  * Substrate outage.
  *
- * NOT YET VERIFIED LIVE (2026-10-12): the capture attempt never reached the
- * extension — the fetchproxy server refused the answering extension because its
- * identity did not match the one `microsoft-teams-mcp` had pinned (re-pairing
- * needs `FETCHPROXY_TRUST_NEW_EXTENSION=1`, the user's call). The search
- * request itself was seen live (`POST /searchservice/api/v2/query`), so the
- * host and path are known; the token's audience and lifetime are not.
+ * Verified live 2026-10-12: after a one-time pair approval in the ContextMint
+ * Bridge popup (the `substrate.office.com` scope), running any search in the
+ * Teams search box during the capture window yielded a token off
+ * `/searchservice/*` (an app-GUID audience, ~1.4h lifetime) that
+ * `substrate.ts` replayed successfully from Node. Until the pair is approved,
+ * the capture fails fast with "pairing required" and search falls back to the
+ * scan.
  *
  * Import this module LAZILY (`await import('./substrate-auth.js')`), as
  * `sharepoint-auth.ts` is, so a server run with `TEAMS_DISABLE_FETCHPROXY`
