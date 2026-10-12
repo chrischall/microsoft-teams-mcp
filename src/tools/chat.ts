@@ -111,7 +111,7 @@ export function registerChatTools(server: McpServer, { chatsvc }: Pick<TeamsDeps
         ' since / until (ISO 8601 date-times) keep chats whose last activity falls in that window; ' +
         'sort picks the order: activity (default, as above), activity_only (most recent first, ' +
         'ignoring favorites and pinned) or title (alphabetical, case-insensitive).' +
-        ' Listing never marks anything read. Channels are listed by teams_list_teams_and_channels instead.' +
+        ' Listing never marks anything read (teams_mark_read does). Channels are listed by teams_list_teams_and_channels instead.' +
         UNTRUSTED_DESCRIPTION_SUFFIX,
       annotations: toolAnnotations({ readOnly: true, openWorld: true }),
       inputSchema: {

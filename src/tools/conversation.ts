@@ -1,7 +1,9 @@
 /**
  * `teams_read_conversation` — read any chat or channel, by id or name, from
- * the Teams chat-service API. Nothing has to be open in the browser, and the
- * read marker is never written, so the user's unread badges are untouched.
+ * the Teams chat-service API. Nothing has to be open in the browser, and by
+ * default the read marker is never written, so the user's unread badges are
+ * untouched; `mark_read` (confirm-gated, as `teams_mark_read` is) moves it up
+ * to the newest message returned.
  *
  * Paging runs newest first and stops at the first boundary that applies: the
  * read horizon (`unread_only`), the `after_message_id` cursor, the `since`
@@ -13,7 +15,13 @@
  */
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import { mapWithConcurrency, McpToolError, toolAnnotations } from '@chrischall/mcp-utils';
+import {
+  CONFIRM_INJECTION_RULE,
+  confirmTokenParam,
+  mapWithConcurrency,
+  McpToolError,
+  toolAnnotations,
+} from '@chrischall/mcp-utils';
 import type { ChatServiceClient, RawConversation, RawMessage } from '../chatsvc.js';
 import type { TeamsDeps } from '../deps.js';
 import {
@@ -36,6 +44,16 @@ import { resolveTimeZone, TIME_ZONE_DESCRIPTION, tzArg } from './timezone.js';
 import { afterMessageIdArg, CURSOR_NO_CACHE_DESCRIPTION, newestId } from './cursor.js';
 import { FORMAT_DESCRIPTION, formatArg, formatBody, formatConversation, type ReadFormat } from './format.js';
 import { fetchOutsideRoots, MAX_ROOT_FETCHES, rootBudget, type RootBudget } from './roots.js';
+import {
+  advancesHorizon,
+  applyMarks,
+  confirmMarks,
+  horizonMessageId,
+  MARK_READ_DESCRIPTION,
+  markReadArg,
+  type MarkOutcome,
+  type MarkPlan,
+} from './markread.js';
 
 const MAX_MESSAGES = 500;
 
@@ -191,17 +209,25 @@ interface ReadOptions {
   roots: RootBudget;
 }
 
-/**
- * Read one resolved conversation: what a single-conversation call returns,
- * less `fetched_at`, which the call stamps once.
- */
+/** One conversation read, with what `mark_read` needs to move its marker. */
+interface ReadOne {
+  summary: ConversationSummary;
+  /** Its listing entry (or a bare one for a self-chat the listing lacks), holding the read horizon. */
+  conv: RawConversation;
+  /** The newest message returned (not an outside_window root), or `undefined` for none. */
+  newest: string | undefined;
+  /** What a single-conversation call returns, less `fetched_at` (stamped once) and `marked_read`. */
+  result: Record<string, unknown>;
+}
+
+/** Read one resolved conversation. */
 async function readOne(
   chatsvc: ChatServiceClient,
   raw: readonly RawConversation[],
   me: string,
   summary: ConversationSummary,
   { unreadOnly, since, afterMessageId, limit, timeZone, format, roots }: ReadOptions,
-): Promise<Record<string, unknown>> {
+): Promise<ReadOne> {
   // The self-chat resolves even when the listing does not carry it.
   const conv = raw.find((c) => c.id === summary.id) ?? { id: summary.id };
   const horizon = readHorizon(conv);
@@ -232,7 +258,8 @@ async function readOne(
   });
 
   const returned = fetched.filter(wanted);
-  const next_cursor = newestId(returned) ?? afterMessageId;
+  const newest = newestId(returned);
+  const next_cursor = newest ?? afterMessageId;
   const messages = oldestFirst(returned).map((m) => normaliseMessage(m, me, { timeZone }));
   const unread_count = fetched.filter((m) => wanted(m) && isUnread(m, horizon, me)).length;
   const outsideRoots =
@@ -243,7 +270,7 @@ async function readOne(
   // Whether every message past the read horizon was seen, so unread_count is the whole count.
   const exact = !truncated && !windowCut;
 
-  return {
+  const result = {
     conversation: formatConversation(confirmUnread(summary, unread_count, exact), format),
     unread_count,
     ...(exact ? {} : { unread_count_scope: 'window' as const }),
@@ -260,6 +287,7 @@ async function readOne(
       : {}),
     ...(next_cursor !== undefined ? { next_cursor } : {}),
   };
+  return { summary, conv, newest, result };
 }
 
 /** One `conversation` of a multi-conversation read that could not be resolved or read. */
@@ -282,6 +310,11 @@ function readError(conversation: string, err: unknown, id?: string): ReadError {
   };
 }
 
+/** An ambiguous name in a multi-conversation read: its {@link ambiguousResult}, nothing read or marked. */
+interface AmbiguousRead {
+  ambiguous: Record<string, unknown>;
+}
+
 /**
  * Read several conversations: each argument resolved against one listing, the
  * distinct conversations read {@link READ_CONCURRENCY} at a time, in the order
@@ -295,11 +328,11 @@ async function readMany(
   me: string,
   conversations: readonly string[],
   opts: ReadOptions,
-): Promise<{ conversations: Record<string, unknown>[]; errors: ReadError[] }> {
+): Promise<{ reads: (ReadOne | AmbiguousRead)[]; errors: ReadError[] }> {
   const resolve = listedResolver(chatsvc, raw, me, 'read');
   const errors: ReadError[] = [];
   /** One slot per distinct conversation asked: a resolved one to read, or an ambiguous name's candidates. */
-  const slots: ({ asked: string; summary: ConversationSummary } | { ambiguous: Record<string, unknown> })[] = [];
+  const slots: ({ asked: string; summary: ConversationSummary } | AmbiguousRead)[] = [];
   const seen = new Set<string>();
   for (const asked of new Set(conversations)) {
     try {
@@ -314,14 +347,14 @@ async function readMany(
     }
   }
   const reads = await mapWithConcurrency(slots, READ_CONCURRENCY, async (slot) => {
-    if ('ambiguous' in slot) return { ok: true as const, result: slot.ambiguous };
+    if ('ambiguous' in slot) return { ok: true as const, result: slot };
     try {
       return { ok: true as const, result: await readOne(chatsvc, raw, me, slot.summary, opts) };
     } catch (err) {
       return { ok: false as const, error: readError(slot.asked, err, slot.summary.id) };
     }
   });
-  const results: Record<string, unknown>[] = [];
+  const results: (ReadOne | AmbiguousRead)[] = [];
   for (const r of reads) {
     if (r.ok) results.push(r.result);
     else errors.push(r.error);
@@ -329,7 +362,7 @@ async function readMany(
   // Resolution failures were found first; list every error in the order asked.
   const order = new Map(conversations.map((c, i) => [c, i] as const));
   errors.sort((a, b) => (order.get(a.conversation) ?? 0) - (order.get(b.conversation) ?? 0));
-  return { conversations: results, errors };
+  return { reads: results, errors };
 }
 
 export function registerConversationTools(server: McpServer, { chatsvc }: Pick<TeamsDeps, 'chatsvc'>): void {
@@ -360,15 +393,21 @@ export function registerConversationTools(server: McpServer, { chatsvc }: Pick<T
         'arguments apply to each); an ambiguous name takes its place among them as the same { ambiguous: true, ' +
         '... } object a single read returns, and one that cannot be resolved or read is listed in errors ' +
         'while the rest still come back. ' +
-        'This does NOT mark anything ' +
-        'read — the user\'s Teams unread badges are unaffected. Attachments are listed per message (images by ref, files by ' +
+        MARK_READ_DESCRIPTION +
+        'With mark_read the read marker of each conversation read moves up to the newest message returned ' +
+        '(never backwards; outside_window roots do not count) and its result says marked_read; the user ' +
+        'confirms first — a prompt where the client supports one, otherwise the first call returns only a ' +
+        'preview and a confirmToken, and the repeat call with it reads and marks. ' +
+        CONFIRM_INJECTION_RULE +
+        ' Attachments are listed per message (images by ref, files by ' +
         'name) and fetched with teams_get_attachment. A name that matches several conversations is ' +
         'not an error: the result is {ambiguous: true, query, match_count, candidates (up to 10, each ' +
         'with id, title, kind, team, lastActivity and match_reason), hint} and no messages — read again ' +
         'with one candidate\'s id. ' +
         TIME_ZONE_DESCRIPTION +
         UNTRUSTED_DESCRIPTION_SUFFIX,
-      annotations: toolAnnotations({ readOnly: true, openWorld: true }),
+      // A write only with mark_read, but a write: it moves the user's read marker (never backwards, so a repeat is a no-op).
+      annotations: toolAnnotations({ readOnly: false, destructive: false, idempotent: true, openWorld: true }),
       inputSchema: {
         conversation: z
           .union([z.string().min(1), z.array(z.string().min(1)).min(1).max(MAX_CONVERSATIONS)])
@@ -380,15 +419,17 @@ export function registerConversationTools(server: McpServer, { chatsvc }: Pick<T
         unread_only: z
           .boolean()
           .optional()
-          .describe('Only return messages the user has not read yet (default false). Never marks them read.'),
+          .describe('Only return messages the user has not read yet (default false). Does not mark them read unless mark_read is set.'),
         since: sinceArg,
         after_message_id: afterMessageIdArg,
         limit: limitArg(MAX_MESSAGES, 'messages'),
         tz: tzArg,
         format: formatArg,
+        mark_read: markReadArg,
+        confirmToken: confirmTokenParam,
       },
     },
-    async ({ conversation, unread_only, since, after_message_id, limit, tz, format }) => {
+    async ({ conversation, unread_only, since, after_message_id, limit, tz, format, mark_read, confirmToken }, ctx) => {
       try {
         const opts: ReadOptions = {
           unreadOnly: unread_only ?? false,
@@ -401,16 +442,45 @@ export function registerConversationTools(server: McpServer, { chatsvc }: Pick<T
         };
         const fetched_at = new Date().toISOString();
         const [raw, me] = await Promise.all([chatsvc.listConversations(), chatsvc.meMri()]);
+        const many = Array.isArray(conversation)
+          ? await readMany(chatsvc, raw, me, conversation, opts)
+          : {
+              reads: [await readOne(chatsvc, raw, me, await resolveListed(chatsvc, raw, me, conversation, 'read'), opts)],
+              errors: [],
+            };
+
+        let marks: Map<string, MarkOutcome> | undefined;
+        if (mark_read) {
+          // One confirmation covers every conversation the call read; each marker moves only forwards.
+          const plans: MarkPlan[] = [];
+          for (const read of many.reads) {
+            if ('ambiguous' in read) continue;
+            const { summary, conv, newest } = read;
+            if (advancesHorizon(conv, newest)) plans.push({ summary, previous: horizonMessageId(conv), target: newest });
+          }
+          if (plans.length > 0) {
+            const gate = await confirmMarks(ctx, { tool: 'teams_read_conversation', me, plans, confirmToken });
+            if (gate) return gate;
+          }
+          marks = await applyMarks(chatsvc, plans);
+        }
+        const results = many.reads.map((read) =>
+          'ambiguous' in read
+            ? read.ambiguous
+            : {
+                ...read.result,
+                ...(marks !== undefined ? (marks.get(read.summary.id) ?? { marked_read: false }) : {}),
+              },
+        );
+
         if (Array.isArray(conversation)) {
-          const many = await readMany(chatsvc, raw, me, conversation, opts);
           return untrustedResult({
-            conversations: many.conversations,
+            conversations: results,
             ...(many.errors.length > 0 ? { errors: many.errors } : {}),
             fetched_at,
           });
         }
-        const summary = await resolveListed(chatsvc, raw, me, conversation, 'read');
-        return untrustedResult({ ...(await readOne(chatsvc, raw, me, summary, opts)), fetched_at });
+        return untrustedResult({ ...results[0], fetched_at });
       } catch (err) {
         // A read can safely hand back the candidates; the write tools keep refusing.
         if (err instanceof AmbiguousConversationError) return untrustedResult(ambiguousResult(err));

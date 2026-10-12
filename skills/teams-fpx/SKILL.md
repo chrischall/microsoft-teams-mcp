@@ -79,8 +79,11 @@ messages, read the Activity feed, fetch an inline image — are in
   the first `;` segment of the conversation's
   `properties.consumptionhorizon`, and that is not from you (your MRI is
   `8:orgid:<oid>` from the token's `oid` claim).
-- **Never PUT `consumptionhorizon`.** That is how Teams marks a chat read;
-  reading messages through this API leaves the user's unread badges alone.
+- **Never PUT `consumptionhorizon`** from a shell. That is how Teams marks a
+  chat read; reading messages through this API leaves the user's unread
+  badges alone. To mark a chat read, use the MCP's confirm-gated
+  **`teams_mark_read`** (or `mark_read` on its read tools), which never
+  moves the marker backwards.
 - **`48:*` conversation ids are system threads**, not chats — skip them when
   listing. Two are worth reading by id: `48:notes` (the self-chat) and
   `48:notifications` (the Activity feed; `48:mentions` is its mentions
@@ -93,7 +96,7 @@ messages, read the Activity feed, fetch an inline image — are in
   SharePoint (Graph and SharePoint both refuse it). `properties.files` is a
   JSON *string*; parse it for each file's name and `openUrl`.
 
-## Writes (sending, reacting)
+## Writes (sending, reacting, marking read)
 
 Everything above only reads. To post a message or a reaction, prefer the
 MCP's **`teams_send_message`** and **`teams_react`**: they show the user a

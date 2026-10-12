@@ -8,12 +8,13 @@ import { servedTools } from './served-tools.js';
  * `destructiveHint` DEFAULTS TO TRUE whenever `readOnlyHint` is not true, so
  * a write that forgets to declare it is published as destructive and nothing
  * fails — a considered `false` and a forgotten one look identical. Every
- * write must therefore choose. The two writes (send, react) are pinned below
- * to the exact hints the plan settled on; everything else must stay a read.
+ * write must therefore choose. The writes (send, react, mark read — and the
+ * two reads whose opt-in mark_read moves the read marker) are pinned below to
+ * the exact hints they settled on; everything else must stay a read.
  */
 describe('every tool declares what it does', () => {
   it('covers the full served surface (guards against a registrar being dropped)', async () => {
-    expect(await servedTools()).toHaveLength(10);
+    expect(await servedTools()).toHaveLength(11);
   });
 
   it('sets an explicit boolean readOnlyHint and openWorldHint on all of them', async () => {
@@ -35,12 +36,18 @@ describe('every tool declares what it does', () => {
     expect(undeclared).toEqual([]);
   });
 
-  it('keeps every tool but the two writes read-only', async () => {
+  it('keeps every tool but the writes read-only', async () => {
     const writes = (await servedTools())
       .filter((t) => t.annotations?.readOnlyHint !== true)
       .map((t) => t.name)
       .sort();
-    expect(writes).toEqual(['teams_react', 'teams_send_message']);
+    expect(writes).toEqual([
+      'teams_get_unread',
+      'teams_mark_read',
+      'teams_react',
+      'teams_read_conversation',
+      'teams_send_message',
+    ]);
   });
 
   it('publishes a send as destructive and non-idempotent (a repeat posts twice)', async () => {
@@ -63,7 +70,20 @@ describe('every tool declares what it does', () => {
     });
   });
 
-  it('gates both writes behind a confirmToken', async () => {
+  it.each(['teams_mark_read', 'teams_read_conversation', 'teams_get_unread'])(
+    'publishes %s as non-destructive and idempotent (the read marker only moves forwards)',
+    async (name) => {
+      const tool = (await servedTools()).find((t) => t.name === name);
+      expect(tool?.annotations).toMatchObject({
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      });
+    },
+  );
+
+  it('gates every write behind a confirmToken', async () => {
     const ungated = (await servedTools())
       .filter((t) => t.annotations?.readOnlyHint !== true)
       .filter((t) => !Object.hasOwn((t.inputSchema.properties ?? {}) as object, 'confirmToken'))

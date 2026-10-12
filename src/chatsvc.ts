@@ -8,11 +8,12 @@
  *
  * Reads are `listConversations`, `getMessages` (which also reads the Activity
  * feed, conversation `48:notifications`), `getMessage` and
- * `fetchImage`; the writes are `sendMessage`, `setReaction` and
- * `removeReaction`, which only the confirm-gated `teams_send_message` and
- * `teams_react` call. Nothing here writes the read marker
- * (`consumptionhorizon`), so reading a chat through this MCP never clears the
- * user's unread badges.
+ * `fetchImage`; the writes are `sendMessage`, `setReaction`,
+ * `removeReaction` and `setConsumptionHorizon`, which only the confirm-gated
+ * `teams_send_message`, `teams_react` and `teams_mark_read` (and the read
+ * tools' opt-in `mark_read`) call. A read never writes the read marker
+ * (`consumptionhorizon`) on its own, so reading a chat through this MCP leaves
+ * the user's unread badges alone unless they ask for it to be marked read.
  *
  * Verified live 2026-10-10 against a real Teams tenant — see the "Verified
  * live facts" section of `docs/plans/2026-10-10-chatsvc-api.md` for the
@@ -115,6 +116,10 @@ const SEND_OUTCOME_HINT =
 
 const REACTION_OUTCOME_HINT =
   'The reaction change may already have been applied — check the message (teams_read_conversation) before retrying.';
+
+const HORIZON_OUTCOME_HINT =
+  'The read marker may already have moved — check the conversation (teams_read_conversation) before retrying; ' +
+  'moving it again to the same message is harmless.';
 
 /**
  * The HTTP status behind a {@link WriteOutcomeUnknownError} that Teams
@@ -488,6 +493,29 @@ export class ChatServiceClient {
       `/messages/${encodeURIComponent(messageId)}/properties?name=emotions`;
     const { status } = await this.#send(url, 'text', undefined, { method, body: { emotions }, hint: REACTION_OUTCOME_HINT });
     this.#checkWriteStatus(method, status, REACTION_OUTCOME_HINT);
+  }
+
+  /**
+   * Move the user's read marker in a conversation to `messageId`:
+   * `PUT …/conversations/{id}/properties?name=consumptionhorizon` with
+   * `{ consumptionhorizon: "<id>;<client ms>;<id>" }` — the shape `readHorizon`
+   * parses, its first segment the message's arrival ms (which is its id).
+   * Teams clears the unread badge for everything up to it.
+   *
+   * Verified live 2026-10-12 on `48:notes`: 200, and the listing then carries
+   * the new horizon. A move BACKWARDS is also answered 200 but ignored, so a
+   * 200 does not prove the marker moved; never sending one is the caller's
+   * rule (`teams_mark_read`), which reports it as a no-op instead. A lost
+   * answer is a `WriteOutcomeUnknownError`, as for a reaction.
+   */
+  async setConsumptionHorizon(conversationId: string, messageId: string, at: number = Date.now()): Promise<void> {
+    this.#requireConfigured();
+    const url =
+      `${this.#baseUrl}/users/ME/conversations/${encodeURIComponent(conversationId)}` +
+      '/properties?name=consumptionhorizon';
+    const body = { consumptionhorizon: `${messageId};${at};${messageId}` };
+    const { status } = await this.#send(url, 'text', undefined, { method: 'PUT', body, hint: HORIZON_OUTCOME_HINT });
+    this.#checkWriteStatus('PUT', status, HORIZON_OUTCOME_HINT);
   }
 
   /**

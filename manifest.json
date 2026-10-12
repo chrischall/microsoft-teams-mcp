@@ -115,7 +115,7 @@
     "confirm_mode": {
       "type": "string",
       "title": "Write confirmation mode (optional)",
-      "description": "Optional. What teams_send_message and teams_react do on a client that cannot show a confirmation prompt (claude.ai, Claude Desktop): \"ask-user\" (default: the first call returns a preview and a confirmToken, and the model must get your approval in chat before using it), \"auto\" (the model may use the token after reviewing the preview itself) or \"refuse\". An unrecognised value is treated as refuse. Leave blank for the default.",
+      "description": "Optional. What the writes (teams_send_message, teams_react, teams_mark_read and the read tools' mark_read) do on a client that cannot show a confirmation prompt (claude.ai, Claude Desktop): \"ask-user\" (default: the first call returns a preview and a confirmToken, and the model must get your approval in chat before using it), \"auto\" (the model may use the token after reviewing the preview itself) or \"refuse\". An unrecognised value is treated as refuse. Leave blank for the default.",
       "required": false
     },
     "confirm_elicitation": {
@@ -149,11 +149,11 @@
     },
     {
       "name": "teams_read_conversation",
-      "description": "Read any chat or channel by id or name, without marking it read"
+      "description": "Read any chat or channel by id or name — leaves it unread unless you ask it to mark it read (asks you to confirm first)"
     },
     {
       "name": "teams_get_unread",
-      "description": "Get every unread message across chats and channels, without marking anything read"
+      "description": "Get every unread message across chats and channels — leaves them unread unless you ask it to mark them read (asks you to confirm first)"
     },
     {
       "name": "teams_get_changes",
@@ -170,6 +170,10 @@
     {
       "name": "teams_react",
       "description": "Add or remove your reaction on any message — asks you to confirm first"
+    },
+    {
+      "name": "teams_mark_read",
+      "description": "Mark a chat or channel read up to a message, clearing its unread badge (never backwards) — asks you to confirm first"
     },
     {
       "name": "teams_get_activity",

@@ -74,7 +74,7 @@ export const unreadOnlyArg = z
   .describe(
     'Only return conversations with a real message (not a call recording or other system event) ' +
       'the user has not read yet, each with its unread_count (default false). Exact: every candidate ' +
-      'is confirmed by reading its messages past the read marker. Never marks anything read.',
+      'is confirmed by reading its messages past the read marker. Never marks anything read (teams_mark_read does).',
   );
 
 /** Description text shared by the list tools on what their unread flag means. */

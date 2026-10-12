@@ -10,12 +10,14 @@
  * (a candidate with no activity at all inside the window is not read). With
  * `cursors`, each read stops at the later of the read marker and that
  * conversation's cursor, so only what is new since the caller last looked
- * comes back (`cursor.ts`). Nothing writes the read marker, so the user's
- * unread badges in Teams are exactly as they were.
+ * comes back (`cursor.ts`). By default nothing writes the read marker, so the
+ * user's unread badges in Teams are exactly as they were; `mark_read`
+ * (confirm-gated, as `teams_mark_read` is) moves each returned conversation's
+ * marker up to its newest unread message returned.
  */
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import { mapWithConcurrency, toolAnnotations } from '@chrischall/mcp-utils';
+import { CONFIRM_INJECTION_RULE, confirmTokenParam, mapWithConcurrency, toolAnnotations } from '@chrischall/mcp-utils';
 import type { TeamsDeps } from '../deps.js';
 import {
   conversationSummary,
@@ -42,6 +44,16 @@ import { resolveTimeZone, TIME_ZONE_DESCRIPTION, tzArg } from './timezone.js';
 import { CURSOR_NO_CACHE_DESCRIPTION, cursorsArg, newestId } from './cursor.js';
 import { FORMAT_DESCRIPTION, formatArg, formatBody, formatConversation } from './format.js';
 import { fetchOutsideRoots, MAX_ROOT_FETCHES, rootBudget } from './roots.js';
+import {
+  advancesHorizon,
+  applyMarks,
+  confirmMarks,
+  horizonMessageId,
+  MARK_READ_DESCRIPTION,
+  markReadArg,
+  type MarkOutcome,
+  type MarkPlan,
+} from './markread.js';
 
 const MAX_PER_CONVERSATION = 200;
 const DEFAULT_PER_CONVERSATION = 50;
@@ -108,15 +120,23 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
         '(not those only in more_unread_conversations) — pass it back as cursors to get only what is new. ' +
         CURSOR_NO_CACHE_DESCRIPTION +
         FORMAT_DESCRIPTION +
-        'This does NOT mark anything read — the user\'s ' +
-        'Teams unread badges are unaffected. ' +
+        'limit truncated or a read failed. ' +
+        MARK_READ_DESCRIPTION +
+        'With mark_read each conversation returned with its messages (not more_unread_conversations) has its ' +
+        'read marker moved up to its newest unread message returned — a per_conversation_limit cut marks the ' +
+        'older unread messages it left out read too — and carries marked_read (false with mark_read_warning when ' +
+        'that move failed); the user confirms first — a prompt where the client supports one, otherwise the ' +
+        'first call returns only a preview and a confirmToken, and the repeat call with it reads and marks. ' +
+        CONFIRM_INJECTION_RULE +
+        ' ' +
         GROUP_TITLE_DESCRIPTION +
         ' query also matches those participant names, and the last-message preview. ' +
         MATCH_REASON_DESCRIPTION +
         'Message times are UTC (ISO 8601); ' +
         TIME_ZONE_DESCRIPTION +
         UNTRUSTED_DESCRIPTION_SUFFIX,
-      annotations: toolAnnotations({ readOnly: true, openWorld: true }),
+      // A write only with mark_read, but a write: it moves the user's read markers (never backwards, so a repeat is a no-op).
+      annotations: toolAnnotations({ readOnly: false, destructive: false, idempotent: true, openWorld: true }),
       inputSchema: {
         kinds: z
           .array(z.enum(Object.keys(KIND_FILTERS) as [KindFilter, ...KindFilter[]]))
@@ -168,21 +188,28 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
         cursors: cursorsArg,
         tz: tzArg,
         format: formatArg,
+        mark_read: markReadArg,
+        confirmToken: confirmTokenParam,
       },
     },
-    async ({
-      kinds,
-      query,
-      include_hidden,
-      include_muted,
-      since_days,
-      older_unread,
-      per_conversation_limit,
-      max_conversations,
-      cursors,
-      tz,
-      format,
-    }) => {
+    async (
+      {
+        kinds,
+        query,
+        include_hidden,
+        include_muted,
+        since_days,
+        older_unread,
+        per_conversation_limit,
+        max_conversations,
+        cursors,
+        tz,
+        format,
+        mark_read,
+        confirmToken,
+      },
+      ctx,
+    ) => {
       try {
         const timeZone = resolveTimeZone(tz);
         const fetched_at = new Date().toISOString();
@@ -224,9 +251,28 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
         const olderTitled = retitled.slice(outcome.confirmed.length + outcome.failed.length);
 
         const cap = max_conversations ?? DEFAULT_CONVERSATIONS;
+        const returned = confirmed.slice(0, cap);
+
+        // Marked before roots are fetched, so a call that stops at the confirmation preview fetches none.
+        let marks: Map<string, MarkOutcome> | undefined;
+        if (mark_read) {
+          const byId = new Map(raw.map((c) => [c.id, c]));
+          const plans: MarkPlan[] = [];
+          for (const { summary, read } of returned) {
+            const conv = byId.get(summary.id) ?? { id: summary.id };
+            const target = newestId(read.messages);
+            if (advancesHorizon(conv, target)) plans.push({ summary, previous: horizonMessageId(conv), target });
+          }
+          if (plans.length > 0) {
+            const gate = await confirmMarks(ctx, { tool: 'teams_get_unread', me, plans, confirmToken });
+            if (gate) return gate;
+          }
+          marks = await applyMarks(chatsvc, plans);
+        }
+
         const budget = rootBudget();
         // Channels claim root fetches in the order returned, so the most recent activity gets them first.
-        const shown = confirmed.slice(0, cap).map(({ summary, read }) => ({
+        const shown = returned.map(({ summary, read }) => ({
           summary,
           read,
           messages: oldestFirst(read.messages).map((m) => normaliseMessage(m, me, { timeZone })),
@@ -253,6 +299,7 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
                 },
               }
             : {}),
+          ...(marks !== undefined ? (marks.get(summary.id) ?? { marked_read: false }) : {}),
         }));
         const rest = confirmed.slice(cap);
         const next_cursors: Record<string, string> = { ...cursors };
