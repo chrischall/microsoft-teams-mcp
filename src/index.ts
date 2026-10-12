@@ -3,6 +3,7 @@ import { runMcp, loadDotenvSafely } from '@chrischall/mcp-utils';
 import { VERSION } from './version.js';
 import { ChatServiceClient } from './chatsvc.js';
 import { SharePointClient } from './sharepoint.js';
+import { SubstrateClient } from './substrate.js';
 import type { TeamsDeps } from './deps.js';
 import { registerChatTools } from './tools/chat.js';
 import { registerChannelTools } from './tools/channels.js';
@@ -14,6 +15,7 @@ import { registerSendTools } from './tools/send.js';
 import { registerReactTools } from './tools/react.js';
 import { registerMarkReadTools } from './tools/markread.js';
 import { registerActivityTools } from './tools/activity.js';
+import { registerSearchTools } from './tools/search.js';
 import { registerHealthcheckTool } from './tools/healthcheck.js';
 
 loadDotenvSafely();
@@ -24,11 +26,13 @@ loadDotenvSafely();
  * connection, so anything built inside a registrar would be rebuilt). For
  * this MCP a second `ChatServiceClient` would mean a second token capture.
  * `SharePointClient` holds its own per-host token managers, so the same reason
- * applies — build it once, here, beside the chat-service client.
+ * applies — build it once, here, beside the chat-service client — and so does
+ * `SubstrateClient`, which holds the search token.
  */
 const deps: TeamsDeps = {
   chatsvc: new ChatServiceClient(),
   sharepoint: new SharePointClient(),
+  substrate: new SubstrateClient(),
 };
 
 await runMcp({
@@ -48,6 +52,7 @@ await runMcp({
     registerReactTools,
     registerMarkReadTools,
     registerActivityTools,
+    registerSearchTools,
     registerHealthcheckTool,
   ],
 });

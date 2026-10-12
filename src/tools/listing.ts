@@ -18,7 +18,7 @@ import {
   type OlderUnreadRow,
 } from './confirm.js';
 import { wrapApiError } from './errors.js';
-import { searchRecentMessages, type MessageHit } from './search.js';
+import { searchRecentMessages, type MessageHit } from './chat-search.js';
 import { enrichTitles } from './titles.js';
 import {
   conversationSummary,

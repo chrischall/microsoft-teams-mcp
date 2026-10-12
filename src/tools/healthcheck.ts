@@ -22,6 +22,11 @@
  * a static note, not a check: a healthy result does not depend on an SP token
  * existing.
  *
+ * A `substrate` note sits beside it, likewise static: `teams_search_messages`
+ * searches through Microsoft Substrate with a THIRD token, captured on demand
+ * off the Teams tab's own search request, and falls back to a scan without it.
+ * Never minted or probed here.
+ *
  * Imported from `/healthcheck`, deliberately NOT from `/fetchproxy`: that
  * module pulls in the optional `@fetchproxy/server` peer, which is absent in
  * the `.mcpb` bundle.
@@ -43,6 +48,13 @@ const SHAREPOINT_NOTE =
   'Shared-file download (teams_get_attachment) uses a separate SharePoint token, captured on ' +
   'demand per SharePoint host and short-lived (~53 min). None is held until you open a file, and ' +
   'this healthcheck neither mints nor requires one.';
+
+/** Static note on the search path. Not probed — a healthy result never depends on it. */
+const SUBSTRATE_NOTE =
+  'Search (teams_search_messages) uses a separate Microsoft Substrate token for substrate.office.com, ' +
+  'captured on demand when you run a search in a Teams tab (the bridge pairing must trust ' +
+  'substrate.office.com). Without one, search falls back to a scan of recent conversations; this ' +
+  'healthcheck neither mints nor requires one.';
 
 export function registerHealthcheckTool(server: McpServer, { chatsvc }: Pick<TeamsDeps, 'chatsvc'>): void {
   server.registerTool(
@@ -108,7 +120,7 @@ export function registerHealthcheckTool(server: McpServer, { chatsvc }: Pick<Tea
             ...result.content,
             {
               type: 'text' as const,
-              text: JSON.stringify({ chat_service: chatService, sharepoint: SHAREPOINT_NOTE }, null, 2),
+              text: JSON.stringify({ chat_service: chatService, sharepoint: SHAREPOINT_NOTE, substrate: SUBSTRATE_NOTE }, null, 2),
             },
           ],
         };
@@ -117,7 +129,7 @@ export function registerHealthcheckTool(server: McpServer, { chatsvc }: Pick<Tea
         content: [
           {
             type: 'text' as const,
-            text: JSON.stringify({ ...body, chat_service: chatService, sharepoint: SHAREPOINT_NOTE }, null, 2),
+            text: JSON.stringify({ ...body, chat_service: chatService, sharepoint: SHAREPOINT_NOTE, substrate: SUBSTRATE_NOTE }, null, 2),
           },
         ],
       };

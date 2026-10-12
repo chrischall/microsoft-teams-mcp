@@ -72,6 +72,11 @@ env:
     help: >-
       Default IANA time zone (e.g. America/New_York) for the tz argument of
       the read tools; messages then carry time_local. Unset means UTC only.
+  - name: TEAMS_SUBSTRATE_TOKEN_FILE
+    required: false
+    help: >-
+      Path to the cached Substrate search token file. Defaults to
+      ~/.microsoft-teams-mcp/substrate-token.json.
 state:
   dataDir: true
   reason: >-
@@ -84,7 +89,9 @@ egress:
   # teams.cloud.microsoft serves the chat-service API (src/chatsvc.ts). Inline
   # images download from Teams' image store on a regional *.asm.skype.com host
   # (us-api.asm.skype.com and the like) — the client sends its token nowhere
-  # else.
+  # else. Message search goes to Microsoft Substrate (src/substrate.ts) with
+  # its own token.
   allow:
     - teams.cloud.microsoft
     - '*.asm.skype.com'
+    - substrate.office.com
