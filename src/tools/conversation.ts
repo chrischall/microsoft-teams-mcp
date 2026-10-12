@@ -39,7 +39,7 @@ const MAX_MESSAGES = 500;
  */
 const MAX_RAW_MESSAGES = 4000;
 
-/** Candidates an ambiguous-name error lists. */
+/** Candidates an ambiguous name lists, as an error or as data. */
 const MAX_CANDIDATES = 10;
 
 export type ThreadRoot = NormalisedMessage | { id: string; missing: true };
@@ -92,12 +92,54 @@ function describeCandidate(s: ConversationSummary): string {
 }
 
 /**
+ * A name that matched several conversations. It is an `McpToolError` — the
+ * write tools let it through, as a write must never guess — that also carries
+ * every match, so `teams_read_conversation` can return the candidates as data.
+ */
+export class AmbiguousConversationError extends McpToolError {
+  constructor(
+    readonly query: string,
+    readonly matches: readonly ConversationSummary[],
+    verb: string,
+  ) {
+    const named = matches.slice(0, MAX_CANDIDATES).map(describeCandidate).join('; ');
+    const more = matches.length > MAX_CANDIDATES ? ` (first ${MAX_CANDIDATES} shown)` : '';
+    super(`"${query}" matches ${matches.length} conversations${more}: ${named}.`, {
+      hint: `Pass the id of the one to ${verb} as conversation.`,
+    });
+    this.name = 'AmbiguousConversationError';
+  }
+}
+
+/**
+ * An ambiguous name as a read's result: the first 10 candidates, each with
+ * what tells them apart and how it matched, and how many matched in all.
+ */
+export function ambiguousResult(err: AmbiguousConversationError): Record<string, unknown> {
+  return {
+    ambiguous: true,
+    query: err.query,
+    match_count: err.matches.length,
+    candidates: err.matches.slice(0, MAX_CANDIDATES).map((s) => ({
+      id: s.id,
+      title: s.title,
+      kind: s.kind,
+      ...(s.team !== undefined ? { team: s.team } : {}),
+      ...(s.lastActivity !== undefined ? { lastActivity: s.lastActivity } : {}),
+      ...(s.match_reason !== undefined ? { match_reason: s.match_reason } : {}),
+    })),
+    hint: 'pass one id as conversation',
+  };
+}
+
+/**
  * The one conversation a `conversation` argument names: an exact id, else a
  * unique title/team/participant substring — never what was said in a chat,
  * since this names the target of sends and reactions too. The match carries
- * its `match_reason`. None, or several, is an `McpToolError` — the latter
- * naming up to 10 candidates, each with how it matched, so the caller can pass
- * an id. `verb` fills the hint ("Pass the id of the one to read").
+ * its `match_reason`. None is an `McpToolError`; several is an
+ * {@link AmbiguousConversationError} naming up to 10 candidates, each with how
+ * it matched, so the caller can pass an id. `verb` fills the hint ("Pass the
+ * id of the one to read").
  */
 export function resolveConversation(
   summaries: readonly ConversationSummary[],
@@ -110,13 +152,7 @@ export function resolveConversation(
       hint: 'List them with teams_list_chats or teams_list_teams_and_channels and pass an id.',
     });
   }
-  if (matches.length > 1) {
-    const named = matches.slice(0, MAX_CANDIDATES).map(describeCandidate).join('; ');
-    const more = matches.length > MAX_CANDIDATES ? ` (first ${MAX_CANDIDATES} shown)` : '';
-    throw new McpToolError(`"${conversation}" matches ${matches.length} conversations${more}: ${named}.`, {
-      hint: `Pass the id of the one to ${verb} as conversation.`,
-    });
-  }
+  if (matches.length > 1) throw new AmbiguousConversationError(conversation, matches, verb);
   return matches[0];
 }
 
@@ -155,7 +191,10 @@ export function registerConversationTools(server: McpServer, { chatsvc }: Pick<T
         'limit keeps the newest (truncated says when more exist; unread_count_scope "window" says ' +
         'unread_count only covers what limit/since let through). This does NOT mark anything ' +
         'read — the user\'s Teams unread badges are unaffected. Attachments are listed per message (images by ref, files by ' +
-        'name) and fetched with teams_get_attachment.' +
+        'name) and fetched with teams_get_attachment. A name that matches several conversations is ' +
+        'not an error: the result is {ambiguous: true, query, match_count, candidates (up to 10, each ' +
+        'with id, title, kind, team, lastActivity and match_reason), hint} and no messages — read again ' +
+        'with one candidate\'s id.' +
         UNTRUSTED_DESCRIPTION_SUFFIX,
       annotations: toolAnnotations({ readOnly: true, openWorld: true }),
       inputSchema: {
@@ -228,6 +267,8 @@ export function registerConversationTools(server: McpServer, { chatsvc }: Pick<T
             : {}),
         });
       } catch (err) {
+        // A read can safely hand back the candidates; the write tools keep refusing.
+        if (err instanceof AmbiguousConversationError) return untrustedResult(ambiguousResult(err));
         throw wrapApiError(err, 'read the conversation');
       }
     },

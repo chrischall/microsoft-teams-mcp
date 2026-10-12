@@ -192,8 +192,12 @@ Everything is optional — by default the token is captured from your browser.
   kept). The resolved `conversation` carries `match_reason` (`id`, `title`,
   `team` or `participant`); a name never resolves by what was said in a
   chat, since `teams_send_message` and `teams_react` name their target the
-  same way. An ambiguous name lists the candidates, each with how it
-  matched, and asks for the id; an
+  same way. An ambiguous name is not an error here: the result is
+  `{ambiguous: true, query, match_count, candidates, hint}` — up to 10
+  candidates, each with `id`, `title`, `kind`, `team` (channels),
+  `lastActivity` and `match_reason` — and no messages, so you can read again
+  by one candidate's id (`teams_send_message` and `teams_react` still refuse
+  an ambiguous name outright, since a write never guesses); an
   untitled group chat can be named by one of its participants, and a 1:1 by
   the other person (this, and the same naming in `teams_send_message` /
   `teams_react`, titles every untitled chat first).
