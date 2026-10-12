@@ -7,13 +7,15 @@
  * first down to its own horizon, a few at a time, and kept only when a real
  * message from someone else is there (`confirm.ts` — the same rule the list
  * tools' unread_only uses), and only when that message is within `since_days`
- * (a candidate with no activity at all inside the window is not read). Nothing
- * writes the read marker, so the user's unread badges in Teams are exactly as
- * they were.
+ * (a candidate with no activity at all inside the window is not read). With
+ * `cursors`, each read stops at the later of the read marker and that
+ * conversation's cursor, so only what is new since the caller last looked
+ * comes back (`cursor.ts`). Nothing writes the read marker, so the user's
+ * unread badges in Teams are exactly as they were.
  */
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import { toolAnnotations } from '@chrischall/mcp-utils';
+import { mapWithConcurrency, toolAnnotations } from '@chrischall/mcp-utils';
 import type { TeamsDeps } from '../deps.js';
 import {
   conversationSummary,
@@ -23,7 +25,6 @@ import {
   type ConversationKind,
   type ConversationSummary,
 } from '../model.js';
-import { groupThreads } from './conversation.js';
 import {
   confirmedSummary,
   confirmUnreadCandidates,
@@ -37,6 +38,10 @@ import { GROUP_TITLE_DESCRIPTION, includeHiddenArg, isUnreadCandidateFor, MATCH_
 import { enrichTitles } from './titles.js';
 import { wrapApiError } from './errors.js';
 import { untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
+import { resolveTimeZone, TIME_ZONE_DESCRIPTION, tzArg } from './timezone.js';
+import { CURSOR_NO_CACHE_DESCRIPTION, cursorsArg, newestId } from './cursor.js';
+import { FORMAT_DESCRIPTION, formatArg, formatBody, formatConversation } from './format.js';
+import { fetchOutsideRoots, MAX_ROOT_FETCHES, rootBudget } from './roots.js';
 
 const MAX_PER_CONVERSATION = 200;
 const DEFAULT_PER_CONVERSATION = 50;
@@ -49,15 +54,18 @@ const DEFAULT_CONVERSATIONS = 20;
  */
 const MAX_RAW_MESSAGES = 4000;
 
+/** Channels whose outside-window roots are fetched at once (each fetch is itself bounded, `roots.ts`). */
+const ROOT_CONVERSATION_CONCURRENCY = 4;
+
 /** The `kinds` filter: `chat` is every non-channel chat; the others narrow to one kind. */
-const KIND_FILTERS = {
+export const KIND_FILTERS = {
   chat: ['group', 'meeting', 'oneOnOne'],
   channel: ['channel'],
   meeting: ['meeting'],
   oneOnOne: ['oneOnOne'],
 } as const satisfies Record<string, readonly ConversationKind[]>;
 
-type KindFilter = keyof typeof KIND_FILTERS;
+export type KindFilter = keyof typeof KIND_FILTERS;
 
 /** Newest activity first; a conversation with no messages at all sorts last. */
 function byLastActivityDesc(a: ConversationSummary, b: ConversationSummary): number {
@@ -74,7 +82,9 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
         '(or those matching kinds / query), grouped by conversation, most recent activity ' +
         'first. Each conversation comes with its summary (id, kind, title, team) and only the ' +
         'messages the user has not read, oldest first; a channel\'s are grouped as threads ' +
-        'under their root post (a root the user already read is marked missing). Exact, as in ' +
+        'under their root post. A root the user already read is fetched and marked outside_window: true ' +
+        `(it is context, not unread or counted); up to ${MAX_ROOT_FETCHES} roots are fetched per call, and ` +
+        'any beyond that or that cannot be fetched is { id, missing: true }. Exact, as in ' +
         'Teams: every conversation with activity past its read marker (or never opened) is read ' +
         'past the marker and kept only if it holds a real message from someone else, so a call ' +
         'recording, transcript or other system event never makes a conversation unread. Channels ' +
@@ -91,11 +101,20 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
         'more_unread_conversations; read one with teams_read_conversation. A conversation that ' +
         'could not be read is listed in errors and the rest still come back. total_unread covers ' +
         'every unread conversation found; total_unread_exact is false when a per-conversation ' +
-        'limit truncated or a read failed. This does NOT mark anything read — the user\'s ' +
+        'limit truncated or a read failed. cursors ({ conversationId: messageId }) returns only unread ' +
+        'messages newer than each conversation\'s cursor (one with none is left out, and total_unread ' +
+        'counts only those). Each returned conversation carries next_cursor, its newest returned message ' +
+        'id; next_cursors is the cursors passed in updated with every returned conversation\'s next_cursor ' +
+        '(not those only in more_unread_conversations) — pass it back as cursors to get only what is new. ' +
+        CURSOR_NO_CACHE_DESCRIPTION +
+        FORMAT_DESCRIPTION +
+        'This does NOT mark anything read — the user\'s ' +
         'Teams unread badges are unaffected. ' +
         GROUP_TITLE_DESCRIPTION +
         ' query also matches those participant names, and the last-message preview. ' +
         MATCH_REASON_DESCRIPTION +
+        'Message times are UTC (ISO 8601); ' +
+        TIME_ZONE_DESCRIPTION +
         UNTRUSTED_DESCRIPTION_SUFFIX,
       annotations: toolAnnotations({ readOnly: true, openWorld: true }),
       inputSchema: {
@@ -146,6 +165,9 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
               `(default ${DEFAULT_CONVERSATIONS}, max ${MAX_CONVERSATIONS}); the rest are listed in ` +
               'more_unread_conversations.',
           ),
+        cursors: cursorsArg,
+        tz: tzArg,
+        format: formatArg,
       },
     },
     async ({
@@ -157,8 +179,13 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
       older_unread,
       per_conversation_limit,
       max_conversations,
+      cursors,
+      tz,
+      format,
     }) => {
       try {
+        const timeZone = resolveTimeZone(tz);
+        const fetched_at = new Date().toISOString();
         const [raw, me] = await Promise.all([chatsvc.listConversations(), chatsvc.meMri()]);
         const allowed = new Set<ConversationKind>((kinds ?? ['chat', 'channel']).flatMap((k) => KIND_FILTERS[k]));
         // Summaries are built against the FULL listing so a channel can find its team's name.
@@ -181,7 +208,7 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
           raw,
           me,
           candidates,
-          { limit: perLimit, maxRaw: MAX_RAW_MESSAGES, since: sinceCutoff(since_days) },
+          { limit: perLimit, maxRaw: MAX_RAW_MESSAGES, since: sinceCutoff(since_days), cursors },
         );
         const { skippedUnreachable, older } = outcome;
         // Only what is returned is titled: the unread conversations, those whose read failed and,
@@ -197,27 +224,39 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
         const olderTitled = retitled.slice(outcome.confirmed.length + outcome.failed.length);
 
         const cap = max_conversations ?? DEFAULT_CONVERSATIONS;
-        const conversations = confirmed.slice(0, cap).map(({ summary, read }) => {
-          const messages = oldestFirst(read.messages).map((m) => normaliseMessage(m, me));
-          const body = summary.kind === 'channel' ? { threads: groupThreads(messages) } : { messages };
-          return {
-            conversation: confirmedSummary(summary, true),
-            unread_count: messages.length,
-            ...body,
-            ...(read.truncated
-              ? {
-                  truncated: {
-                    returned: messages.length,
-                    hint:
-                      `Only the newest ${messages.length} unread messages were returned; pass a larger ` +
-                      `per_conversation_limit (max ${MAX_PER_CONVERSATION}) or read the conversation ` +
-                      'with teams_read_conversation (unread_only).',
-                  },
-                }
-              : {}),
-          };
-        });
+        const budget = rootBudget();
+        // Channels claim root fetches in the order returned, so the most recent activity gets them first.
+        const shown = confirmed.slice(0, cap).map(({ summary, read }) => ({
+          summary,
+          read,
+          messages: oldestFirst(read.messages).map((m) => normaliseMessage(m, me, { timeZone })),
+        }));
+        const roots = await mapWithConcurrency(shown, ROOT_CONVERSATION_CONCURRENCY, ({ summary, messages }) =>
+          summary.kind === 'channel'
+            ? fetchOutsideRoots(chatsvc, summary.id, messages, me, { budget, timeZone })
+            : Promise.resolve(undefined),
+        );
+        const conversations = shown.map(({ summary, read, messages }, i) => ({
+          conversation: formatConversation(confirmedSummary(summary, true), format ?? 'full'),
+          unread_count: messages.length,
+          ...formatBody(summary.kind, messages, format ?? 'full', roots[i]),
+          // Every confirmed read holds at least one message, so there is always a newest.
+          next_cursor: newestId(read.messages)!,
+          ...(read.truncated
+            ? {
+                truncated: {
+                  returned: messages.length,
+                  hint:
+                    `Only the newest ${messages.length} unread messages were returned; pass a larger ` +
+                    `per_conversation_limit (max ${MAX_PER_CONVERSATION}) or read the conversation ` +
+                    'with teams_read_conversation (unread_only).',
+                },
+              }
+            : {}),
+        }));
         const rest = confirmed.slice(cap);
+        const next_cursors: Record<string, string> = { ...cursors };
+        for (const c of conversations) next_cursors[c.conversation.id] = c.next_cursor;
         const exact = failed.length === 0 && confirmed.every((c) => !c.read.truncated);
         return untrustedResult({
           total_unread: confirmed.reduce((n, c) => n + c.read.messages.length, 0),
@@ -244,6 +283,8 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
                 })),
               }
             : {}),
+          next_cursors,
+          fetched_at,
         });
       } catch (err) {
         throw wrapApiError(err, 'get unread messages');

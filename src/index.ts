@@ -8,6 +8,7 @@ import { registerChatTools } from './tools/chat.js';
 import { registerChannelTools } from './tools/channels.js';
 import { registerConversationTools } from './tools/conversation.js';
 import { registerUnreadTools } from './tools/unread.js';
+import { registerChangesTools } from './tools/changes.js';
 import { registerAttachmentTools } from './tools/attachment.js';
 import { registerSendTools } from './tools/send.js';
 import { registerReactTools } from './tools/react.js';
@@ -40,6 +41,7 @@ await runMcp({
     registerChannelTools,
     registerConversationTools,
     registerUnreadTools,
+    registerChangesTools,
     registerAttachmentTools,
     registerSendTools,
     registerReactTools,

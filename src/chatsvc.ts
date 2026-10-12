@@ -161,6 +161,15 @@ export interface RawConversation {
   version?: number;
   targetLink?: string;
   lastMessage?: RawLastMessage;
+  /**
+   * The arrival (id, epoch ms) of the conversation's most recently changed
+   * message, and that change's time. Live (2026-10-12), in a channel this
+   * moves for a new REPLY while `lastMessage` and `lastimreceivedtime` stay on
+   * the newest root post — so only these show that a thread got a reply. Seen
+   * as numbers; a numeric string is read too.
+   */
+  lastUpdatedMessageId?: number | string;
+  lastUpdatedMessageVersion?: number | string;
   memberProperties?: Record<string, unknown>;
   /** `consumptionhorizon` is `"<lastReadArrivalMs>;<clientMs>;<messageId>"`. */
   properties?: Record<string, string | undefined>;
@@ -196,6 +205,11 @@ export interface RawMessage {
   /** `files` is a JSON STRING; `deletetime` set means deleted. */
   properties?: Record<string, unknown>;
   sequenceId?: number;
+  /**
+   * When the message last changed (epoch ms, a numeric string): its arrival,
+   * or a later edit or reaction. Live (2026-10-12), pages come newest CHANGE
+   * first, so an old message edited recently is served ahead of newer ones.
+   */
   version?: string;
   type?: string;
 }
@@ -402,8 +416,12 @@ export class ChatServiceClient {
   }
 
   /**
-   * One message by id, or `undefined` when the service has no such message
-   * (404). Used to quote a message: its sender and text go into the quote.
+   * One message by id, or `undefined` when the service answers 404. Used to
+   * quote a message (its sender and text go into the quote) and to fill in a
+   * channel thread's root post when it is older than a read's window — a
+   * channel root fetched by its id answers like any message (verified live
+   * 2026-10-12). An id the channel does not hold was answered 403, not 404,
+   * live, so that surfaces as an error.
    */
   async getMessage(conversationId: string, messageId: string): Promise<RawMessage | undefined> {
     this.#requireConfigured();

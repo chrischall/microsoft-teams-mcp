@@ -156,6 +156,10 @@
       "description": "Get every unread message across chats and channels, without marking anything read"
     },
     {
+      "name": "teams_get_changes",
+      "description": "List the chats and channels with new messages since a cursor (default the last 24 hours), with counts and the channel threads that got replies"
+    },
+    {
       "name": "teams_get_attachment",
       "description": "Fetch a message's inline image, or download a shared file's contents from SharePoint (metadata and open link when it cannot be fetched)"
     },

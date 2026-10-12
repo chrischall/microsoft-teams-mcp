@@ -86,7 +86,10 @@ export interface ImageAttachment {
 
 export interface NormalisedMessage {
   id: string;
+  /** UTC, ISO 8601. */
   time: string;
+  /** `time` in the caller's IANA time zone, ISO 8601 with its offset; only when one was asked for. */
+  time_local?: string;
   sender: string;
   fromMe: boolean;
   text: string;
@@ -252,6 +255,29 @@ export function lastImReceivedMs(c: RawConversation): number | undefined {
 export function newestActivityMs(c: RawConversation): number | undefined {
   const lastArrival = c.lastMessage !== undefined ? Number(c.lastMessage.id) : NaN;
   const signals = [lastArrival, lastImReceivedMs(c)].filter((n): n is number => n !== undefined && Number.isFinite(n) && n > 0);
+  return signals.length === 0 ? undefined : Math.max(...signals);
+}
+
+/** A listing field that is epoch ms, as a number or a numeric string; `undefined` otherwise. */
+function epochMs(raw: unknown): number | undefined {
+  const ms = typeof raw === 'number' ? raw : typeof raw === 'string' && /^\s*\d+\s*$/.test(raw) ? Number(raw) : NaN;
+  return Number.isFinite(ms) && ms > 0 ? ms : undefined;
+}
+
+/**
+ * The conversation's newest change of any kind (epoch ms): {@link newestActivityMs}
+ * or the last updated message's id or version, whichever is later. Live
+ * (2026-10-12), a channel reply moves only `lastUpdatedMessageId` /
+ * `lastUpdatedMessageVersion` — `lastMessage` stays on the newest root post —
+ * so this is what says a channel thread got a reply. It also moves for an
+ * edit or a reaction, so a conversation past a time by this measure may hold
+ * no new message: only a read can tell. `undefined` when the listing carries
+ * none of them.
+ */
+export function lastChangeMs(c: RawConversation): number | undefined {
+  const signals = [newestActivityMs(c), epochMs(c.lastUpdatedMessageId), epochMs(c.lastUpdatedMessageVersion)].filter(
+    (n): n is number => n !== undefined,
+  );
   return signals.length === 0 ? undefined : Math.max(...signals);
 }
 
@@ -421,10 +447,26 @@ function attr(tag: string, name: string): string | undefined {
 const stripTags = (s: string): string => s.replace(/<\/?[a-z!][^>]*>/gi, '');
 
 /**
+ * One table row on one line, its `<td>`/`<th>` cells joined by ` | ` — a
+ * pasted table (a file-monitor report, a status grid) otherwise runs its cells
+ * together. Line breaks inside a cell become spaces so the row stays whole.
+ */
+function tableRow(row: string): string {
+  const cells = [...row.matchAll(/<t[dh]\b[^>]*>([\s\S]*?)(?:<\/t[dh]\s*>|(?=<t[dh]\b)|$)/gi)].map(([, cell]) =>
+    cell
+      .replace(/[\u0001\u0002]/g, '')
+      .replace(/<br\s*\/?>|<\/?(p|div|li|h[1-6])\b[^>]*>|\r?\n/gi, ' ')
+      .trim(),
+  );
+  return cells.length > 0 ? cells.join(' | ') : row;
+}
+
+/**
  * A Teams message body as readable plain text. Links keep their target as
  * `text (url)`, inline images become `[image]` (emoji become their alt text),
- * and a quoted reply's lines are prefixed `> `. No HTML library: Teams bodies
- * are a small, regular subset.
+ * a table row becomes one line of ` | `-separated cells, and a quoted reply's
+ * lines are prefixed `> `. Never truncated: a long body comes back whole. No
+ * HTML library: Teams bodies are a small, regular subset.
  */
 export function htmlToText(html: string): string {
   let s = html.replace(/[\u0001\u0002]/g, '');
@@ -441,6 +483,7 @@ export function htmlToText(html: string): string {
     if (label === '' || label === href) return href;
     return `${inner} (${href})`;
   });
+  s = s.replace(/<tr\b[^>]*>([\s\S]*?)<\/tr\s*>/gi, (_whole, row: string) => `\n${tableRow(row)}\n`);
   // Block elements start and end a line (a quote's author <strong> runs
   // straight into its <p> otherwise); the blank lines this makes collapse below.
   s = s.replace(/<br\s*\/?>/gi, '\n').replace(/<\/?(p|div|li|tr|h[1-6])\b[^>]*>/gi, '\n');
@@ -556,7 +599,56 @@ export function oldestFirst<T extends Pick<RawMessage, 'id' | 'originalarrivalti
     .map(({ m }) => m);
 }
 
-export function normaliseMessage(m: RawMessage, meMri: string): NormalisedMessage {
+/** True when `Intl` knows `tz` as a time zone (an IANA name such as `America/New_York`, or `UTC`). */
+export function isTimeZone(tz: string): boolean {
+  if (tz.trim() === '') return false;
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const pad = (n: number, width = 2): string => String(n).padStart(width, '0');
+
+/**
+ * An ISO instant as wall-clock time in `timeZone`, ISO 8601 with that zone's
+ * offset at that instant (`2026-10-09T08:05:00.000-04:00`) — so DST is right
+ * per message. `undefined` for an unreadable time; `timeZone` must be valid
+ * ({@link isTimeZone}).
+ */
+export function localIsoTime(iso: string, timeZone: string): string | undefined {
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return undefined;
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    hourCycle: 'h23',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).formatToParts(new Date(ms));
+  const get = (type: Intl.DateTimeFormatPartTypes): number => Number(parts.find((p) => p.type === type)?.value);
+  const millis = ((ms % 1000) + 1000) % 1000;
+  const wall = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), get('second'), millis);
+  const offsetMin = Math.round((wall - ms) / 60_000);
+  const sign = offsetMin < 0 ? '-' : '+';
+  const abs = Math.abs(offsetMin);
+  return (
+    `${pad(get('year'), 4)}-${pad(get('month'))}-${pad(get('day'))}T${pad(get('hour'))}:${pad(get('minute'))}:` +
+    `${pad(get('second'))}.${pad(millis, 3)}${sign}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`
+  );
+}
+
+export interface NormaliseOptions {
+  /** An IANA time zone: adds `time_local` beside `time`. */
+  timeZone?: string;
+}
+
+export function normaliseMessage(m: RawMessage, meMri: string, opts: NormaliseOptions = {}): NormalisedMessage {
   const props = m.properties ?? {};
   const mri = senderMri(m.from);
   const arrival = Number(m.id);
@@ -568,10 +660,12 @@ export function normaliseMessage(m: RawMessage, meMri: string): NormalisedMessag
   const root = /;messageid=(\d+)/.exec(m.conversationLink ?? '')?.[1];
   const content = m.content ?? '';
   const reactions = reactionsOf(props.emotions, meMri);
+  const timeLocal = opts.timeZone !== undefined ? localIsoTime(time, opts.timeZone) : undefined;
 
   return {
     id: m.id,
     time,
+    ...(timeLocal !== undefined ? { time_local: timeLocal } : {}),
     sender: nonEmpty(m.imdisplayname) ?? mri ?? 'unknown',
     fromMe: mri !== undefined && mri === meMri,
     text: htmlToText(content),

@@ -206,13 +206,17 @@ export interface ConfirmOutcome {
  * With `since` (epoch ms), a candidate whose newest activity predates it is
  * not read at all, and one whose newest real unread message predates it is
  * not kept; both go in `older`.
+ *
+ * With `cursors` ({ conversationId: messageId }), a candidate's read stops at
+ * the later of its horizon and its cursor (`cursor.ts`), so only unread
+ * messages newer than the cursor count — one with none past it is not kept.
  */
 export async function confirmUnreadCandidates(
   chatsvc: ChatServiceClient,
   raw: readonly RawConversation[],
   me: string,
   candidates: readonly ConversationSummary[],
-  opts: { limit: number; maxRaw: number; since?: number },
+  opts: { limit: number; maxRaw: number; since?: number; cursors?: Readonly<Record<string, string>> },
 ): Promise<ConfirmOutcome> {
   const byId = new Map(raw.map((c) => [c.id, c]));
   const since = opts.since ?? 0;
@@ -226,7 +230,9 @@ export async function confirmUnreadCandidates(
     const newest = newestActivityMs(conv);
     // Nothing at all happened inside the window, so no unread message can be in it.
     if (newest !== undefined && newest < since) return { kind: 'older' };
-    const horizon = readHorizon(conv);
+    const cursors = opts.cursors ?? {};
+    const cursor = Object.hasOwn(cursors, summary.id) ? Number(cursors[summary.id]) : 0;
+    const horizon = Math.max(readHorizon(conv), Number.isFinite(cursor) ? cursor : 0);
     try {
       return { kind: 'read', read: await readUnread(chatsvc, summary.id, horizon, me, opts) };
     } catch (error) {

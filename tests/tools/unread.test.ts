@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { createTestHarness, parseToolResult } from '@chrischall/mcp-utils/test';
 import { McpToolError } from '@chrischall/mcp-utils';
 import { registerUnreadTools } from '../../src/tools/unread.js';
+import { localIsoTime } from '../../src/model.js';
 import type { ChatServiceClient, GetMessagesOptions, RawMessage } from '../../src/chatsvc.js';
 import { DAY, fakeChatsvc, messagesFrom, pinClock, rawConv, rawMsg } from './fake-chatsvc.js';
 
@@ -107,6 +108,36 @@ describe('teams_get_unread', () => {
     expect(data).not.toHaveProperty('more_unread_conversations');
   });
 
+  it('adds time_local in tz (or TEAMS_TIME_ZONE) to every unread message, chat and channel alike', async () => {
+    type Timed = { time: string; time_local?: string };
+    const timed = (data: Record<string, unknown> | undefined): Timed[] =>
+      (data?.conversations as { messages?: Timed[]; threads?: { root: Timed | { missing: true }; replies: Timed[] }[] }[]).flatMap(
+        (e) => e.messages ?? e.threads!.flatMap((t) => ['time' in t.root ? [t.root as Timed] : [], t.replies].flat()),
+      );
+    try {
+      vi.stubEnv('TEAMS_TIME_ZONE', '');
+      const plain = timed((await call(chatsvcWith())).data);
+      expect(plain.length).toBeGreaterThan(0);
+      expect(plain.every((m) => !('time_local' in m))).toBe(true);
+
+      const ny = timed((await call(chatsvcWith(), { tz: 'America/New_York' })).data);
+      expect(ny.map((m) => m.time_local)).toEqual(ny.map((m) => localIsoTime(m.time, 'America/New_York')));
+      expect(ny[0].time_local).toMatch(/-04:00$/);
+
+      vi.stubEnv('TEAMS_TIME_ZONE', 'Asia/Kolkata');
+      const env = timed((await call(chatsvcWith())).data);
+      expect(env.every((m) => m.time_local?.endsWith('+05:30'))).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('rejects a tz Intl does not know', async () => {
+    const { result } = await call(chatsvcWith(), { tz: 'Mars/Olympus_Mons' });
+    expect(result.isError).toBe(true);
+    expect(errorText(result)).toMatch(/IANA time zone/);
+  });
+
   it('titles an unread untitled group chat by its participants', async () => {
     const UNTITLED = '19:untitled0001@thread.v2';
     const convs = [rawConv(UNTITLED, { at: T0 + 4 * MIN, horizon: T0, sender: 'King, Greg' })];
@@ -138,7 +169,7 @@ describe('teams_get_unread', () => {
     expect(optsFor(DM).stopAt?.(rawMsg(T0 + 5 * MIN, { conv: DM }))).toBe(true);
   });
 
-  it('groups a channel\'s unread posts into threads, marking an already-read root as missing', async () => {
+  it('groups a channel\'s unread posts into threads, marking an already-read root it cannot fetch as missing', async () => {
     const { data } = await call(chatsvcWith());
 
     const ch = entry(data, CHANNEL);
@@ -150,6 +181,22 @@ describe('teams_get_unread', () => {
     expect((ch.threads![1].root as Msg).text).toBe('new post');
     expect(ch.threads![1].replies.map((r) => r.text)).toEqual(['reply to new post']);
     expect(ch.unread_count).toBe(3);
+  });
+
+  it('fills an already-read root from the service, marked outside_window', async () => {
+    const getMessage = vi.fn(async (_c: string, id: string) =>
+      id === String(T0 - 10 * MIN) ? rawMsg(T0 - 10 * MIN, { conv: CHANNEL, text: 'old root' }) : undefined,
+    );
+    const { data } = await call(chatsvcWith({ getMessage }));
+
+    expect(getMessage).toHaveBeenCalledTimes(1);
+    expect(getMessage).toHaveBeenCalledWith(CHANNEL, String(T0 - 10 * MIN));
+    const ch = entry(data, CHANNEL);
+    expect(ch.threads![0].root).toMatchObject({ id: String(T0 - 10 * MIN), text: 'old root', outside_window: true });
+    expect(ch.threads![0].replies.map((r) => r.text)).toEqual(['reply to old root']);
+    // The read root is not unread and is not counted.
+    expect(ch.unread_count).toBe(3);
+    expect(data?.total_unread).toBe(2 + 1 + 3 + 1);
   });
 
   it('filters by kind: chat covers group, meeting and 1:1 chats but not channels', async () => {
@@ -674,6 +721,8 @@ describe('teams_get_unread', () => {
     expect(tool.description).toMatch(/skipped_unreachable/);
     expect(tool.description).not.toMatch(/uncertain/);
     expect(Object.keys((tool.inputSchema as { properties?: object }).properties ?? {}).sort()).toEqual([
+      'cursors',
+      'format',
       'include_hidden',
       'include_muted',
       'kinds',
@@ -682,11 +731,151 @@ describe('teams_get_unread', () => {
       'per_conversation_limit',
       'query',
       'since_days',
+      'tz',
     ]);
+    expect(tool.description).toMatch(/time_local/);
     expect(tool.description).toMatch(/since_days/);
     expect(tool.description).toMatch(/older_unread_skipped/);
     expect(tool.description).toMatch(/older_unread_conversations/);
     expect(tool.description).toMatch(/muted_skipped/);
     expect(tool.description).toMatch(/include_muted/);
+  });
+});
+
+describe('teams_get_unread cursors', () => {
+  const at = (min: number) => String(T0 + min * MIN);
+  type CursorEntry = Entry & { next_cursor?: string };
+
+  it('returns only the unread messages newer than a conversation\'s cursor', async () => {
+    const { data } = await call(chatsvcWith(), { cursors: { [GROUP]: at(3) } });
+
+    expect(entry(data, GROUP).messages?.map((m) => m.text)).toEqual(['group unread 2']);
+    expect(entry(data, GROUP).unread_count).toBe(1);
+    expect((entry(data, GROUP) as CursorEntry).next_cursor).toBe(at(4));
+    // Conversations without a cursor are read down to their horizon as before.
+    expect(entry(data, DM).messages?.map((m) => m.text)).toEqual(['dm unread']);
+  });
+
+  it('stops each read at the later of its read horizon and its cursor', async () => {
+    const chatsvc = chatsvcWith();
+    await call(chatsvc, { cursors: { [GROUP]: at(3), [DM]: at(1) } });
+
+    const optsFor = (id: string) =>
+      vi.mocked(chatsvc.getMessages).mock.calls.find((c) => c[0] === id)![1] as GetMessagesOptions;
+    expect(optsFor(GROUP).stopAt?.(rawMsg(T0 + 3 * MIN))).toBe(true);
+    expect(optsFor(GROUP).stopAt?.(rawMsg(T0 + 4 * MIN))).toBe(false);
+    // A cursor below the horizon: the horizon still ends the read.
+    expect(optsFor(DM).stopAt?.(rawMsg(T0 + 5 * MIN, { conv: DM }))).toBe(true);
+  });
+
+  it('leaves out a conversation with nothing new past its cursor, and keeps its cursor in next_cursors', async () => {
+    const { data } = await call(chatsvcWith(), { cursors: { [GROUP]: at(4) } });
+
+    expect(ids(data)).toEqual([DM, CHANNEL, MEETING]);
+    expect(data?.total_unread).toBe(1 + 3 + 1);
+    expect((data?.next_cursors as Record<string, string>)[GROUP]).toBe(at(4));
+  });
+
+  it('a cursor below the read horizon changes nothing', async () => {
+    const { data } = await call(chatsvcWith(), { cursors: { [GROUP]: at(1) } });
+
+    expect(entry(data, GROUP).messages?.map((m) => m.text)).toEqual(['group unread 1', 'group unread 2']);
+  });
+
+  it('gives every returned conversation next_cursor, its newest returned message id, even without cursors', async () => {
+    const { data } = await call(chatsvcWith());
+
+    expect((entry(data, GROUP) as CursorEntry).next_cursor).toBe(at(4));
+    expect((entry(data, CHANNEL) as CursorEntry).next_cursor).toBe(at(5));
+    expect((entry(data, DM) as CursorEntry).next_cursor).toBe(at(6));
+  });
+
+  it('returns next_cursors: the passed cursors updated by every returned conversation, ready to pass back', async () => {
+    const UNKNOWN = '19:notalisted@thread.v2';
+    const { data } = await call(chatsvcWith(), { cursors: { [GROUP]: at(3), [UNKNOWN]: '123' } });
+
+    expect(data?.next_cursors).toEqual({
+      [GROUP]: at(4),
+      [UNKNOWN]: '123',
+      [DM]: at(6),
+      [CHANNEL]: at(5),
+      [MEETING]: at(3),
+    });
+
+    // Passed straight back, nothing is new.
+    const again = await call(chatsvcWith(), { cursors: data?.next_cursors });
+    expect(ids(again.data)).toEqual([]);
+    expect(again.data?.total_unread).toBe(0);
+    expect(again.data?.next_cursors).toEqual(data?.next_cursors);
+  });
+
+  it('never advances next_cursors for a conversation only listed in more_unread_conversations', async () => {
+    const { data } = await call(chatsvcWith(), { max_conversations: 1 });
+
+    expect(ids(data)).toEqual([DM]);
+    expect(Object.keys(data?.next_cursors as object)).toEqual([DM]);
+  });
+
+  it('with per_conversation_limit keeps the newest past the cursor and moves the cursor to the newest', async () => {
+    const many = Array.from({ length: 8 }, (_, i) => rawMsg(T0 + (10 + i) * MIN, { text: `unread ${i}` }));
+    const convs = [rawConv(GROUP, { topic: 'Busy', at: T0 + 17 * MIN, horizon: T0 })];
+    const { data } = await call(fakeChatsvc(convs, { getMessages: perConversation({ [GROUP]: many }) }), {
+      per_conversation_limit: 2,
+      cursors: { [GROUP]: at(12) },
+    });
+
+    const busy = entry(data, GROUP) as CursorEntry;
+    expect(busy.messages?.map((m) => m.text)).toEqual(['unread 6', 'unread 7']);
+    expect(busy.truncated).toMatchObject({ returned: 2 });
+    expect(busy.next_cursor).toBe(at(17));
+  });
+
+  it('is no truncation when the cursor, not the limit, ended the read', async () => {
+    const many = Array.from({ length: 8 }, (_, i) => rawMsg(T0 + (10 + i) * MIN, { text: `unread ${i}` }));
+    const convs = [rawConv(GROUP, { topic: 'Busy', at: T0 + 17 * MIN, horizon: T0 })];
+    const { data } = await call(fakeChatsvc(convs, { getMessages: perConversation({ [GROUP]: many }) }), {
+      per_conversation_limit: 2,
+      cursors: { [GROUP]: at(15) },
+    });
+
+    expect(entry(data, GROUP)).not.toHaveProperty('truncated');
+    expect(data?.total_unread_exact).toBe(true);
+  });
+
+  it('with since_days, new unread past the cursor but older than the window is still left out and counted', async () => {
+    const OLD = '19:old0001@thread.v2';
+    const old = rawConv(OLD, { topic: 'Old news', at: NOW - 20 * DAY, horizon: NOW - 30 * DAY, lastIm: NOW - 1 * MIN });
+    const getMessages = perConversation({
+      [OLD]: [rawMsg(NOW - 25 * DAY, { conv: OLD }), rawMsg(NOW - 20 * DAY, { conv: OLD, text: 'old unread' })],
+    });
+    const { data } = await call(fakeChatsvc([old], { getMessages }), { cursors: { [OLD]: String(NOW - 25 * DAY) } });
+
+    expect(ids(data)).toEqual([]);
+    expect(data?.older_unread_skipped).toBe(1);
+  });
+
+  it('rejects a cursor that is not a message id', async () => {
+    for (const cursors of [{ [GROUP]: 'yesterday' }, { [GROUP]: '' }, { [GROUP]: 5 }, ['1']]) {
+      const { result } = await call(chatsvcWith(), { cursors });
+      expect(result.isError).toBe(true);
+    }
+  });
+
+  it('stamps the result with fetched_at, the time of this live read', async () => {
+    const { data } = await call(chatsvcWith());
+
+    expect(data?.fetched_at).toBe(new Date(NOW).toISOString());
+  });
+
+  it('documents cursors, next_cursor and that nothing is cached', async () => {
+    const harness = await createTestHarness((server) => registerUnreadTools(server, { chatsvc: fakeChatsvc() }));
+    const tools = (await harness.client.listTools()).tools;
+    await harness.close();
+
+    const tool = tools[0];
+    expect(tool.description).toMatch(/cursors/);
+    expect(tool.description).toMatch(/next_cursor/);
+    expect(tool.description).toMatch(/fetched_at/);
+    expect(tool.description).toMatch(/no cache|not cached|never cached/i);
   });
 });
