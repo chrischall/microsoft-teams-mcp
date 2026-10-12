@@ -6,8 +6,10 @@ import {
   conversationSummary,
   htmlToText,
   isUnread,
+  isTimeZone,
   isUnreadCandidate,
   isUserMessage,
+  localIsoTime,
   matchConversations,
   newestActivityMs,
   oneOnOnePeerMri,
@@ -193,6 +195,61 @@ describe('htmlToText', () => {
   it('leaves plain text with a bare < alone', () => {
     expect(htmlToText('a < b and c > d')).toBe('a < b and c > d');
   });
+
+  it('separates table cells with " | ", one row per line', () => {
+    // A file-monitor report as Teams renders a pasted table: header row, then
+    // data rows, with <p> inside cells and attributes on every element.
+    const body =
+      '<p>Overnight file monitor:</p>' +
+      '<table itemprop="copy-paste-table" style="border-collapse:collapse"><tbody>' +
+      '<tr><th><p>File</p></th><th><p>Status</p></th><th><p>Last seen</p></th></tr>' +
+      '<tr><td style="width:120px"><p>orders_2026-10-11.csv</p></td><td><p>Arrived</p></td><td><p>02:14</p></td></tr>' +
+      '<tr><td><p>invoices.csv</p></td><td><p><b>Missing</b></p></td><td><p>&nbsp;</p></td></tr>' +
+      '<tr>\n<td>refunds.csv</td>\n<td>Late</td>\n<td>04:50</td>\n</tr>' +
+      '</tbody></table><p>Ping me if invoices stays missing.</p>';
+    expect(htmlToText(body)).toBe(
+      'Overnight file monitor:\n' +
+        'File | Status | Last seen\n' +
+        'orders_2026-10-11.csv | Arrived | 02:14\n' +
+        'invoices.csv | Missing |\n' +
+        'refunds.csv | Late | 04:50\n' +
+        'Ping me if invoices stays missing.',
+    );
+  });
+
+  it('keeps a table row inside a quote quoted', () => {
+    expect(htmlToText('<blockquote><table><tr><td>a</td><td>b</td></tr></table></blockquote>ok')).toBe('> a | b\nok');
+  });
+
+  it('never truncates a long body', () => {
+    const long = 'x'.repeat(20_000);
+    expect(htmlToText(`<p>${long}</p>`)).toBe(long);
+    expect(normaliseMessage({ id: '1', messagetype: 'RichText/Html', content: `<p>${long}</p>` }, ME).text).toHaveLength(
+      20_000,
+    );
+  });
+});
+
+describe('localIsoTime', () => {
+  it('renders a UTC instant in an IANA zone as ISO 8601 with its offset', () => {
+    expect(localIsoTime('2026-10-09T12:05:00.000Z', 'America/New_York')).toBe('2026-10-09T08:05:00.000-04:00');
+    expect(localIsoTime('2026-01-09T12:05:00.000Z', 'America/New_York')).toBe('2026-01-09T07:05:00.000-05:00');
+    expect(localIsoTime('2026-10-09T23:30:00.250Z', 'Asia/Kolkata')).toBe('2026-10-10T05:00:00.250+05:30');
+    expect(localIsoTime('2026-10-09T12:05:00.000Z', 'UTC')).toBe('2026-10-09T12:05:00.000+00:00');
+  });
+
+  it('is undefined for an unreadable time', () => {
+    expect(localIsoTime('', 'America/New_York')).toBeUndefined();
+  });
+});
+
+describe('isTimeZone', () => {
+  it('accepts IANA names and rejects anything Intl does not know', () => {
+    expect(isTimeZone('America/New_York')).toBe(true);
+    expect(isTimeZone('UTC')).toBe(true);
+    expect(isTimeZone('Mars/Olympus_Mons')).toBe(false);
+    expect(isTimeZone('')).toBe(false);
+  });
 });
 
 describe('normaliseMessage', () => {
@@ -254,6 +311,14 @@ describe('normaliseMessage', () => {
       edited: false,
       attachments: { files: [], images: [] },
     });
+  });
+
+  it('adds time_local right after time when given a time zone, and not otherwise', () => {
+    const n = normaliseMessage(message('1760000300000'), ME, { timeZone: 'America/New_York' });
+    expect(n.time).toBe('2026-10-09T12:05:00.000Z');
+    expect(n.time_local).toBe('2026-10-09T08:05:00.000-04:00');
+    expect(Object.keys(n).slice(0, 3)).toEqual(['id', 'time', 'time_local']);
+    expect(normaliseMessage(message('1760000300000'), ME)).not.toHaveProperty('time_local');
   });
 
   it('falls back to the id for time and the MRI for sender', () => {

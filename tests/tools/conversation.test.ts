@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { createTestHarness, parseToolResult } from '@chrischall/mcp-utils/test';
 import { McpToolError } from '@chrischall/mcp-utils';
 import { registerConversationTools, resolveListed } from '../../src/tools/conversation.js';
@@ -256,7 +256,7 @@ describe('teams_read_conversation', () => {
     expect(data).not.toHaveProperty('truncated');
   });
 
-  it('groups a channel into threads, marking a root outside the window as missing', async () => {
+  it('groups a channel into threads, marking a root outside the window it cannot fetch as missing', async () => {
     const root1 = T0 - 10 * MIN; // outside the window
     const root2 = T0 + 1 * MIN;
     const msgs = [
@@ -279,6 +279,73 @@ describe('teams_read_conversation', () => {
     expect(data?.unread_count).toBe(2);
     // since stopped below the read horizon, so every unread message was seen.
     expect(data).not.toHaveProperty('unread_count_scope');
+  });
+
+  it('fills a root outside the window from the service, marked outside_window', async () => {
+    const root = T0 - 10 * MIN;
+    const msgs = [
+      rawMsg(T0 + 3 * MIN, { conv: CHANNEL, rootId: root, text: 'late reply' }),
+      rawMsg(T0 + 4 * MIN, { conv: CHANNEL, rootId: root, text: 'later reply' }),
+    ];
+    const stored = { ...rawMsg(root, { conv: CHANNEL, text: 'old root', sender: 'Example Poster' }), properties: { subject: 'Release plan' } };
+    const getMessage = vi.fn(async (_c: string, id: string) => (id === String(root) ? stored : undefined));
+    const { data } = await call(chatsvcWith(msgs, { getMessage }), { conversation: CHANNEL, since: new Date(T0).toISOString() });
+
+    expect(getMessage).toHaveBeenCalledWith(CHANNEL, String(root));
+    const threads = data?.threads as Thread[];
+    expect(threads).toHaveLength(1);
+    expect(threads[0].root).toMatchObject({
+      id: String(root),
+      text: 'old root',
+      sender: 'Example Poster',
+      subject: 'Release plan',
+      time: new Date(root).toISOString(),
+      outside_window: true,
+    });
+    expect(threads[0].root).not.toHaveProperty('missing');
+    expect(threads[0].replies.map((r) => r.text)).toEqual(['late reply', 'later reply']);
+    // The root is context, not part of the read: counts and cursor are the replies'.
+    expect(data?.unread_count).toBe(2);
+    expect(data?.next_cursor).toBe(String(T0 + 4 * MIN));
+  });
+
+  it('keeps a root it could not fetch as { id, missing: true } and still returns the read', async () => {
+    const root = T0 - 10 * MIN;
+    const msgs = [rawMsg(T0 + 3 * MIN, { conv: CHANNEL, rootId: root, text: 'late reply' })];
+    const getMessage = vi.fn(async () => {
+      throw new McpToolError('Teams chat service returned HTTP 403.', { status: 403 });
+    });
+    const { result, data } = await call(chatsvcWith(msgs, { getMessage }), { conversation: CHANNEL });
+
+    expect(result.isError).toBeFalsy();
+    expect((data?.threads as Thread[])[0].root).toEqual({ id: String(root), missing: true });
+  });
+
+  it('fetches no roots for a chat', async () => {
+    const chatsvc = chatsvcWith();
+    await call(chatsvc, { conversation: GROUP });
+
+    expect(chatsvc.getMessage).not.toHaveBeenCalled();
+  });
+
+  it('fetches at most 25 roots in one call, across every conversation it reads', async () => {
+    const CHANNEL2 = '19:chan0002@thread.tacv2';
+    const repliesTo = (conv: string, base: number) =>
+      Array.from({ length: 20 }, (_, i) => rawMsg(base + i * 1000, { conv, rootId: T0 - (i + 1) * MIN }));
+    const byId: Record<string, ReturnType<typeof rawMsg>[]> = {
+      [CHANNEL]: repliesTo(CHANNEL, T0 + MIN),
+      [CHANNEL2]: repliesTo(CHANNEL2, T0 + 2 * MIN),
+    };
+    const getMessages = vi.fn(async (id: string, opts: GetMessagesOptions) => messagesFrom(byId[id] ?? [])(id, opts));
+    const getMessage = vi.fn(async (conv: string, id: string) => rawMsg(Number(id), { conv }));
+    const convs = [...CONVS, rawConv(CHANNEL2, { topic: 'Ops', at: T0 + 4 * MIN, spaceId: TEAM })];
+    const { data } = await call(fakeChatsvc(convs, { getMessages, getMessage }), { conversation: [CHANNEL, CHANNEL2] });
+
+    expect(getMessage).toHaveBeenCalledTimes(25);
+    const roots = (data?.conversations as { threads: Thread[] }[]).flatMap((c) => c.threads.map((t) => t.root));
+    expect(roots).toHaveLength(40);
+    expect(roots.filter((r) => 'outside_window' in r)).toHaveLength(25);
+    expect(roots.filter((r) => 'missing' in r)).toHaveLength(15);
   });
 
   it('labels unread_count window-scoped when limit cut the read', async () => {
@@ -405,10 +472,229 @@ describe('teams_read_conversation', () => {
     expect(tool.annotations?.readOnlyHint).toBe(true);
     expect(tool.annotations?.openWorldHint).toBe(true);
     expect(Object.keys((tool.inputSchema as { properties?: object }).properties ?? {}).sort()).toEqual([
+      'after_message_id',
       'conversation',
+      'format',
       'limit',
       'since',
+      'tz',
       'unread_only',
     ]);
+    expect(tool.description).toMatch(/time_local/);
+    expect(tool.description).toMatch(/TEAMS_TIME_ZONE/);
+  });
+
+  describe('time zones', () => {
+    afterEach(() => vi.unstubAllEnvs());
+
+    type Timed = { time: string; time_local?: string };
+
+    it('keeps time in UTC and adds no time_local by default', async () => {
+      vi.stubEnv('TEAMS_TIME_ZONE', '');
+      const { data } = await call(chatsvcWith(), { conversation: GROUP });
+      const [first] = data?.messages as Timed[];
+      expect(first.time).toBe(new Date(T0 + MIN).toISOString());
+      expect(first).not.toHaveProperty('time_local');
+    });
+
+    it('adds time_local in the tz asked for, next to the UTC time', async () => {
+      const { data } = await call(chatsvcWith(), { conversation: GROUP, tz: 'America/New_York' });
+      const [first] = data?.messages as Timed[];
+      // T0 + 1 min is 2025-10-09T08:54:20Z; New York is on EDT (-04:00) then.
+      expect(first.time).toBe('2025-10-09T08:54:20.000Z');
+      expect(first.time_local).toBe('2025-10-09T04:54:20.000-04:00');
+      expect(Object.keys(first).slice(0, 3)).toEqual(['id', 'time', 'time_local']);
+    });
+
+    it('adds time_local to channel thread posts too', async () => {
+      const chatsvc = fakeChatsvc(CONVS, {
+        getMessages: messagesFrom([rawMsg(T0 + 3 * MIN, { text: 'root', conv: CHANNEL })]),
+      });
+      const { data } = await call(chatsvc, { conversation: CHANNEL, tz: 'Asia/Kolkata' });
+      const [thread] = data?.threads as { root: Timed }[];
+      expect(thread.root.time_local).toBe('2025-10-09T14:26:20.000+05:30');
+    });
+
+    it('defaults tz to TEAMS_TIME_ZONE, and an explicit tz wins over it', async () => {
+      vi.stubEnv('TEAMS_TIME_ZONE', 'Europe/London');
+      const fromEnv = await call(chatsvcWith(), { conversation: GROUP });
+      expect((fromEnv.data?.messages as Timed[])[0].time_local).toBe('2025-10-09T09:54:20.000+01:00');
+      const explicit = await call(chatsvcWith(), { conversation: GROUP, tz: 'UTC' });
+      expect((explicit.data?.messages as Timed[])[0].time_local).toBe('2025-10-09T08:54:20.000+00:00');
+    });
+
+    it('rejects a tz Intl does not know', async () => {
+      const { result } = await call(chatsvcWith(), { conversation: GROUP, tz: 'Mars/Olympus_Mons' });
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toMatch(/IANA time zone/);
+    });
+
+    it('rejects a TEAMS_TIME_ZONE Intl does not know, naming the variable', async () => {
+      vi.stubEnv('TEAMS_TIME_ZONE', 'Not/AZone');
+      const { result } = await call(chatsvcWith(), { conversation: GROUP });
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toMatch(/TEAMS_TIME_ZONE/);
+    });
+  });
+});
+
+describe('teams_read_conversation after_message_id (cursor)', () => {
+  const ids = (data: Record<string, unknown> | undefined) => (data?.messages as Msg[]).map((m) => m.id);
+  const at = (min: number) => String(T0 + min * MIN);
+
+  it('returns only messages newer than the cursor, excluding the cursor message itself', async () => {
+    const { data } = await call(chatsvcWith(), { conversation: GROUP, after_message_id: at(3) });
+
+    expect(ids(data)).toEqual([at(3.5), at(4)]);
+    expect(data?.next_cursor).toBe(at(4));
+  });
+
+  it('stops paging at the first message at or before the cursor', async () => {
+    const chatsvc = chatsvcWith();
+    await call(chatsvc, { conversation: GROUP, after_message_id: at(3) });
+
+    const opts = vi.mocked(chatsvc.getMessages).mock.calls[0][1] as GetMessagesOptions;
+    expect(opts.stopAt?.(rawMsg(T0 + 3 * MIN))).toBe(true);
+    expect(opts.stopAt?.(rawMsg(T0 + 1 * MIN))).toBe(true);
+    expect(opts.stopAt?.(rawMsg(T0 + 3.5 * MIN))).toBe(false);
+  });
+
+  it('returns nothing, and the passed cursor back, when nothing is new', async () => {
+    const { data } = await call(chatsvcWith(), { conversation: GROUP, after_message_id: at(4) });
+
+    expect(data?.messages).toEqual([]);
+    expect(data?.next_cursor).toBe(at(4));
+    expect(data).not.toHaveProperty('truncated');
+  });
+
+  it('a cursor past only system events and my own sends returns no messages and keeps the cursor', async () => {
+    const msgs = [...GROUP_MSGS, rawMsg(T0 + 5 * MIN, { type: 'Event/Call' })];
+    const { data } = await call(chatsvcWith(msgs), { conversation: GROUP, after_message_id: at(4) });
+
+    expect(data?.messages).toEqual([]);
+    expect(data?.next_cursor).toBe(at(4));
+  });
+
+  it('returns next_cursor as the newest returned message id without a cursor', async () => {
+    const { data } = await call(chatsvcWith(), { conversation: GROUP });
+
+    expect(data?.next_cursor).toBe(at(4));
+  });
+
+  it('omits next_cursor when nothing was returned and no cursor was passed', async () => {
+    const { data } = await call(chatsvcWith([]), { conversation: GROUP });
+
+    expect(data).not.toHaveProperty('next_cursor');
+  });
+
+  it('feeds next_cursor back as after_message_id to read only what arrived since', async () => {
+    const first = await call(chatsvcWith(GROUP_MSGS.slice(0, 4)), { conversation: GROUP });
+    expect(first.data?.next_cursor).toBe(at(3));
+
+    const second = await call(chatsvcWith(), { conversation: GROUP, after_message_id: first.data?.next_cursor });
+    expect(ids(second.data)).toEqual([at(3.5), at(4)]);
+  });
+
+  it('with limit keeps the newest after the cursor, says it truncated, and moves the cursor to the newest', async () => {
+    const many = Array.from({ length: 10 }, (_, i) => rawMsg(T0 + i * MIN));
+    const { data } = await call(chatsvcWith(many), { conversation: GROUP, after_message_id: at(2), limit: 3 });
+
+    expect(ids(data)).toEqual([at(7), at(8), at(9)]);
+    expect(data?.truncated).toMatchObject({ returned: 3 });
+    expect(data?.next_cursor).toBe(at(9));
+  });
+
+  it('is no truncation when the cursor, not the limit, ended the read', async () => {
+    const many = Array.from({ length: 10 }, (_, i) => rawMsg(T0 + i * MIN));
+    const { data } = await call(chatsvcWith(many), { conversation: GROUP, after_message_id: at(6), limit: 3 });
+
+    expect(ids(data)).toEqual([at(7), at(8), at(9)]);
+    expect(data).not.toHaveProperty('truncated');
+  });
+
+  it('with since, the later of the two boundaries wins', async () => {
+    const sinceLater = await call(chatsvcWith(), {
+      conversation: GROUP,
+      after_message_id: at(1),
+      since: new Date(T0 + 3.5 * MIN).toISOString(),
+    });
+    expect(ids(sinceLater.data)).toEqual([at(3.5), at(4)]);
+
+    const cursorLater = await call(chatsvcWith(), {
+      conversation: GROUP,
+      after_message_id: at(3.5),
+      since: new Date(T0 + 1 * MIN).toISOString(),
+    });
+    expect(ids(cursorLater.data)).toEqual([at(4)]);
+  });
+
+  it('with unread_only, a cursor below the read horizon changes nothing', async () => {
+    const { data } = await call(chatsvcWith(), { conversation: GROUP, unread_only: true, after_message_id: at(1) });
+
+    expect((data?.messages as Msg[]).map((m) => m.text)).toEqual(['third', 'fourth']);
+    expect(data?.unread_count).toBe(2);
+    expect(data).not.toHaveProperty('unread_count_scope');
+    expect(data?.next_cursor).toBe(at(4));
+  });
+
+  it('with unread_only, a cursor above the read horizon returns only the unread past it, window-scoped', async () => {
+    const { data } = await call(chatsvcWith(), { conversation: GROUP, unread_only: true, after_message_id: at(3) });
+
+    expect((data?.messages as Msg[]).map((m) => m.text)).toEqual(['fourth']);
+    expect(data?.unread_count).toBe(1);
+    expect(data?.unread_count_scope).toBe('window');
+  });
+
+  it('with unread_only and nothing new past the cursor, returns nothing and the cursor', async () => {
+    const { data } = await call(chatsvcWith(), { conversation: GROUP, unread_only: true, after_message_id: at(4) });
+
+    expect(data?.messages).toEqual([]);
+    expect(data?.next_cursor).toBe(at(4));
+  });
+
+  it('moves the cursor to the newest reply in a channel, wherever its thread sits', async () => {
+    const root = T0 + 1 * MIN;
+    const msgs = [
+      rawMsg(root, { conv: CHANNEL, text: 'root' }),
+      rawMsg(T0 + 5 * MIN, { conv: CHANNEL, rootId: root, text: 'new reply' }),
+    ];
+    const { data } = await call(chatsvcWith(msgs), { conversation: CHANNEL, after_message_id: at(2) });
+
+    const threads = data?.threads as Thread[];
+    expect(threads).toHaveLength(1);
+    expect(threads[0].root).toEqual({ id: String(root), missing: true });
+    expect(data?.next_cursor).toBe(at(5));
+  });
+
+  it('rejects an after_message_id that is not a message id', async () => {
+    for (const after_message_id of ['yesterday', '', '12a', '-5']) {
+      const { result } = await call(chatsvcWith(), { conversation: GROUP, after_message_id });
+      expect(result.isError).toBe(true);
+    }
+  });
+
+  it('stamps every result with fetched_at, the time of this live read', async () => {
+    const before = Date.now();
+    const { data } = await call(chatsvcWith(), { conversation: GROUP });
+
+    const fetchedAt = Date.parse(String(data?.fetched_at));
+    expect(fetchedAt).toBeGreaterThanOrEqual(before);
+    expect(fetchedAt).toBeLessThanOrEqual(Date.now());
+    expect(String(data?.fetched_at)).toMatch(/Z$/);
+  });
+
+  it('documents the cursor and that nothing is cached', async () => {
+    const harness = await createTestHarness((server) => registerConversationTools(server, { chatsvc: chatsvcWith() }));
+    try {
+      const { tools } = await harness.client.listTools();
+      const tool = tools.find((t) => t.name === 'teams_read_conversation')!;
+      expect(tool.description).toMatch(/after_message_id/);
+      expect(tool.description).toMatch(/next_cursor/);
+      expect(tool.description).toMatch(/fetched_at/);
+      expect(tool.description).toMatch(/no cache|not cached|never cached/i);
+      expect(tool.inputSchema.properties).toHaveProperty('after_message_id');
+    } finally {
+      await harness.close();
+    }
   });
 });

@@ -8,6 +8,7 @@ import { registerChatTools } from '../src/tools/chat.js';
 import { registerChannelTools } from '../src/tools/channels.js';
 import { registerConversationTools } from '../src/tools/conversation.js';
 import { registerUnreadTools } from '../src/tools/unread.js';
+import { registerChangesTools } from '../src/tools/changes.js';
 import { registerAttachmentTools } from '../src/tools/attachment.js';
 import { registerSendTools } from '../src/tools/send.js';
 import { registerReactTools } from '../src/tools/react.js';
@@ -25,6 +26,7 @@ export async function servedTools() {
     registerChannelTools(server, deps);
     registerConversationTools(server, deps);
     registerUnreadTools(server, deps);
+    registerChangesTools(server, deps);
     registerAttachmentTools(server, deps);
     registerSendTools(server, deps);
     registerReactTools(server, deps);

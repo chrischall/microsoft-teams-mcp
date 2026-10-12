@@ -119,6 +119,8 @@ export function fakeChatsvc(
     listConversations: vi.fn().mockResolvedValue(conversations),
     meMri: vi.fn().mockResolvedValue(ME),
     getMessages: vi.fn().mockResolvedValue([]),
+    // No message by id unless a test says so: a channel root outside the window stays missing.
+    getMessage: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   } as unknown as ChatServiceClient;
 }
