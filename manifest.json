@@ -43,6 +43,7 @@
         "TEAMS_CAPTURE_TIMEOUT": "${user_config.capture_timeout}",
         "TEAMS_TOKEN_CACHE": "${user_config.token_cache}",
         "TEAMS_TOKEN_FILE": "${user_config.token_file}",
+        "TEAMS_TIME_ZONE": "${user_config.time_zone}",
         "MCP_CONFIRM_MODE": "${user_config.confirm_mode}",
         "MCP_CONFIRM_ELICITATION": "${user_config.confirm_elicitation}",
         "MCP_CONFIRM_TTL_SECONDS": "${user_config.confirm_ttl_seconds}",
@@ -110,6 +111,12 @@
       "type": "string",
       "title": "Token cache file (optional)",
       "description": "Optional. Where the captured token is cached. Defaults to ~/.microsoft-teams-mcp/token.json.",
+      "required": false
+    },
+    "time_zone": {
+      "type": "string",
+      "title": "Time zone (optional)",
+      "description": "Optional. Default IANA time zone (e.g. America/New_York) for the tz argument of teams_read_conversation and teams_get_unread: each message then carries time_local next to its UTC time. Leave blank for UTC only.",
       "required": false
     },
     "confirm_mode": {

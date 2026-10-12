@@ -535,6 +535,10 @@ instead.
 - **Muted chats in `teams_get_unread`:** chats you muted in Teams are left out
   and counted in `muted_skipped`. Pass `include_muted: true` for the old
   behaviour.
+- **Read tools are no longer annotated read-only:** `teams_read_conversation`
+  and `teams_get_unread` take an opt-in `mark_read` flag, so they are published
+  with `readOnly: false`. A client that auto-approves only read-only tools may
+  now ask before each read. Without `mark_read` they still never write.
 
 ## Upgrading from 0.3
 
