@@ -160,7 +160,7 @@
     },
     {
       "name": "teams_search_messages",
-      "description": "Search messages by text across chats and channels (a bounded scan of recent conversations), without marking anything read"
+      "description": "Search messages by text across chats and channels with Teams' own search (Microsoft Substrate), falling back to a bounded scan of recent conversations, without marking anything read"
     },
     {
       "name": "teams_get_unread",

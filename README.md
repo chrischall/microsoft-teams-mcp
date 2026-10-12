@@ -66,6 +66,36 @@ how the chat-service token is captured:
   a SharePoint host your token does not cover, comes back as metadata and its
   open link rather than failing.
 
+## Substrate search
+
+`teams_search_messages` searches the way the Teams search box does: through
+**Microsoft Substrate** (`POST https://substrate.office.com/searchservice/api/v2/query`).
+Substrate does not accept the chat-service token either, so search captures a
+**third token** — off the request the Teams tab makes to
+`substrate.office.com/searchservice/*` when you run a search there — and caches it
+in `~/.microsoft-teams-mcp/substrate-token.json`. As with the other two, it is
+read only from the request header, never from page storage.
+
+- **A one-time re-pair.** The search path declares its own trust scope,
+  `substrate.office.com`, which the ContextMint Bridge grant has to cover. If you
+  paired `microsoft-teams-mcp` before this feature, revoke and re-pair it in the
+  bridge popup once. The chat-service and SharePoint captures are untouched.
+- **Run a search in Teams once.** The token is read off the Teams tab's own
+  search request, so the first search may need you to type anything into the
+  Teams search box and press Enter while the capture waits
+  (`TEAMS_CAPTURE_TIMEOUT`, default 30s).
+- **It falls back to scanning.** In the default `mode: "auto"`, when no Substrate
+  token can be captured or the search fails, the tool scans recent conversations
+  instead (`source: "scan"`, with a `fallback_reason`), and does not wait on
+  another capture for 10 minutes. `mode: "substrate"` fails instead;
+  `mode: "scan"` never touches Substrate.
+
+> **Not yet verified live.** The Substrate endpoint was seen live (2026-10-12),
+> but its token could not be captured to replay it, so the request body and
+> response fields this server uses are best evidence rather than observed
+> fact. Until that is confirmed, expect `auto` to fall back to the scan if
+> Substrate rejects what it is sent.
+
 ## Install
 
 ```sh
@@ -125,6 +155,7 @@ Everything is optional — by default the token is captured from your browser.
 | `TEAMS_CAPTURE_TIMEOUT` | Seconds to wait for the Teams tab to issue a chat-service request. Defaults to `30`. The bridge deadline is derived from it (window + 15s). |
 | `TEAMS_TOKEN_CACHE` | `false` to keep the captured token in memory only. Defaults to on. |
 | `TEAMS_TOKEN_FILE` | Where the captured token is cached. Defaults to `~/.microsoft-teams-mcp/token.json`. |
+| `TEAMS_SUBSTRATE_TOKEN_FILE` | Where the captured Substrate search token is cached. Defaults to `~/.microsoft-teams-mcp/substrate-token.json`. `TEAMS_TOKEN_CACHE=false` keeps it in memory too. |
 | `TEAMS_TIME_ZONE` | Default IANA time zone (e.g. `America/New_York`) for the `tz` argument of `teams_read_conversation` and `teams_get_unread`: each message then carries `time_local` (ISO 8601 with offset) next to its UTC `time`. Unset means no `time_local` unless `tz` is passed; a name `Intl` does not know is reported as an error. |
 | `TEAMS_WS_PORT` | fetchproxy concentrator port. Defaults to `37149`, the fleet-wide shared port. |
 | `FETCHPROXY_WS_HOST` | Bind interface for the bridge (default `127.0.0.1`; a literal IP only, anything else is ignored). Keep on loopback — it exists for ONE topology: a hosted child in its own network namespace. |
@@ -342,21 +373,32 @@ Everything is optional — by default the token is captured from your browser.
   channels, newest first: each hit names its conversation (id, title, kind,
   team) and carries the message's id, ISO-8601 time, sender, `fromMe`, plain
   text, subject and `replyTo` (a channel reply's root) — read it in context
-  with `teams_read_conversation`. Every word of `query` must appear (any
-  order, ignoring case; `"quoted words"` match as a phrase). `conversation`
-  narrows to one chat or channel (id or name, as in
-  `teams_read_conversation`), `from` to senders whose display name contains
-  it, `since` (ISO 8601; default the last 30 days) sets how far back to look,
-  `limit` caps the hits (default 25, max 200; `total_hits` and `truncated`
-  say when there were more). The chat service has no search, and Teams' own
-  search (Microsoft Substrate) needs a second token this MCP does not capture
-  yet, so this **scans**: the `max_conversations` (default 100, max 500) most
-  recently active conversations with activity since the cutoff are read back
-  to it, four at a time, and `scan` reports how many were read, how many the
-  window or the cap left out, and any read only partly (1,000 messages each).
-  Live, 100 conversations took about 15 seconds — narrow with `conversation`
-  or `since` when you can. Channels hidden in Teams are skipped unless named;
-  deleted messages and system events never match.
+  with `teams_read_conversation`. `conversation` narrows to one chat or
+  channel (id or name, as in `teams_read_conversation`), `from` to senders
+  whose display name contains it, `since` (ISO 8601; default the last 30 days)
+  sets how far back to look, `limit` caps the hits (default 25, max 200;
+  `total_hits` and `truncated` say when there were more). `source` says which
+  path answered:
+  - `"substrate"` (the default, `mode: "auto"`) — Teams' own search through
+    [Microsoft Substrate](#substrate-search): matched the way the Teams search
+    box matches, not bound to recent conversations. `conversation`, `from` and
+    `since` are applied to what it returns, 50 results a page, up to 10 pages;
+    a hit whose text is a preview rather than the whole message is marked
+    `excerpt: true`, and `substrate` reports the pages read and how many
+    results the filters dropped. A conversation missing from your listing is
+    named by its id.
+  - `"scan"` — when Substrate is unavailable or fails (`fallback_reason` says
+    why), or with `mode: "scan"`. Every word of `query` must appear (any
+    order, ignoring case; `"quoted words"` match as a phrase); the
+    `max_conversations` (default 100, max 500) most recently active
+    conversations with activity since the cutoff are read back to it, four at
+    a time, and `scan` reports how many were read, how many the window or the
+    cap left out, and any read only partly (1,000 messages each). Live, 100
+    conversations took about 15 seconds — narrow with `conversation` or
+    `since` when you can. Channels hidden in Teams are skipped unless named;
+    deleted messages and system events never match.
+
+  `mode: "substrate"` uses only Substrate and fails rather than falling back.
 - `teams_get_attachment` — one attachment of a message: an inline image is
   returned as the image itself; a shared file is downloaded from SharePoint and
   returned as its contents — an image as the image, anything else as an embedded
@@ -533,7 +575,9 @@ instead.
   `.asm.skype.com` (Teams' own image store) — an image link pointing anywhere
   else is refused. Shared-file download uses a **separate** SharePoint token
   (below), sent only to the file's own `*.sharepoint.com` host; the pre-signed
-  download link it returns is fetched with **no** token at all.
+  download link it returns is fetched with **no** token at all. Search uses a
+  third, Substrate token, sent only to
+  `https://substrate.office.com/searchservice/api/v2/query`.
 - **Shared files download from SharePoint.** They live in SharePoint, which
   does not accept the chat-service token, so `teams_get_attachment` captures a
   separate SharePoint token and fetches the file through SharePoint's v2.1

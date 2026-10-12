@@ -4,7 +4,8 @@ import { McpToolError } from '@chrischall/mcp-utils';
 import { registerSearchTools, matchesQuery } from '../../src/tools/search.js';
 import type { ChatServiceClient, GetMessagesOptions, RawMessage } from '../../src/chatsvc.js';
 import { UNTRUSTED_CONTENT_NOTE, UNTRUSTED_DESCRIPTION_SUFFIX } from '../../src/tools/untrusted.js';
-import { DAY, fakeChatsvc, pinClock, rawConv, rawMsg } from './fake-chatsvc.js';
+import { DAY, fakeChatsvc, ME, pinClock, rawConv, rawMsg } from './fake-chatsvc.js';
+import type { SubstrateMessage, SubstratePage, SubstrateSearch, SubstrateSearchRequest } from '../../src/substrate.js';
 
 const NOW = 1_760_000_000_000;
 const MIN = 60_000;
@@ -62,8 +63,8 @@ function chatsvcWith(overrides: Record<string, unknown> = {}): ChatServiceClient
   return fakeChatsvc(CONVS, { getMessages: perConversation(), ...overrides });
 }
 
-async function call(chatsvc: ChatServiceClient, args: Record<string, unknown>) {
-  const harness = await createTestHarness((server) => registerSearchTools(server, { chatsvc }));
+async function call(chatsvc: ChatServiceClient, args: Record<string, unknown>, substrate?: SubstrateSearch) {
+  const harness = await createTestHarness((server) => registerSearchTools(server, { chatsvc, ...(substrate ? { substrate } : {}) }));
   try {
     const result = await harness.callTool('teams_search_messages', args);
     return { result, data: result.isError ? undefined : (parseToolResult(result) as Record<string, unknown>) };
@@ -341,5 +342,178 @@ describe('teams_search_messages', () => {
   it('rejects a since that is not a date-time', async () => {
     const { result } = await call(chatsvcWith(), { query: 'deploy', since: 'last tuesday' });
     expect(result.isError).toBe(true);
+  });
+});
+
+/** A fake Substrate client serving `results` in pages of the requested size, newest first as given. */
+function fakeSubstrate(
+  results: SubstrateMessage[],
+  opts: { configured?: boolean; fail?: Error; total?: number } = {},
+): SubstrateSearch & { searchMessages: ReturnType<typeof vi.fn> } {
+  return {
+    isConfigured: () => opts.configured ?? true,
+    searchMessages: vi.fn(async (req: SubstrateSearchRequest): Promise<SubstratePage> => {
+      if (opts.fail) throw opts.fail;
+      const page = results.slice(req.from, req.from + req.size);
+      return {
+        results: page,
+        moreAvailable: req.from + req.size < results.length,
+        unmapped: 0,
+        ...(opts.total !== undefined ? { total: opts.total } : {}),
+      };
+    }),
+  };
+}
+
+function sub(at: number, conv: string, extra: Partial<SubstrateMessage> = {}): SubstrateMessage {
+  return {
+    conversationId: conv,
+    messageId: String(at),
+    time: new Date(at).toISOString(),
+    sender: 'Ada Example',
+    html: '<p>the <b>deploy</b> is done</p>',
+    ...extra,
+  };
+}
+
+describe('teams_search_messages via Substrate', () => {
+  it('uses Substrate by default, mapping hits to the scan\'s hit shape, and reads no conversation', async () => {
+    pinClock(NOW);
+    const chatsvc = chatsvcWith();
+    const substrate = fakeSubstrate([
+      sub(NOW - 1 * MIN, GROUP, { senderMri: ME, sender: 'Me Myself' }),
+      sub(NOW - 3 * DAY, CHANNEL, { replyTo: String(NOW - 4 * DAY), subject: 'Release', excerpt: true }),
+    ]);
+    const { data } = await call(chatsvc, { query: 'deploy' }, substrate);
+
+    expect(data?.source).toBe('substrate');
+    expect(data).not.toHaveProperty('fallback_reason');
+    expect(data).not.toHaveProperty('scan');
+    expect(vi.mocked(chatsvc.getMessages)).not.toHaveBeenCalled();
+    const hits = data?.hits as Hit[];
+    expect(hits[0]).toEqual({
+      conversation: { id: GROUP, title: 'Project Falcon', kind: 'group' },
+      message: { id: String(NOW - 1 * MIN), time: new Date(NOW - 1 * MIN).toISOString(), sender: 'Me Myself', fromMe: true, text: 'the deploy is done' },
+    });
+    expect(hits[1]).toEqual({
+      conversation: { id: CHANNEL, title: 'Design', kind: 'channel', team: 'Platform Team' },
+      message: {
+        id: String(NOW - 3 * DAY),
+        time: new Date(NOW - 3 * DAY).toISOString(),
+        sender: 'Ada Example',
+        fromMe: false,
+        text: 'the deploy is done',
+        excerpt: true,
+        subject: 'Release',
+        replyTo: String(NOW - 4 * DAY),
+      },
+    });
+    expect(data?.substrate).toMatchObject({ pages_read: 1, results_read: 2 });
+    expect(substrate.searchMessages.mock.calls[0][0]).toMatchObject({ query: 'deploy', from: 0 });
+  });
+
+  it('names a conversation missing from the listing by its id and a kind read off the id', async () => {
+    pinClock(NOW);
+    const { data } = await call(chatsvcWith(), { query: 'deploy' }, fakeSubstrate([sub(NOW - MIN, '19:gone0001@thread.tacv2')]));
+    expect((data?.hits as Hit[])[0].conversation).toEqual({ id: '19:gone0001@thread.tacv2', title: '19:gone0001@thread.tacv2', kind: 'channel' });
+  });
+
+  it('applies since client-side, and stops paging once a whole page is older than it', async () => {
+    pinClock(NOW);
+    const results = [
+      ...Array.from({ length: 50 }, (_, i) => sub(NOW - (i + 1) * MIN, GROUP)),
+      ...Array.from({ length: 50 }, (_, i) => sub(NOW - 40 * DAY - i * MIN, GROUP)),
+      ...Array.from({ length: 50 }, (_, i) => sub(NOW - 50 * DAY - i * MIN, GROUP)),
+    ];
+    const substrate = fakeSubstrate(results);
+    const { data } = await call(chatsvcWith(), { query: 'deploy', limit: 200 }, substrate);
+    expect(data?.hits as Hit[]).toHaveLength(50);
+    expect(substrate.searchMessages).toHaveBeenCalledTimes(2);
+    expect(data?.substrate).toMatchObject({ since: new Date(NOW - 30 * DAY).toISOString(), pages_read: 2 });
+  });
+
+  it('applies from client-side on the sender display name', async () => {
+    pinClock(NOW);
+    const { data } = await call(
+      chatsvcWith(),
+      { query: 'deploy', from: 'bob' },
+      fakeSubstrate([sub(NOW - MIN, GROUP), sub(NOW - 2 * MIN, GROUP, { sender: 'Bob Example' })]),
+    );
+    expect((data?.hits as Hit[]).map((h) => h.message.sender)).toEqual(['Bob Example']);
+  });
+
+  it('narrows to one named conversation', async () => {
+    pinClock(NOW);
+    const { data } = await call(
+      chatsvcWith(),
+      { query: 'deploy', conversation: 'launch' },
+      fakeSubstrate([sub(NOW - MIN, GROUP), sub(NOW - 2 * DAY, OTHER_GROUP)]),
+    );
+    expect((data?.hits as Hit[]).map((h) => h.conversation.id)).toEqual([OTHER_GROUP]);
+  });
+
+  it('pages until limit is filled and says when there were more', async () => {
+    pinClock(NOW);
+    const results = Array.from({ length: 120 }, (_, i) => sub(NOW - (i + 1) * MIN, GROUP));
+    const substrate = fakeSubstrate(results, { total: 120 });
+    const { data } = await call(chatsvcWith(), { query: 'deploy', limit: 60 }, substrate);
+    expect(data?.hits as Hit[]).toHaveLength(60);
+    expect(substrate.searchMessages.mock.calls.map(([r]) => (r as SubstrateSearchRequest).from)).toEqual([0, 50]);
+    expect(data?.truncated).toMatchObject({ returned: 60 });
+    expect(data?.total_hits).toBe(120);
+  });
+
+  it('reports Substrate\'s own total only when no client-side filter applied', async () => {
+    pinClock(NOW);
+    const substrate = fakeSubstrate([sub(NOW - MIN, GROUP), sub(NOW - 2 * MIN, GROUP, { sender: 'Bob Example' })], { total: 2 });
+    const { data } = await call(chatsvcWith(), { query: 'deploy', from: 'bob' }, substrate);
+    expect(data?.total_hits).toBe(1);
+  });
+
+  it('falls back to the scan, saying why, when Substrate fails', async () => {
+    pinClock(NOW);
+    const chatsvc = chatsvcWith();
+    const substrate = fakeSubstrate([], { fail: new Error('could not capture a Substrate search token from the browser (timed out)') });
+    const { data } = await call(chatsvc, { query: 'deploy' }, substrate);
+    expect(data?.source).toBe('scan');
+    expect(data?.fallback_reason).toMatch(/could not capture a Substrate search token/);
+    expect(data?.scan).toMatchObject({ method: 'client_scan' });
+    expect((data?.hits as Hit[]).length).toBe(4);
+  });
+
+  it('falls back to the scan when Substrate is not configured, without calling it', async () => {
+    pinClock(NOW);
+    const substrate = fakeSubstrate([], { configured: false });
+    const { data } = await call(chatsvcWith(), { query: 'deploy' }, substrate);
+    expect(data?.source).toBe('scan');
+    expect(data?.fallback_reason).toMatch(/TEAMS_DISABLE_FETCHPROXY/);
+    expect(substrate.searchMessages).not.toHaveBeenCalled();
+  });
+
+  it('mode "scan" never calls Substrate and gives no fallback_reason', async () => {
+    pinClock(NOW);
+    const substrate = fakeSubstrate([sub(NOW - MIN, GROUP)]);
+    const { data } = await call(chatsvcWith(), { query: 'deploy', mode: 'scan' }, substrate);
+    expect(data?.source).toBe('scan');
+    expect(data).not.toHaveProperty('fallback_reason');
+    expect(substrate.searchMessages).not.toHaveBeenCalled();
+  });
+
+  it('mode "substrate" forces a capture attempt and fails rather than falling back', async () => {
+    pinClock(NOW);
+    const chatsvc = chatsvcWith();
+    const substrate = fakeSubstrate([], { fail: new McpToolError('Substrate search returned HTTP 500.', { status: 500, kind: 'http' }) });
+    const { result } = await call(chatsvc, { query: 'deploy', mode: 'substrate' }, substrate);
+    expect(result.isError).toBe(true);
+    expect(errorText(result)).toContain('HTTP 500');
+    expect(substrate.searchMessages.mock.calls[0][1]).toEqual({ force: true });
+    expect(vi.mocked(chatsvc.getMessages)).not.toHaveBeenCalled();
+  });
+
+  it('keeps the untrusted-content envelope on a Substrate result', async () => {
+    pinClock(NOW);
+    const { data } = await call(chatsvcWith(), { query: 'deploy' }, fakeSubstrate([sub(NOW - MIN, GROUP)]));
+    expect(data?.untrusted_content).toBe(true);
+    expect(data?.note).toBe(UNTRUSTED_CONTENT_NOTE);
   });
 });

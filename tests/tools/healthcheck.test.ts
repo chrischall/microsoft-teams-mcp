@@ -220,6 +220,19 @@ describe('teams_healthcheck', () => {
     await harness.close();
   });
 
+  it('notes that search uses a separate Substrate token, captured on demand and never probed here', async () => {
+    const harness = await createTestHarness((server) =>
+      registerHealthcheckTool(server, deps(async () => [{ id: '19:a@thread.v2' }])),
+    );
+    const data = parseToolResult(await harness.callTool('teams_healthcheck')) as Record<string, unknown>;
+    expect(data.ok).toBe(true);
+    const substrate = String(data.substrate);
+    expect(substrate).toMatch(/teams_search_messages/);
+    expect(substrate).toMatch(/substrate\.office\.com/);
+    expect(substrate).toMatch(/falls back to a scan/i);
+    await harness.close();
+  });
+
   it('describes itself as a read-only, open-world probe of the chat service', async () => {
     const harness = await createTestHarness((server) => registerHealthcheckTool(server, deps(async () => [])));
 

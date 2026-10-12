@@ -20,6 +20,7 @@ import { registerHealthcheckTool } from '../src/tools/healthcheck.js';
 export async function servedTools() {
   const deps = {
     chatsvc: { listConversations: async () => [], meMri: async () => '8:orgid:x' } as unknown as ChatServiceClient,
+    substrate: { isConfigured: () => false, searchMessages: async () => ({ results: [], moreAvailable: false, unmapped: 0 }) },
     sharepoint: { downloadFile: async () => ({ mimeType: '', data: Buffer.alloc(0), size: 0 }) } as unknown as SharePointClient,
   };
 
