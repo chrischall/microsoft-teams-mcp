@@ -384,6 +384,110 @@ describe('teams_list_chats', () => {
     });
   });
 
+  describe('since / until', () => {
+    const iso = (ms: number) => new Date(ms).toISOString();
+    const SILENT = '19:silent0001@thread.v2';
+    const { lastMessage: _drop, ...silent } = rawConv(SILENT, { topic: 'No messages yet' });
+    const convs = [...CONVS, silent];
+
+    it('keeps chats whose last activity is at or after since', async () => {
+      const { data } = await call(fakeChatsvc(convs), { since: iso(T0 + 20 * MIN) });
+      expect((data?.chats as Row[]).map((c) => c.id)).toEqual([GROUP, MEETING]);
+    });
+
+    it('keeps chats whose last activity is at or before until', async () => {
+      const { data } = await call(fakeChatsvc(convs), { until: iso(T0 + 20 * MIN) });
+      expect((data?.chats as Row[]).map((c) => c.id)).toEqual([MEETING, DM]);
+    });
+
+    it('combines since and until into one window', async () => {
+      const { data } = await call(fakeChatsvc(convs), { since: iso(T0 + 15 * MIN), until: iso(T0 + 25 * MIN) });
+      expect((data?.chats as Row[]).map((c) => c.id)).toEqual([MEETING]);
+    });
+
+    it('lists a chat with no last activity only when neither is given', async () => {
+      const plain = await call(fakeChatsvc(convs));
+      expect((plain.data?.chats as Row[]).map((c) => c.id)).toContain(SILENT);
+      const { data } = await call(fakeChatsvc(convs), { since: iso(0) });
+      expect((data?.chats as Row[]).map((c) => c.id)).not.toContain(SILENT);
+    });
+
+    it('filters before confirming unread_only, so chats outside the window are never read', async () => {
+      const chatsvc = chatsvcWith();
+      const { data } = await call(chatsvc, { unread_only: true, since: iso(T0 + 20 * MIN) });
+
+      expect((data?.chats as Row[]).map((c) => c.id)).toEqual([GROUP]);
+      expect(vi.mocked(chatsvc.getMessages).mock.calls.map((c) => c[0])).toEqual([GROUP]);
+    });
+
+    it('rejects a since or until that is not an ISO 8601 date-time', async () => {
+      for (const args of [{ since: 'yesterday' }, { until: 'not a date' }]) {
+        const { result } = await call(fakeChatsvc(convs), args);
+        expect(result.isError).toBe(true);
+        expect((result.content?.[0] as { text?: string })?.text).toMatch(/ISO 8601/);
+      }
+    });
+
+    it('rejects a since later than until', async () => {
+      const { result } = await call(fakeChatsvc(convs), { since: iso(T0 + 30 * MIN), until: iso(T0) });
+      expect(result.isError).toBe(true);
+      expect((result.content?.[0] as { text?: string })?.text).toMatch(/since .*after until/i);
+    });
+  });
+
+  describe('sort', () => {
+    const FAV = '19:fav0001@thread.v2';
+    const PIN = '19:pin0001@thread.v2';
+    const LOWER = '19:lower0001@thread.v2';
+    const convs = [
+      ...CONVS,
+      rawConv(FAV, { topic: 'Favorite chat', at: T0 + MIN, favorite: 'true' }),
+      rawConv(PIN, { topic: 'Pinned chat', at: T0 + 2 * MIN, pinned: 'True' }),
+      rawConv(LOWER, { topic: 'alpha team', at: T0 + 3 * MIN }),
+    ];
+
+    it('defaults to activity: favorites, pinned, then most recent', async () => {
+      const dflt = await call(fakeChatsvc(convs));
+      const explicit = await call(fakeChatsvc(convs), { sort: 'activity' });
+      expect((dflt.data?.chats as Row[]).map((c) => c.id)).toEqual([FAV, PIN, GROUP, MEETING, DM, LOWER]);
+      expect((explicit.data?.chats as Row[]).map((c) => c.id)).toEqual([FAV, PIN, GROUP, MEETING, DM, LOWER]);
+    });
+
+    it('activity_only orders by most recent activity alone, ignoring favorites and pinned', async () => {
+      const { data } = await call(fakeChatsvc(convs), { sort: 'activity_only' });
+      expect((data?.chats as Row[]).map((c) => c.id)).toEqual([GROUP, MEETING, DM, LOWER, PIN, FAV]);
+    });
+
+    it('title orders alphabetically, case-insensitively, by the title returned (an untitled 1:1 by its person)', async () => {
+      const { data } = await call(fakeChatsvc(convs), { sort: 'title' });
+      const chats = data?.chats as Row[];
+      expect(chats.map((c) => c.title)).toEqual([
+        'alpha team',
+        'Favorite chat',
+        'Pat Example',
+        'Pinned chat',
+        'Project Falcon',
+        'Weekly sync',
+      ]);
+    });
+
+    it('limit keeps the head of the chosen order', async () => {
+      const { data } = await call(fakeChatsvc(convs), { sort: 'title', limit: 2 });
+      expect((data?.chats as Row[]).map((c) => c.id)).toEqual([LOWER, FAV]);
+      expect(data?.truncated).toMatchObject({ total: 6, returned: 2 });
+    });
+
+    it('applies to unread_only too', async () => {
+      const { data } = await call(chatsvcWith(), { unread_only: true, sort: 'title' });
+      expect((data?.chats as Row[]).map((c) => c.id)).toEqual([DM, GROUP]);
+    });
+
+    it('rejects an unknown sort', async () => {
+      const { result } = await call(fakeChatsvc(convs), { sort: 'newest' });
+      expect(result.isError).toBe(true);
+    });
+  });
+
   it('returns its result inside the untrusted-data envelope', async () => {
     const { data } = await call(fakeChatsvc(CONVS));
 
@@ -471,8 +575,11 @@ describe('teams_list_chats', () => {
     expect(Object.keys((tool?.inputSchema as { properties?: object }).properties ?? {}).sort()).toEqual([
       'limit',
       'query',
+      'since',
       'since_days',
+      'sort',
       'unread_only',
+      'until',
     ]);
     expect(tool?.description).toMatch(/since_days/);
     await harness.close();

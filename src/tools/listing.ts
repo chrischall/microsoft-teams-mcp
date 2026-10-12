@@ -25,6 +25,22 @@ export interface ListFilter {
   /** With `unread_only`, the window (days) the newest unread message must fall in (default 14). */
   since_days?: number;
   query?: string;
+  /** Epoch ms: keep conversations whose last activity is at or after it; one with none is dropped. */
+  activeSince?: number;
+  /** Epoch ms: keep conversations whose last activity is at or before it; one with none is dropped. */
+  activeUntil?: number;
+}
+
+/**
+ * Whether a conversation's last activity falls in `[since, until]` (either
+ * end open when undefined). With either end given, a conversation with no
+ * readable last activity is out: nothing places it in the window.
+ */
+export function activeWithin(s: Pick<ConversationSummary, 'lastActivity'>, since?: number, until?: number): boolean {
+  if (since === undefined && until === undefined) return true;
+  const t = s.lastActivity === undefined ? Number.NaN : Date.parse(s.lastActivity);
+  if (Number.isNaN(t)) return false;
+  return (since === undefined || t >= since) && (until === undefined || t <= until);
 }
 
 /** The list tools' `since_days`: it narrows `unread_only` only. */
@@ -130,7 +146,9 @@ export type ListingWithRetitle = Listing & {
  */
 export async function listSummaries(chatsvc: ChatServiceClient, filter: ListFilter): Promise<ListingWithRetitle> {
   const [raw, me] = await Promise.all([chatsvc.listConversations(), chatsvc.meMri()]);
-  let rows = raw.map((c) => conversationSummary(c, me, raw)).filter((s) => filter.kinds.includes(s.kind));
+  let rows = raw
+    .map((c) => conversationSummary(c, me, raw))
+    .filter((s) => filter.kinds.includes(s.kind) && activeWithin(s, filter.activeSince, filter.activeUntil));
   if (filter.unread_only) rows = rows.filter((s) => isUnreadCandidateFor(s, filter.include_hidden));
   // A query can name a group chat or 1:1 by a participant, so every untitled one is titled first.
   if (filter.query !== undefined) rows = matchConversations(await enrichTitles(chatsvc, raw, me, rows), filter.query);

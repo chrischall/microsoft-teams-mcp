@@ -134,8 +134,15 @@ Everything is optional — by default the token is captured from your browser.
   recent activity first: id, kind,
   title, unread hint, ISO-8601 last-activity time, last-message preview and
   sender. `unread_only` (exact — see below), `since_days` (with
-  `unread_only`; default 14), `query` (title, or a participant's name) and
-  `limit` (default 50, max 500). A group chat with no topic is titled after
+  `unread_only`; default 14), `query` (title, or a participant's name),
+  `since` / `until` (ISO 8601 date-times: keep chats whose last activity is
+  at or after / at or before them; a chat with no last activity is left out
+  when either is given), `sort` and `limit` (default 50, max 500; keeps the
+  head of the sort order). `sort` is `activity` (default — favorites, pinned,
+  then most recent; with `unread_only`, most recent), `activity_only` (most
+  recent first, ignoring favorites and pinned) or `title` (alphabetical,
+  case-insensitive — this titles every untitled chat in the listing before
+  `limit` applies, so it reads more than the other orders). A group chat with no topic is titled after
   who is in it — `Group chat: <up to three recent senders other than you,
   most recent first>` plus `+N` for more, with every recent sender in
   `participants` — rather than after whoever posted last, so chats that
