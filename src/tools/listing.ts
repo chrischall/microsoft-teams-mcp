@@ -7,7 +7,16 @@
  */
 import { z } from 'zod';
 import type { ChatServiceClient } from '../chatsvc.js';
-import { confirmedSummary, confirmUnreadCandidates, olderUnreadReport, sinceCutoff, sinceDaysArg } from './confirm.js';
+import {
+  confirmedSummary,
+  confirmUnreadCandidates,
+  olderUnreadArg,
+  olderUnreadConversations,
+  olderUnreadReport,
+  sinceCutoff,
+  sinceDaysArg,
+  type OlderUnreadRow,
+} from './confirm.js';
 import { wrapApiError } from './errors.js';
 import { searchRecentMessages, type MessageHit } from './search.js';
 import { enrichTitles } from './titles.js';
@@ -27,6 +36,8 @@ export interface ListFilter {
   include_hidden?: boolean;
   /** With `unread_only`, the window (days) the newest unread message must fall in (default 14). */
   since_days?: number;
+  /** With `unread_only`: also list what `since_days` left out (`older_unread_conversations`). */
+  older_unread?: boolean;
   query?: string;
   /**
    * With `query`: also read each chat no name or preview matched and match its
@@ -53,6 +64,9 @@ export function activeWithin(s: Pick<ConversationSummary, 'lastActivity'>, since
 
 /** The list tools' `since_days`: it narrows `unread_only` only. */
 export const listSinceDaysArg = sinceDaysArg('With unread_only: ');
+
+/** The list tools' `older_unread`: it needs `unread_only`. */
+export const listOlderUnreadArg = olderUnreadArg('With unread_only: ');
 
 export const unreadOnlyArg = z
   .boolean()
@@ -143,6 +157,8 @@ export interface Listing {
   /** With `unread_only`: conversations left out because their unread activity is older than `since_days`. */
   older_unread_skipped?: number;
   older_unread_hint?: string;
+  /** With `unread_only` and `older_unread`: the conversations `older_unread_skipped` counts, titled. */
+  older_unread_conversations?: OlderUnreadRow[];
   /** With `unread_only`: candidates whose confirming read failed; they are left out of `rows`. */
   errors?: { conversation: { id: string; title: string }; error: string }[];
   /** With `search_messages`: chats whose recent messages could not be read, so were matched by name only. */
@@ -210,6 +226,9 @@ export async function listSummaries(chatsvc: ChatServiceClient, filter: ListFilt
     return { rows, ...(errs ? { errors: errs } : {}) };
   };
   const errs = errors(failedSummaries);
+  // Listed only on request; titled now, since nothing later trims them.
+  const listedOlder = filter.older_unread ? outcome.older : [];
+  const olderTitled = await enrichTitles(chatsvc, raw, me, listedOlder.map((o) => o.summary));
   return {
     retitle,
     rows: outcome.confirmed.map(({ summary, read }) => ({
@@ -218,7 +237,8 @@ export async function listSummaries(chatsvc: ChatServiceClient, filter: ListFilt
       ...(read.truncated ? { unread_count_exact: false as const } : {}),
     })),
     skipped_unreachable: outcome.skippedUnreachable,
-    ...olderUnreadReport(outcome.olderSkipped, filter.since_days),
+    ...olderUnreadReport(outcome.older.length, filter.since_days),
+    ...olderUnreadConversations(listedOlder, olderTitled),
     ...(errs ? { errors: errs } : {}),
     ...searched,
   };

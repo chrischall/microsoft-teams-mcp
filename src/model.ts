@@ -44,6 +44,12 @@ export interface ConversationSummary {
    * `NotInterested`). Teams shows it nowhere, unread or not.
    */
   hidden?: true;
+  /**
+   * Muted in Teams (`properties.alerts` is `"false"`; live 2026-10-12: 8 of
+   * 1,435 conversations, meeting chats and a 1:1, every other one `"true"` or
+   * absent). Teams sends no notification for it; absent otherwise.
+   */
+  muted?: true;
   /** Marked a favorite in Teams (`properties.favorite`); absent otherwise. */
   favorite?: true;
   /** Pinned in Teams (`properties.ispinned`); absent otherwise. */
@@ -301,6 +307,12 @@ function flag(c: RawConversation, name: string): boolean {
   return v === true || (typeof v === 'string' && v.trim().toLowerCase() === 'true');
 }
 
+/** A `properties` flag Teams sends as `"false"` / `"False"` (or a boolean) — absent is not false. */
+function flagOff(c: RawConversation, name: string): boolean {
+  const v: unknown = c.properties?.[name];
+  return v === false || (typeof v === 'string' && v.trim().toLowerCase() === 'false');
+}
+
 /** A channel the user has hidden in Teams. */
 function isHiddenChannel(c: RawConversation): boolean {
   return c.memberProperties?.interest === 'NotInterested';
@@ -357,6 +369,7 @@ export function conversationSummary(
     unread,
     unread_confirmed: false,
     ...(hidden ? { hidden: true as const } : {}),
+    ...(flagOff(c, 'alerts') ? { muted: true as const } : {}),
     ...(flag(c, 'favorite') ? { favorite: true as const } : {}),
     ...(flag(c, 'ispinned') ? { pinned: true as const } : {}),
     ...(lastActivity !== undefined ? { lastActivity } : {}),

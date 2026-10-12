@@ -521,6 +521,43 @@ describe('teams_get_unread', () => {
       expect(getMessages).not.toHaveBeenCalled();
     });
 
+    it('with older_unread, lists what the window left out: titled, newest first, counted only where read', async () => {
+      const getMessages = perConversation(msgs);
+      const { data } = await call(fakeChatsvc(convs, { getMessages }), { older_unread: true });
+
+      expect(data?.older_unread_skipped).toBe(2);
+      expect(data?.older_unread_conversations).toEqual([
+        { id: OLD, kind: 'group', title: 'Old news', lastActivity: new Date(NOW - 20 * DAY).toISOString(), unread_count: 1 },
+        {
+          id: DORMANT,
+          kind: 'channel',
+          title: 'Dormant',
+          team: 'Platform Team',
+          lastActivity: new Date(NOW - 400 * DAY).toISOString(),
+          unread_count_known: false,
+        },
+      ]);
+      // Listing the dormant channel never reads past its marker.
+      expect(getMessages.mock.calls.map((c) => c[0])).not.toContain(DORMANT);
+    });
+
+    it('titles an untitled group chat the window left out', async () => {
+      const UNTITLED = '19:untitled0001@thread.v2';
+      const c = rawConv(UNTITLED, { at: NOW - 20 * DAY, horizon: NOW - 30 * DAY, sender: 'Example Person' });
+      const getMessages = perConversation({ [UNTITLED]: [rawMsg(NOW - 20 * DAY, { conv: UNTITLED, sender: 'Example Person' })] });
+      const { data } = await call(fakeChatsvc([c], { getMessages }), { older_unread: true });
+
+      expect((data?.older_unread_conversations as { title: string }[])[0].title).toBe('Group chat: Example Person');
+    });
+
+    it('omits older_unread_conversations without older_unread, and when nothing was left out', async () => {
+      const without = await call(fakeChatsvc(convs, { getMessages: perConversation(msgs) }));
+      expect(without.data).not.toHaveProperty('older_unread_conversations');
+
+      const none = await call(fakeChatsvc(convs, { getMessages: perConversation(msgs) }), { older_unread: true, since_days: 3650 });
+      expect(none.data).not.toHaveProperty('older_unread_conversations');
+    });
+
     it('rejects since_days outside 1..3650', async () => {
       for (const since_days of [0, 3651, 1.5]) {
         const { result } = await call(chatsvcWith(), { since_days });
@@ -550,6 +587,42 @@ describe('teams_get_unread', () => {
 
       expect(ids(data)).toContain(HIDDEN);
       expect(entry(data, HIDDEN).conversation).toMatchObject({ hidden: true });
+    });
+  });
+
+  describe('muted chats', () => {
+    const MUTED = '19:muted0001@thread.v2';
+    const convs = [...CONVS, rawConv(MUTED, { topic: 'Noisy', at: T0 + 7 * MIN, horizon: T0, alerts: 'false' })];
+    const msgs = { ...MESSAGES, [MUTED]: [rawMsg(T0 + 7 * MIN, { conv: MUTED, text: 'muted unread' })] };
+
+    it('leaves chats muted in Teams out by default, without reading them, counting them in muted_skipped', async () => {
+      const getMessages = perConversation(msgs);
+      const { data } = await call(fakeChatsvc(convs, { getMessages }));
+
+      expect(ids(data)).not.toContain(MUTED);
+      expect(data?.muted_skipped).toBe(1);
+      expect(getMessages.mock.calls.map((c) => c[0])).not.toContain(MUTED);
+    });
+
+    it('includes them with include_muted, marked muted', async () => {
+      const { data } = await call(fakeChatsvc(convs, { getMessages: perConversation(msgs) }), { include_muted: true });
+
+      expect(ids(data)).toContain(MUTED);
+      expect(entry(data, MUTED).conversation).toMatchObject({ muted: true });
+      expect(data?.muted_skipped).toBe(0);
+    });
+
+    it('never counts a muted chat that is not an unread candidate', async () => {
+      const read = [...CONVS, rawConv(MUTED, { topic: 'Noisy', at: T0 + 7 * MIN, alerts: 'false' })];
+      const { data } = await call(fakeChatsvc(read, { getMessages: perConversation(msgs) }));
+
+      expect(data?.muted_skipped).toBe(0);
+    });
+
+    it('counts only muted candidates the kinds and query keep', async () => {
+      const { data } = await call(fakeChatsvc(convs, { getMessages: perConversation(msgs) }), { query: 'Falcon' });
+
+      expect(data?.muted_skipped).toBe(0);
     });
   });
 
@@ -602,13 +675,18 @@ describe('teams_get_unread', () => {
     expect(tool.description).not.toMatch(/uncertain/);
     expect(Object.keys((tool.inputSchema as { properties?: object }).properties ?? {}).sort()).toEqual([
       'include_hidden',
+      'include_muted',
       'kinds',
       'max_conversations',
+      'older_unread',
       'per_conversation_limit',
       'query',
       'since_days',
     ]);
     expect(tool.description).toMatch(/since_days/);
     expect(tool.description).toMatch(/older_unread_skipped/);
+    expect(tool.description).toMatch(/older_unread_conversations/);
+    expect(tool.description).toMatch(/muted_skipped/);
+    expect(tool.description).toMatch(/include_muted/);
   });
 });

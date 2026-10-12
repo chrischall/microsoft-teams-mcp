@@ -688,6 +688,24 @@ describe('teams_list_chats', () => {
       expect(data).not.toHaveProperty('older_unread_hint');
     });
 
+    it('with older_unread, lists the chats the window left out, counting only those it read', async () => {
+      const chatsvc = chatsvcWith(convs, msgs);
+      const { data } = await call(chatsvc, { unread_only: true, older_unread: true });
+
+      expect(data?.older_unread_conversations).toEqual([
+        { id: OLD, kind: 'group', title: 'Old news', lastActivity: new Date(NOW - 20 * DAY).toISOString(), unread_count: 1 },
+        { id: DORMANT, kind: 'group', title: 'Dormant', lastActivity: new Date(NOW - 400 * DAY).toISOString(), unread_count_known: false },
+      ]);
+      expect(vi.mocked(chatsvc.getMessages).mock.calls.map((c) => c[0])).not.toContain(DORMANT);
+    });
+
+    it('older_unread needs unread_only', async () => {
+      const { result } = await call(chatsvcWith(convs, msgs), { older_unread: true });
+
+      expect(result.isError).toBe(true);
+      expect((result.content?.[0] as { text?: string })?.text).toMatch(/unread_only/);
+    });
+
     it('changes nothing without unread_only', async () => {
       const chatsvc = chatsvcWith(convs, msgs);
       const { data } = await call(chatsvc, { since_days: 1 });
@@ -709,6 +727,7 @@ describe('teams_list_chats', () => {
     expect(tool?.annotations?.readOnlyHint).toBe(true);
     expect(Object.keys((tool?.inputSchema as { properties?: object }).properties ?? {}).sort()).toEqual([
       'limit',
+      'older_unread',
       'query',
       'search_messages',
       'since',
@@ -718,6 +737,8 @@ describe('teams_list_chats', () => {
       'until',
     ]);
     expect(tool?.description).toMatch(/since_days/);
+    expect(tool?.description).toMatch(/older_unread_conversations/);
+    expect(tool?.description).toMatch(/muted: true/);
     await harness.close();
   });
 

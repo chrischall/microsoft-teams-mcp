@@ -18,7 +18,8 @@
  * (2026-10-10): 14 of 16 confirmed-unread channels had last moved months or
  * years ago, in teams the user never looks at. A candidate whose newest
  * activity of any kind is already older than the window is skipped without a
- * read; both kinds of skip are counted in `olderSkipped`, never dropped silently.
+ * read; both kinds of skip are kept in `older` (counted in `older_unread_skipped`,
+ * listed with `older_unread`), never dropped silently.
  */
 import { errorStatusOf, mapWithConcurrency } from '@chrischall/mcp-utils';
 import type { ChatServiceClient, RawConversation, RawMessage } from '../chatsvc.js';
@@ -70,10 +71,66 @@ export function olderUnreadReport(
           older_unread_hint:
             `${olderSkipped} conversation${olderSkipped === 1 ? '' : 's'} with unread activity older than ` +
             `${days} days ${olderSkipped === 1 ? 'was' : 'were'} left out; pass a larger since_days ` +
-            `(max ${MAX_SINCE_DAYS}) to include ${olderSkipped === 1 ? 'it' : 'them'}.`,
+            `(max ${MAX_SINCE_DAYS}) to include ${olderSkipped === 1 ? 'it' : 'them'}, or older_unread: true ` +
+            `to list ${olderSkipped === 1 ? 'it' : 'them'}.`,
         }
       : {}),
   };
+}
+
+/** The optional `older_unread` argument: list what the `since_days` window left out. */
+export function olderUnreadArg(scope = '') {
+  return z
+    .boolean()
+    .optional()
+    .describe(
+      `${scope}Also list the conversations since_days left out, as older_unread_conversations: id, ` +
+        'kind, title, team (a channel\'s), lastActivity and, where its messages were read, ' +
+        'unread_count. One never read (nothing at all happened inside the window) carries ' +
+        'unread_count_known: false instead and is not read now — its news may be only system ' +
+        'events. Default false.',
+    );
+}
+
+/** One conversation the `since` window left out, as `older_unread_conversations` lists it. */
+export interface OlderUnreadRow {
+  id: string;
+  kind: ConversationSummary['kind'];
+  title: string;
+  team?: string;
+  lastActivity?: string;
+  unread_count?: number;
+  /** The read was cut short, so `unread_count` is a lower bound. */
+  unread_count_exact?: false;
+  /** Never read: whether it holds a real unread message, and how many, is not known. */
+  unread_count_known?: false;
+}
+
+/**
+ * `older_unread_conversations` from the left-out conversations, given their
+ * (re)titled summaries in the same order: most recent activity first, and
+ * absent when nothing was left out.
+ */
+export function olderUnreadConversations(
+  older: readonly OlderSkip[],
+  titled: readonly ConversationSummary[],
+): { older_unread_conversations?: OlderUnreadRow[] } {
+  if (older.length === 0) return {};
+  const rows = older.map(({ read }, i): OlderUnreadRow => {
+    const s = titled[i];
+    return {
+      id: s.id,
+      kind: s.kind,
+      title: s.title,
+      ...(s.team !== undefined ? { team: s.team } : {}),
+      ...(s.lastActivity !== undefined ? { lastActivity: s.lastActivity } : {}),
+      ...(read === undefined
+        ? { unread_count_known: false as const }
+        : { unread_count: read.messages.length, ...(read.truncated ? { unread_count_exact: false as const } : {}) }),
+    };
+  });
+  rows.sort((a, b) => (b.lastActivity ?? '').localeCompare(a.lastActivity ?? ''));
+  return { older_unread_conversations: rows };
 }
 
 /** A 404 or 403: the conversation is gone or not readable, so it is not unread. */
@@ -117,16 +174,24 @@ export interface Confirmed {
   read: UnreadRead;
 }
 
+/** A candidate the `since` window left out, with its read when there was one. */
+export interface OlderSkip {
+  summary: ConversationSummary;
+  /** Absent when nothing inside the window happened, so it was never read. */
+  read?: UnreadRead;
+}
+
 export interface ConfirmOutcome {
   /** Candidates holding at least one real unread message, in candidate order. */
   confirmed: Confirmed[];
   /** Candidates that answered 404/403 — not unread. */
   skippedUnreachable: number;
   /**
-   * Candidates left out by the `since` window: newest activity older than it
-   * (never read), or newest real unread message older than it.
+   * Candidates left out by the `since` window, in candidate order: newest
+   * activity older than it (never read), or newest real unread message older
+   * than it (read).
    */
-  olderSkipped: number;
+  older: OlderSkip[];
   /** Candidates whose read failed some other way, in candidate order. */
   failed: { summary: ConversationSummary; error: unknown }[];
 }
@@ -140,7 +205,7 @@ export interface ConfirmOutcome {
  *
  * With `since` (epoch ms), a candidate whose newest activity predates it is
  * not read at all, and one whose newest real unread message predates it is
- * not kept; both are counted in `olderSkipped`.
+ * not kept; both go in `older`.
  */
 export async function confirmUnreadCandidates(
   chatsvc: ChatServiceClient,
@@ -169,11 +234,11 @@ export async function confirmUnreadCandidates(
     }
   });
 
-  const outcome: ConfirmOutcome = { confirmed: [], skippedUnreachable: 0, olderSkipped: 0, failed: [] };
+  const outcome: ConfirmOutcome = { confirmed: [], skippedUnreachable: 0, older: [], failed: [] };
   let anyRead = false;
   results.forEach((r, i) => {
     const summary = candidates[i];
-    if (r.kind === 'older') outcome.olderSkipped++;
+    if (r.kind === 'older') outcome.older.push({ summary });
     else if (r.kind === 'unreachable') outcome.skippedUnreachable++;
     else if (r.kind === 'failed') outcome.failed.push({ summary, error: r.error });
     else {
@@ -181,7 +246,7 @@ export async function confirmUnreadCandidates(
       // Read newest first, so the first message is the newest real unread one.
       const newestUnread = r.read.messages[0];
       if (newestUnread === undefined) return;
-      if (Number(newestUnread.id) < since) outcome.olderSkipped++;
+      if (Number(newestUnread.id) < since) outcome.older.push({ summary, read: r.read });
       else outcome.confirmed.push({ summary, read: r.read });
     }
   });

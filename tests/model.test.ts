@@ -740,6 +740,20 @@ describe('1:1 titles', () => {
   });
 });
 
+describe('muted chats', () => {
+  const withAlerts = (alerts: unknown): RawConversation =>
+    ({ ...conv(GROUP), properties: { ...conv(GROUP).properties, alerts } }) as unknown as RawConversation;
+
+  it.each(['false', 'False', false])('marks a conversation whose properties.alerts is %j muted: true (live)', (v) => {
+    expect(conversationSummary(withAlerts(v), ME, CONVS)).toMatchObject({ muted: true });
+  });
+
+  it('does not mark one whose alerts are on or absent', () => {
+    expect(conversationSummary(withAlerts('true'), ME, CONVS)).not.toHaveProperty('muted');
+    expect(conversationSummary(conv(GROUP), ME, CONVS)).not.toHaveProperty('muted');
+  });
+});
+
 describe('favorite and pinned', () => {
   const withProps = (props: Record<string, string>): RawConversation => ({
     ...conv(GROUP),

@@ -40,6 +40,8 @@ export function rawConv(
     favorite?: string;
     /** `properties.ispinned`, likewise. */
     pinned?: string;
+    /** `properties.alerts` — `"false"` is a conversation muted in Teams. */
+    alerts?: string;
   } = {},
 ): RawConversation {
   const at = opts.at ?? 1_760_000_000_000;
@@ -50,6 +52,7 @@ export function rawConv(
       ...(opts.lastIm !== undefined ? { lastimreceivedtime: new Date(opts.lastIm).toISOString() } : {}),
       ...(opts.favorite !== undefined ? { favorite: opts.favorite } : {}),
       ...(opts.pinned !== undefined ? { ispinned: opts.pinned } : {}),
+      ...(opts.alerts !== undefined ? { alerts: opts.alerts } : {}),
     },
     ...(opts.interest !== undefined ? { memberProperties: { interest: opts.interest } } : {}),
     threadProperties: {

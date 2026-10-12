@@ -134,7 +134,8 @@ Everything is optional — by default the token is captured from your browser.
   recent activity first: id, kind,
   title, unread hint, ISO-8601 last-activity time, last-message preview and
   sender. `unread_only` (exact — see below), `since_days` (with
-  `unread_only`; default 14), `query` (title, a participant's name, or the
+  `unread_only`; default 14), `older_unread` (with `unread_only`; lists what
+  `since_days` left out — see below), `query` (title, a participant's name, or the
   last-message preview), `search_messages`,
   `since` / `until` (ISO 8601 date-times: keep chats whose last activity is
   at or after / at or before them; a chat with no last activity is left out
@@ -175,7 +176,8 @@ Everything is optional — by default the token is captured from your browser.
   flags. Note the new Teams **Favorites section for chats** is kept by a
   different Teams service this MCP does not read, so a chat you put there is
   not flagged (verified live 2026-10-10) — the flags mostly reflect favorited
-  channels and pinned conversations.
+  channels and pinned conversations. A chat you muted in Teams carries
+  `muted: true`.
 - `teams_list_teams_and_channels` — every channel you are in, by team then
   title, with the same fields — favorite and pinned channels first, flagged
   as in `teams_list_chats`. Channels you have hidden in Teams are listed
@@ -211,9 +213,11 @@ Everything is optional — by default the token is captured from your browser.
   (default 50) and `max_conversations` (default 20 returned with their
   messages — the rest are named, with their `unread_count`, in
   `more_unread_conversations`). Hidden channels are left out unless
-  `include_hidden`. Only conversations with unread messages from the last
-  `since_days` (default 14, max 3650) are returned; older ones are counted
-  in `older_unread_skipped`. An untitled group chat or 1:1 is titled after
+  `include_hidden`; chats you muted in Teams (`muted: true`) are left out
+  unread and counted in `muted_skipped` unless `include_muted`. Only
+  conversations with unread messages from the last `since_days` (default 14,
+  max 3650) are returned; older ones are counted in `older_unread_skipped`,
+  and `older_unread: true` also lists them (see below). An untitled group chat or 1:1 is titled after
   its participants, as in `teams_list_chats` — in `conversations`, in
   `more_unread_conversations` and in `errors`.
 - `teams_get_attachment` — one attachment of a message: an inline image is
@@ -337,7 +341,19 @@ instead.
   you never open. A candidate with no activity at all inside the window is
   not even read. Whatever the window leaves out is counted in
   `older_unread_skipped` (with a hint to widen `since_days`), never dropped
-  silently. `teams_read_conversation` is not windowed: it takes an explicit
+  silently. `older_unread: true` (on `teams_get_unread`, and on
+  `teams_list_chats` with `unread_only`) also lists them in
+  `older_unread_conversations` — `id`, `kind`, `title`, `team` (a channel's),
+  `lastActivity`, most recent first — with an `unread_count` for each one
+  whose messages were already read to place it outside the window; one with
+  no activity at all inside the window is not read just to count it, and
+  carries `unread_count_known: false` instead (its news past the marker may
+  be only system events). Muted chats: the conversation listing marks a chat
+  you muted with `properties.alerts: "false"` (verified live 2026-10-12: 8 of
+  1,435 conversations, every other one `"true"` or absent), surfaced as
+  `muted: true`. `teams_get_unread` leaves them out without reading them and
+  counts them in `muted_skipped`; `include_muted` adds them back. The list
+  tools' `unread_only` still includes them. `teams_read_conversation` is not windowed: it takes an explicit
   `since` and `limit`. This server only reads the marker; it never moves it.
 - **The token only goes to Teams.** The chat-service token is sent to the
   chat-service base and, for inline images, only to https hosts under

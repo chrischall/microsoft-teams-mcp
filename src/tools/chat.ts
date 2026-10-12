@@ -17,6 +17,7 @@ import {
   FAVORITES_DESCRIPTION,
   favoritesFirst,
   GROUP_TITLE_DESCRIPTION,
+  listOlderUnreadArg,
   listSinceDaysArg,
   listSummaries,
   type ListedRow,
@@ -103,7 +104,9 @@ export function registerChatTools(server: McpServer, { chatsvc }: Pick<TeamsDeps
         'them: each candidate is confirmed by reading its messages past the read marker, so a ' +
         'call recording, transcript or other system event never makes a chat unread. By default ' +
         'unread_only keeps only chats whose newest unread message is from the last 14 days ' +
-        '(since_days widens it); older ones are counted in older_unread_skipped, not listed. ' +
+        '(since_days widens it); older ones are counted in older_unread_skipped, and older_unread: ' +
+        'true lists them in older_unread_conversations (unread_count only for those already read). ' +
+        'A chat the user muted in Teams carries muted: true. ' +
         UNREAD_HINT_DESCRIPTION +
         ' since / until (ISO 8601 date-times) keep chats whose last activity falls in that window; ' +
         'sort picks the order: activity (default, as above), activity_only (most recent first, ' +
@@ -114,6 +117,7 @@ export function registerChatTools(server: McpServer, { chatsvc }: Pick<TeamsDeps
       inputSchema: {
         unread_only: unreadOnlyArg,
         since_days: listSinceDaysArg,
+        older_unread: listOlderUnreadArg,
         query: queryArg('chat title, an untitled chat\'s participant names or the last-message preview'),
         search_messages: searchMessagesArg,
         since: activityBoundArg('since', 'at or after'),
@@ -122,7 +126,12 @@ export function registerChatTools(server: McpServer, { chatsvc }: Pick<TeamsDeps
         limit: limitArg(MAX_CHATS, 'chats', 'the head of the sort order kept'),
       },
     },
-    async ({ unread_only, since_days, query, search_messages, since, until, sort = 'activity', limit }) => {
+    async ({ unread_only, since_days, older_unread, query, search_messages, since, until, sort = 'activity', limit }) => {
+      if (older_unread && !unread_only) {
+        throw new McpToolError('older_unread lists what unread_only left out, so it needs unread_only.', {
+          hint: 'Pass unread_only: true with older_unread, or drop older_unread.',
+        });
+      }
       if (search_messages && query === undefined) {
         throw new McpToolError('search_messages needs a query to search for.', {
           hint: 'Pass the text to find as query, or drop search_messages.',
@@ -140,6 +149,7 @@ export function registerChatTools(server: McpServer, { chatsvc }: Pick<TeamsDeps
           kinds: ['group', 'meeting', 'oneOnOne', 'self'],
           unread_only,
           since_days,
+          older_unread,
           query,
           searchMessages: search_messages,
           activeSince,
