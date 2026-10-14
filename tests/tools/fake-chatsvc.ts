@@ -73,7 +73,17 @@ export function rawConv(
 /** One message arriving at `at` (epoch ms — which is also its id). */
 export function rawMsg(
   at: number,
-  opts: { text?: string; fromMe?: boolean; sender?: string; type?: string; rootId?: number; conv?: string; deleted?: boolean } = {},
+  opts: {
+    text?: string;
+    fromMe?: boolean;
+    sender?: string;
+    type?: string;
+    rootId?: number;
+    conv?: string;
+    deleted?: boolean;
+    /** Its last change (epoch ms) — an edit or reaction after it arrived. */
+    version?: number;
+  } = {},
 ): RawMessage {
   const conv = opts.conv ?? '19:group0001@thread.v2';
   return {
@@ -87,16 +97,19 @@ export function rawMsg(
       `https://teams.cloud.microsoft/api/chatsvc/amer/v1/users/ME/conversations/${conv}` +
       (opts.rootId !== undefined ? `;messageid=${opts.rootId}` : ''),
     ...(opts.deleted ? { properties: { deletetime: String(at + 1) } } : {}),
+    ...(opts.version !== undefined ? { version: String(opts.version) } : {}),
   };
 }
 
 /**
  * A `getMessages` stub that pages the way the real client does over the given
- * messages (in any order — served newest first): it stops BEFORE the first
+ * messages (in any order — served newest CHANGE first, as live: a message's
+ * `version` when it has one, else its arrival): it stops BEFORE the first
  * message `stopAt` accepts, or once `max` are collected (reporting `onCapped`).
  */
 export function messagesFrom(messages: RawMessage[]) {
-  const newestFirst = [...messages].sort((a, b) => Number(b.id) - Number(a.id));
+  const changed = (m: RawMessage) => Math.max(Number(m.version ?? 0) || 0, Number(m.id));
+  const newestFirst = [...messages].sort((a, b) => changed(b) - changed(a));
   return vi.fn(async (_id: string, opts: GetMessagesOptions) => {
     const out: RawMessage[] = [];
     for (const m of newestFirst) {

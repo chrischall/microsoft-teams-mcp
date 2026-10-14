@@ -18,19 +18,31 @@
  */
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import { CONFIRM_INJECTION_RULE, confirmTokenParam, mapWithConcurrency, toolAnnotations } from '@chrischall/mcp-utils';
+import {
+  CONFIRM_INJECTION_RULE,
+  confirmTokenParam,
+  mapWithConcurrency,
+  McpToolError,
+  toolAnnotations,
+} from '@chrischall/mcp-utils';
 import type { TeamsDeps } from '../deps.js';
+import type { ChatServiceClient, RawConversation, RawMessage } from '../chatsvc.js';
 import {
   conversationSummary,
+  isUnread,
+  lastChangeMs,
   matchConversations,
   normaliseMessage,
   oldestFirst,
+  readHorizon,
   type ConversationKind,
   type ConversationSummary,
 } from '../model.js';
 import {
+  CONFIRM_CONCURRENCY,
   confirmedSummary,
   confirmUnreadCandidates,
+  isUnreachable,
   olderUnreadArg,
   olderUnreadConversations,
   olderUnreadReport,
@@ -43,7 +55,19 @@ import { wrapApiError } from './errors.js';
 import { untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
 import { resolveTimeZone, TIME_ZONE_DESCRIPTION, tzArg } from './timezone.js';
 import { CURSOR_NO_CACHE_DESCRIPTION, cursorsArg, newestId } from './cursor.js';
-import { FORMAT_DESCRIPTION, formatArg, formatBody, formatConversation } from './format.js';
+import { FORMAT_DESCRIPTION, formatArg, formatBody, formatConversation, formatFlatMessage, type ReadFormat } from './format.js';
+import { arrivalMs } from './conversation.js';
+import { DEFAULT_LIMIT } from './limit.js';
+import {
+  decodeFrom,
+  FROM_DESCRIPTION,
+  fromArg,
+  fromReport,
+  readFrom,
+  takePage,
+  type FromPosition,
+  type Keyed,
+} from './from.js';
 import { fetchOutsideRoots, MAX_ROOT_FETCHES, rootBudget } from './roots.js';
 import {
   advancesHorizon,
@@ -62,6 +86,8 @@ const MAX_PER_CONVERSATION = 200;
 const DEFAULT_PER_CONVERSATION = 50;
 const MAX_CONVERSATIONS = 50;
 const DEFAULT_CONVERSATIONS = 20;
+/** Messages one `from` page may return, across every conversation. */
+const MAX_FROM_MESSAGES = 500;
 
 /**
  * Raw messages read per conversation before giving up. The real bound is the
@@ -95,6 +121,83 @@ const TRUNCATED_SKIP: MarkSkip = {
 function byLastActivityDesc(a: ConversationSummary, b: ConversationSummary): number {
   return (b.lastActivity ?? '').localeCompare(a.lastActivity ?? '');
 }
+
+/**
+ * One `from` page of unread messages across `candidates`: each read past the
+ * later of `from` and its own horizon (one with no change since `from` is not
+ * read), its real unread messages pooled and taken oldest first. The position
+ * never moves past the newest change the listing knew of — a message landing
+ * mid-call in a conversation already read is then not skipped — nor at all
+ * when a read failed, since that conversation may hold older unread messages.
+ */
+async function unreadFrom(
+  chatsvc: ChatServiceClient,
+  raw: readonly RawConversation[],
+  me: string,
+  candidates: readonly ConversationSummary[],
+  pos: FromPosition,
+  { limit, timeZone, format }: { limit: number; timeZone?: string; format: Exclude<ReadFormat, 'summary'> },
+): Promise<Record<string, unknown>> {
+  const byId = new Map(raw.map((c) => [c.id, c]));
+  const toRead = candidates.filter((s) => (lastChangeMs(byId.get(s.id) ?? { id: s.id }) ?? Infinity) >= pos.t);
+  type Result =
+    | { kind: 'read'; messages: RawMessage[] }
+    | { kind: 'unreachable' }
+    | { kind: 'failed'; error: unknown };
+  const results = await mapWithConcurrency(toRead, CONFIRM_CONCURRENCY, async (summary): Promise<Result> => {
+    const horizon = readHorizon(byId.get(summary.id) ?? { id: summary.id });
+    try {
+      const fetched = await readFrom(chatsvc, summary.id, Math.max(pos.t, horizon + 1));
+      return { kind: 'read', messages: fetched.filter((m) => isUnread(m, horizon, me)) };
+    } catch (error) {
+      return isUnreachable(error) ? { kind: 'unreachable' } : { kind: 'failed', error };
+    }
+  });
+
+  let skippedUnreachable = 0;
+  let anyRead = false;
+  const items: Keyed<{ summary: ConversationSummary; m: RawMessage }>[] = [];
+  const failed: { summary: ConversationSummary; error: unknown }[] = [];
+  results.forEach((r, i) => {
+    const summary = toRead[i];
+    if (r.kind === 'unreachable') skippedUnreachable++;
+    else if (r.kind === 'failed') failed.push({ summary, error: r.error });
+    else {
+      anyRead = true;
+      for (const m of r.messages) items.push({ ms: arrivalMs(m), key: `${summary.id}/${m.id}`, item: { summary, m } });
+    }
+  });
+  // Every read failed: a failure of the call (a revoked token, a rate limit), not of one conversation.
+  if (failed.length > 0 && !anyRead) throw failed[0].error;
+
+  const listed = Math.max(pos.t, ...raw.map((c) => lastChangeMs(c) ?? 0));
+  const { page, has_more, remaining, next } = takePage(items, pos, limit, failed.length > 0 ? pos.t : listed);
+
+  // Only what is returned is titled: the conversations on this page and those whose read failed.
+  const shown = [...new Map(page.map(({ summary }) => [summary.id, summary])).values()];
+  const titled = await enrichTitles(chatsvc, raw, me, [...shown, ...failed.map((f) => f.summary)]);
+  return {
+    total_unread: page.length + remaining,
+    messages: page.map(({ summary, m }) => ({
+      conversation_id: summary.id,
+      ...formatFlatMessage(normaliseMessage(m, me, { timeZone }), format),
+    })),
+    conversations: titled.slice(0, shown.length).map((s) => formatConversation(confirmedSummary(s, true), format)),
+    ...fromReport(pos, next, has_more),
+    skipped_unreachable: skippedUnreachable,
+    ...(failed.length > 0
+      ? {
+          errors: failed.map((f, i) => ({
+            conversation: titled[shown.length + i],
+            error: wrapApiError(f.error, 'read this conversation').message,
+          })),
+        }
+      : {}),
+  };
+}
+
+/** The arguments that shape a per-conversation answer, which a `from` page replaces. */
+const NOT_WITH_FROM = ['since_days', 'cursors', 'per_conversation_limit', 'max_conversations', 'mark_read', 'older_unread'] as const;
 
 export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDeps, 'chatsvc'>): void {
   server.registerTool(
@@ -131,6 +234,13 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
         'id; next_cursors is the cursors passed in updated with every returned conversation\'s next_cursor ' +
         '(not those only in more_unread_conversations) — pass it back as cursors to get only what is new. ' +
         CURSOR_NO_CACHE_DESCRIPTION +
+        FROM_DESCRIPTION +
+        'With from the result is one list across every conversation instead: messages (each with its ' +
+        'conversation_id; a channel reply keeps replyTo), oldest first, at most limit; conversations (the summary ' +
+        'of each one on the page); total_unread (every unread message past from, this page and later ones); ' +
+        'from_time, has_more, next_from, next_from_time; skipped_unreachable, muted_skipped and errors. next_from ' +
+        'does not move while a read failed (call again). from takes the place of since_days, cursors, ' +
+        'per_conversation_limit, max_conversations, older_unread and mark_read, and format summary does not apply. ' +
         FORMAT_DESCRIPTION +
         MARK_READ_DESCRIPTION +
         'With mark_read each conversation returned with its messages (not more_unread_conversations) has its ' +
@@ -197,6 +307,17 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
               'more_unread_conversations.',
           ),
         cursors: cursorsArg,
+        from: fromArg,
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(MAX_FROM_MESSAGES)
+          .optional()
+          .describe(
+            `With from only: maximum messages returned across every conversation, oldest first (default ` +
+              `${DEFAULT_LIMIT}, max ${MAX_FROM_MESSAGES}).`,
+          ),
         tz: tzArg,
         format: formatArg,
         mark_read: markReadArg,
@@ -214,6 +335,8 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
         per_conversation_limit,
         max_conversations,
         cursors,
+        from,
+        limit,
         tz,
         format,
         mark_read,
@@ -223,6 +346,23 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
     ) => {
       try {
         assertMarkReadFormat(mark_read, format);
+        if (from === undefined && limit !== undefined) {
+          throw new McpToolError('limit applies only with from.', {
+            hint: 'Without from, use per_conversation_limit and max_conversations.',
+          });
+        }
+        if (from !== undefined) {
+          const args = { since_days, cursors, per_conversation_limit, max_conversations, mark_read, older_unread };
+          const clash = NOT_WITH_FROM.find((k) => args[k] !== undefined && args[k] !== false);
+          if (clash !== undefined || format === 'summary') {
+            throw new McpToolError(`from cannot be combined with ${clash ?? 'format summary'}.`, {
+              hint:
+                'from pages one oldest-first list across every conversation: pass a previous next_from to go on, ' +
+                'and use teams_mark_read to mark what was paged read.',
+            });
+          }
+        }
+        const pos = from !== undefined ? decodeFrom(from) : undefined;
         const timeZone = resolveTimeZone(tz);
         const fetched_at = new Date().toISOString();
         const [raw, me] = await Promise.all([chatsvc.listConversations(), chatsvc.meMri()]);
@@ -240,6 +380,15 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
         const mutedSkipped = include_muted ? 0 : candidates.filter((s) => s.muted).length;
         if (!include_muted) candidates = candidates.filter((s) => !s.muted);
         candidates.sort(byLastActivityDesc);
+
+        if (pos !== undefined) {
+          const page = await unreadFrom(chatsvc, raw, me, candidates, pos, {
+            limit: limit ?? DEFAULT_LIMIT,
+            timeZone,
+            format: format === 'compact' ? 'compact' : 'full',
+          });
+          return untrustedResult({ ...page, muted_skipped: mutedSkipped, fetched_at });
+        }
 
         const perLimit = per_conversation_limit ?? DEFAULT_PER_CONVERSATION;
         const outcome = await confirmUnreadCandidates(

@@ -262,6 +262,8 @@ export interface GetMessagesOptions {
   stopAt?: (m: RawMessage) => boolean;
   /** Most messages to return. */
   max: number;
+  /** Most pages to request (default 20) — a read that must reach far back asks for more. */
+  maxPages?: number;
   /**
    * Messages per request (default 200, the service's largest page). A read
    * that wants only a few recent messages asks for fewer, so a cold read of
@@ -406,18 +408,19 @@ export class ChatServiceClient {
 
   /**
    * A conversation's messages, newest first, paging back until `stopAt`
-   * accepts a message, `max` are collected, the pages run out, or 20 pages
-   * have been read.
+   * accepts a message, `max` are collected, the pages run out, or `maxPages`
+   * (default 20) have been read.
    */
   async getMessages(id: string, opts: GetMessagesOptions): Promise<RawMessage[]> {
     this.#requireConfigured();
     const out: RawMessage[] = [];
     if (!(opts.max > 0)) return out;
+    const seen = new Set<string>();
     let url: string | undefined =
       `${this.#baseUrl}/users/ME/conversations/${encodeURIComponent(id)}/messages` +
       `?view=msnp24Equivalent|supportsMessageProperties&pageSize=${opts.pageSize ?? DEFAULT_MESSAGE_PAGE_SIZE}&startTime=1`;
     for (let page = 0; url !== undefined; page++) {
-      if (page >= MAX_MESSAGE_PAGES) {
+      if (page >= (opts.maxPages ?? MAX_MESSAGE_PAGES)) {
         opts.onCapped?.();
         break;
       }
@@ -429,6 +432,11 @@ export class ChatServiceClient {
       // each message it rejects — and only the NEXT page is not fetched.
       let stopped = false;
       for (const m of msgs) {
+        // Live (2026-10-14) the service served one message — same id, same version — on two pages
+        // (2 of 567). The first copy stands; a repeat is neither returned nor shown to `stopAt`,
+        // whose limit counting would otherwise count it twice.
+        if (seen.has(m.id)) continue;
+        seen.add(m.id);
         if (opts.stopAt?.(m)) {
           stopped = true;
           continue;

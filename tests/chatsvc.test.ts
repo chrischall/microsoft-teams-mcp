@@ -349,6 +349,34 @@ describe('getMessages', () => {
     expect(onCapped).toHaveBeenCalledTimes(1);
   });
 
+  it('returns a message the service serves twice only once (live, 2026-10-14: same id and version on two pages)', async () => {
+    const fetchImpl: FetchMock = vi.fn(async (input) =>
+      String(input).includes('syncState=older')
+        ? jsonResponse({ messages: [msg(30), msg(20), msg(10)] })
+        : jsonResponse({
+            messages: [msg(50), msg(30), msg(40)],
+            _metadata: { backwardLink: `${BASE}/users/ME/conversations/x/messages?syncState=older` },
+          }),
+    );
+    const msgs = await client(fetchImpl).getMessages(CONV, { max: 100 });
+    expect(msgs.map((m) => m.id)).toEqual(['50', '30', '40', '20', '10']);
+  });
+
+  it('pages as deep as maxPages asks', async () => {
+    let n = 1000;
+    const fetchImpl: FetchMock = vi.fn(async () => {
+      n--;
+      return jsonResponse({
+        messages: [msg(n)],
+        _metadata: { backwardLink: `${BASE}/users/ME/conversations/x/messages?syncState=${n}` },
+      });
+    });
+    const onCapped = vi.fn();
+    await expect(client(fetchImpl).getMessages(CONV, { max: 1000, maxPages: 35, onCapped })).resolves.toHaveLength(35);
+    expect(fetchImpl).toHaveBeenCalledTimes(35);
+    expect(onCapped).toHaveBeenCalledTimes(1);
+  });
+
   it('reports hitting max through onCapped', async () => {
     const onCapped = vi.fn();
     await client(pagedFetch()).getMessages(CONV, { max: 3, onCapped });

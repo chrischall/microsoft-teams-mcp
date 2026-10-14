@@ -33,10 +33,10 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { mapWithConcurrency, McpToolError, toolAnnotations } from '@chrischall/mcp-utils';
-import type { RawMessage } from '../chatsvc.js';
 import type { TeamsDeps } from '../deps.js';
 import {
   conversationSummary,
+  changedMs,
   isUserMessage,
   lastChangeMs,
   normaliseMessage,
@@ -101,13 +101,6 @@ export function decodeChangesCursor(cursor: string): number {
   const t = /^\d{4}-\d{2}-\d{2}/.test(cursor) ? Date.parse(cursor) : NaN;
   if (Number.isNaN(t)) throw badCursor(cursor);
   return t;
-}
-
-/** A message's last change (epoch ms): its `version`, else its arrival (the id). */
-function changedMs(m: RawMessage): number {
-  const v = Number(m.version);
-  const id = Number(m.id);
-  return Math.max(Number.isFinite(v) ? v : 0, Number.isFinite(id) ? id : 0);
 }
 
 /** One channel thread the new messages landed in. */

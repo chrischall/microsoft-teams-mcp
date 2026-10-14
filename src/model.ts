@@ -648,6 +648,17 @@ export interface NormaliseOptions {
   timeZone?: string;
 }
 
+/**
+ * A message's last change (epoch ms): its `version`, else its arrival (the id).
+ * Live (2026-10-12), pages come newest CHANGE first, so a read that must not
+ * miss what arrived after a time stops on this, never on arrival.
+ */
+export function changedMs(m: RawMessage): number {
+  const v = Number(m.version);
+  const id = Number(m.id);
+  return Math.max(Number.isFinite(v) ? v : 0, Number.isFinite(id) ? id : 0);
+}
+
 export function normaliseMessage(m: RawMessage, meMri: string, opts: NormaliseOptions = {}): NormalisedMessage {
   const props = m.properties ?? {};
   const mri = senderMri(m.from);
