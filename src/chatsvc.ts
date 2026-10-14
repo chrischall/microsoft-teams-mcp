@@ -415,6 +415,7 @@ export class ChatServiceClient {
     this.#requireConfigured();
     const out: RawMessage[] = [];
     if (!(opts.max > 0)) return out;
+    const seen = new Set<string>();
     let url: string | undefined =
       `${this.#baseUrl}/users/ME/conversations/${encodeURIComponent(id)}/messages` +
       `?view=msnp24Equivalent|supportsMessageProperties&pageSize=${opts.pageSize ?? DEFAULT_MESSAGE_PAGE_SIZE}&startTime=1`;
@@ -431,6 +432,11 @@ export class ChatServiceClient {
       // each message it rejects — and only the NEXT page is not fetched.
       let stopped = false;
       for (const m of msgs) {
+        // Live (2026-10-14) the service served one message — same id, same version — on two pages
+        // (2 of 567). The first copy stands; a repeat is neither returned nor shown to `stopAt`,
+        // whose limit counting would otherwise count it twice.
+        if (seen.has(m.id)) continue;
+        seen.add(m.id);
         if (opts.stopAt?.(m)) {
           stopped = true;
           continue;
