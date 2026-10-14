@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.6.0](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.5.1...v0.6.0) (2026-10-14)
+
+
+### Features
+
+* **read:** page messages oldest first from a UTC time with a resumable next_from ([#67](https://github.com/chrischall/microsoft-teams-mcp/issues/67)) ([be42375](https://github.com/chrischall/microsoft-teams-mcp/commit/be42375b942298a624884da9a0125ef76b8499dc))
+
+
+### Bug Fixes
+
+* **deps:** bump the production-dependencies group with 4 updates ([#65](https://github.com/chrischall/microsoft-teams-mcp/issues/65)) ([6fe0960](https://github.com/chrischall/microsoft-teams-mcp/commit/6fe0960988037acb89d7bdbb279a90240c34c465))
+* **unread:** keep next_from moving past a conversation too busy to page from a time ([#69](https://github.com/chrischall/microsoft-teams-mcp/issues/69)) ([ea891cc](https://github.com/chrischall/microsoft-teams-mcp/commit/ea891ccc8372f37afc8ea69b3ea49c9873fe9a54))
+
 ## [0.5.1](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.5.0...v0.5.1) (2026-10-12)
 
 
