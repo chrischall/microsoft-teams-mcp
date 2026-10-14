@@ -262,6 +262,8 @@ export interface GetMessagesOptions {
   stopAt?: (m: RawMessage) => boolean;
   /** Most messages to return. */
   max: number;
+  /** Most pages to request (default 20) — a read that must reach far back asks for more. */
+  maxPages?: number;
   /**
    * Messages per request (default 200, the service's largest page). A read
    * that wants only a few recent messages asks for fewer, so a cold read of
@@ -406,8 +408,8 @@ export class ChatServiceClient {
 
   /**
    * A conversation's messages, newest first, paging back until `stopAt`
-   * accepts a message, `max` are collected, the pages run out, or 20 pages
-   * have been read.
+   * accepts a message, `max` are collected, the pages run out, or `maxPages`
+   * (default 20) have been read.
    */
   async getMessages(id: string, opts: GetMessagesOptions): Promise<RawMessage[]> {
     this.#requireConfigured();
@@ -417,7 +419,7 @@ export class ChatServiceClient {
       `${this.#baseUrl}/users/ME/conversations/${encodeURIComponent(id)}/messages` +
       `?view=msnp24Equivalent|supportsMessageProperties&pageSize=${opts.pageSize ?? DEFAULT_MESSAGE_PAGE_SIZE}&startTime=1`;
     for (let page = 0; url !== undefined; page++) {
-      if (page >= MAX_MESSAGE_PAGES) {
+      if (page >= (opts.maxPages ?? MAX_MESSAGE_PAGES)) {
         opts.onCapped?.();
         break;
       }

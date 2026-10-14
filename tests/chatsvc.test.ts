@@ -349,6 +349,21 @@ describe('getMessages', () => {
     expect(onCapped).toHaveBeenCalledTimes(1);
   });
 
+  it('pages as deep as maxPages asks', async () => {
+    let n = 1000;
+    const fetchImpl: FetchMock = vi.fn(async () => {
+      n--;
+      return jsonResponse({
+        messages: [msg(n)],
+        _metadata: { backwardLink: `${BASE}/users/ME/conversations/x/messages?syncState=${n}` },
+      });
+    });
+    const onCapped = vi.fn();
+    await expect(client(fetchImpl).getMessages(CONV, { max: 1000, maxPages: 35, onCapped })).resolves.toHaveLength(35);
+    expect(fetchImpl).toHaveBeenCalledTimes(35);
+    expect(onCapped).toHaveBeenCalledTimes(1);
+  });
+
   it('reports hitting max through onCapped', async () => {
     const onCapped = vi.fn();
     await client(pagedFetch()).getMessages(CONV, { max: 3, onCapped });

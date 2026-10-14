@@ -269,7 +269,9 @@ Everything is optional — by default the token is captured from your browser.
   is new — so passing it back as `after_message_id` reads only what arrived
   since. `after_message_id` takes message ids only: to read what
   `teams_get_changes` counted, pass that row's `after_message_id`, not its
-  `next_cursor`. See [Cursors](#cursors-only-what-is-new).
+  `next_cursor`. See [Cursors](#cursors-only-what-is-new). `from` pages
+  oldest first from a UTC time instead — see
+  [Paging from a time](#paging-from-a-time).
   `format` sets how much comes back: `full` (default, everything above),
   `compact` (each message only `id`, `time`, `time_local`, `sender`, `text`,
   plus `subject` when set — no reactions, attachments or edited/deleted
@@ -299,7 +301,9 @@ Everything is optional — by default the token is captured from your browser.
   only messages you had already read still marks). An empty read, or an
   `after_message_id` with nothing new, marks nothing (`marked_read: false`).
 - `teams_get_unread` — every unread message across your chats and channels,
-  grouped by conversation, most recent first. Filter by `kinds` (`chat`,
+  grouped by conversation, most recent first (or, with `from`, one
+  oldest-first list across them all — see
+  [Paging from a time](#paging-from-a-time)). Filter by `kinds` (`chat`,
   `channel`, `meeting`, `oneOnOne`) or `query` (title, channel or team
   name, an untitled chat's participant name, or the last-message preview —
   each conversation then carries `match_reason`, as in `teams_list_chats`);
@@ -554,6 +558,27 @@ instead.
   id. Each of its conversation rows carries the message-id cursor to hand on,
   `after_message_id`, for `teams_read_conversation` (or `teams_get_unread`'s
   `cursors`). Each tool rejects the other kind.
+- <a id="paging-from-a-time"></a>**Paging from a time (ingestion and
+  backfill).** `teams_read_conversation` and `teams_get_unread` take `from`:
+  a UTC time (ISO 8601; one with no zone is read as UTC) or a previous
+  result's `next_from`. They return what arrived at or after it **oldest
+  first**, at most `limit` (default 50; `teams_get_unread` pools every
+  conversation into one `messages` list, each message carrying its
+  `conversation_id`), plus `has_more`, `next_from` and `next_from_time`.
+  Pass `next_from` back as `from` until `has_more` is false; it is returned
+  on the last (and an empty) page too, so the same call keeps polling for
+  what arrives later. Messages sharing a millisecond are never split or
+  repeated across pages; delivery is otherwise at-least-once (`next_from`
+  never moves past the newest change the listing knew of, and not at all
+  while a read failed), so dedupe on message id. **Cost:** Teams serves
+  messages newest first with no way to seek, so each call reads everything
+  that changed since its `from` — a deep backfill gets faster as it catches
+  up — and a conversation with more than 20,000 messages since `from`
+  cannot be paged oldest first: it reports an error (in `errors`, for
+  `teams_get_unread`) rather than skip any. `from` replaces `since` /
+  `after_message_id` / `mark_read` (and, for `teams_get_unread`, `since_days`,
+  `cursors`, the per-conversation limits, `older_unread` and
+  `format: "summary"`).
 
 - **Results are framed as untrusted.** Every data tool returns
   `{ untrusted_content: true, note, ... }` and says in its description that

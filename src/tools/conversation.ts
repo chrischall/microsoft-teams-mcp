@@ -44,6 +44,7 @@ import { DEFAULT_LIMIT, limitArg, makeLimitedStopAt, sinceArg } from './limit.js
 import { resolveTimeZone, TIME_ZONE_DESCRIPTION, tzArg } from './timezone.js';
 import { afterMessageIdArg, CURSOR_NO_CACHE_DESCRIPTION, newestId } from './cursor.js';
 import { FORMAT_DESCRIPTION, formatArg, formatBody, formatConversation, type ReadFormat } from './format.js';
+import { decodeFrom, FROM_DESCRIPTION, fromArg, fromReport, readFrom, takePage, type FromPosition } from './from.js';
 import { fetchOutsideRoots, MAX_ROOT_FETCHES, rootBudget, type RootBudget } from './roots.js';
 import {
   advancesHorizon,
@@ -205,6 +206,8 @@ interface ReadOptions {
   unreadOnly: boolean;
   since?: string;
   afterMessageId?: string;
+  /** Page oldest first from here instead (`from.ts`); excludes `since` and `afterMessageId`. */
+  from?: FromPosition;
   limit: number;
   timeZone?: string;
   format: ReadFormat;
@@ -225,14 +228,55 @@ interface ReadOne {
   result: Record<string, unknown>;
 }
 
+/**
+ * One page of a conversation from a `from` position: everything since it read
+ * (`readFrom`), its real messages (unread ones with `unreadOnly`) taken oldest
+ * first (`takePage`).
+ */
+async function readOneFrom(
+  chatsvc: ChatServiceClient,
+  raw: readonly RawConversation[],
+  me: string,
+  summary: ConversationSummary,
+  pos: FromPosition,
+  { unreadOnly, limit, timeZone, format, roots }: ReadOptions,
+): Promise<ReadOne> {
+  const conv = raw.find((c) => c.id === summary.id) ?? { id: summary.id };
+  const horizon = readHorizon(conv);
+  const wanted = (m: RawMessage): boolean => isUserMessage(m) && (!unreadOnly || isUnread(m, horizon, me));
+  const fetched = await readFrom(chatsvc, summary.id, unreadOnly ? Math.max(pos.t, horizon + 1) : pos.t);
+  const { page, has_more, next } = takePage(
+    fetched.filter(wanted).map((m) => ({ ms: arrivalMs(m), key: m.id, item: m })),
+    pos,
+    limit,
+  );
+  const messages = page.map((m) => normaliseMessage(m, me, { timeZone }));
+  const outsideRoots =
+    summary.kind === 'channel'
+      ? await fetchOutsideRoots(chatsvc, summary.id, messages, me, { budget: roots, timeZone })
+      : undefined;
+  return {
+    summary,
+    conv,
+    newest: newestId(page),
+    result: {
+      conversation: formatConversation(summary, format),
+      ...formatBody(summary.kind, messages, format, outsideRoots),
+      ...fromReport(pos, next, has_more),
+    },
+  };
+}
+
 /** Read one resolved conversation. */
 async function readOne(
   chatsvc: ChatServiceClient,
   raw: readonly RawConversation[],
   me: string,
   summary: ConversationSummary,
-  { unreadOnly, since, afterMessageId, limit, timeZone, format, roots }: ReadOptions,
+  opts: ReadOptions,
 ): Promise<ReadOne> {
+  if (opts.from !== undefined) return readOneFrom(chatsvc, raw, me, summary, opts.from, opts);
+  const { unreadOnly, since, afterMessageId, limit, timeZone, format, roots } = opts;
   // The self-chat resolves even when the listing does not carry it.
   const conv = raw.find((c) => c.id === summary.id) ?? { id: summary.id };
   const horizon = readHorizon(conv);
@@ -426,6 +470,10 @@ export function registerConversationTools(server: McpServer, { chatsvc }: Pick<T
         'arguments apply to each); an ambiguous name takes its place among them as the same { ambiguous: true, ' +
         '... } object a single read returns, and one that cannot be resolved or read is listed in errors ' +
         'while the rest still come back. ' +
+        FROM_DESCRIPTION +
+        'With from, limit keeps the OLDEST messages, unread_only pages only unread ones, and since, ' +
+        'after_message_id and mark_read cannot be used; the result carries from_time, has_more, next_from and ' +
+        'next_from_time in place of unread_count and next_cursor. ' +
         MARK_READ_DESCRIPTION +
         'With mark_read the read marker of each conversation read moves up to the newest message returned ' +
         '(never backwards; outside_window roots do not count) and its result says marked_read; one whose limit ' +
@@ -457,20 +505,32 @@ export function registerConversationTools(server: McpServer, { chatsvc }: Pick<T
           .describe('Only return messages the user has not read yet (default false). Does not mark them read unless mark_read is set.'),
         since: sinceArg,
         after_message_id: afterMessageIdArg,
-        limit: limitArg(MAX_MESSAGES, 'messages'),
+        from: fromArg,
+        limit: limitArg(MAX_MESSAGES, 'messages', 'newest first kept; with from, oldest first kept'),
         tz: tzArg,
         format: formatArg,
         mark_read: markReadArg,
         confirmToken: confirmTokenParam,
       },
     },
-    async ({ conversation, unread_only, since, after_message_id, limit, tz, format, mark_read, confirmToken }, ctx) => {
+    async ({ conversation, unread_only, since, after_message_id, from, limit, tz, format, mark_read, confirmToken }, ctx) => {
       try {
         assertMarkReadFormat(mark_read, format);
+        if (from !== undefined) {
+          const clash = since !== undefined ? 'since' : after_message_id !== undefined ? 'after_message_id' : mark_read ? 'mark_read' : undefined;
+          if (clash !== undefined) {
+            throw new McpToolError(`from cannot be combined with ${clash}.`, {
+              hint:
+                'from is its own position: pass a previous next_from to go on. To mark what was paged read, use ' +
+                'teams_mark_read.',
+            });
+          }
+        }
         const opts: ReadOptions = {
           unreadOnly: unread_only ?? false,
           since,
           afterMessageId: after_message_id,
+          from: from !== undefined ? decodeFrom(from) : undefined,
           limit: limit ?? DEFAULT_LIMIT,
           timeZone: resolveTimeZone(tz),
           format: format ?? 'full',

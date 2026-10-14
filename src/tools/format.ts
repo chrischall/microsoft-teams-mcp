@@ -106,6 +106,16 @@ function compactMessage(m: NormalisedMessage): CompactMessage {
   };
 }
 
+/**
+ * One message of a flat, cross-conversation list (`teams_get_unread` with
+ * `from`): whole in full; compact, but keeping `replyTo`, since no thread
+ * grouping says what a channel reply answers. Summary has no messages.
+ */
+export function formatFlatMessage(m: NormalisedMessage, format: Exclude<ReadFormat, 'summary'>) {
+  if (format === 'full') return m;
+  return { ...compactMessage(m), ...(m.replyTo !== undefined ? { replyTo: m.replyTo } : {}) };
+}
+
 const isMissing = (root: ThreadRoot): root is MissingRoot => 'missing' in root;
 const isOutside = (root: ThreadRoot): root is OutsideRoot => 'outside_window' in root;
 

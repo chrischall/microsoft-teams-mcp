@@ -480,6 +480,7 @@ describe('teams_read_conversation', () => {
       'confirmToken',
       'conversation',
       'format',
+      'from',
       'limit',
       'mark_read',
       'since',
