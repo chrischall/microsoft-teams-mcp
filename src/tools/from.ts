@@ -55,8 +55,8 @@ export const FROM_DESCRIPTION =
   'resumes after the last message returned and has_more says whether more are already waiting. Pass an old ' +
   'from and keep passing next_from to backfill; once has_more is false the same next_from picks up what ' +
   'arrives later. Delivery is at-least-once: dedupe on message id. Teams pages newest first, so a from call ' +
-  `reads everything since from (up to ${FROM_MAX_RAW} raw messages per conversation, past which it reports ` +
-  'an error rather than skip any): the further back from is, the slower the call. ';
+  `reads everything since from (up to ${FROM_MAX_RAW} raw messages per conversation, past which it never ` +
+  'skips silently: it says what it could not read): the further back from is, the slower the call. ';
 
 function badFrom(from: string): McpToolError {
   return new McpToolError(`"${from}" is not a from position.`, {
@@ -150,27 +150,41 @@ export function fromReport(pos: FromPosition, next: FromPosition, hasMore: boole
   };
 }
 
+export interface FromRead {
+  /** Newest change first. */
+  messages: RawMessage[];
+  /**
+   * Set when the read ran out of depth before `boundary`: the oldest change
+   * it reached (epoch ms). Every message that arrived after it was read; what
+   * arrived from `boundary` up to it is unknown.
+   */
+  reachedMs?: number;
+}
+
 /**
  * Every message of a conversation that changed at or after `boundary` (epoch
  * ms), newest change first — so every message that ARRIVED at or after it,
- * plus older ones edited or reacted to since. A read that runs out of depth
- * before reaching `boundary` throws: its oldest messages are unknown, and a
- * page taken from what was read would skip them.
+ * plus older ones edited or reacted to since — or, when that is more than a
+ * read can reach, as far back as it got (`reachedMs`).
  */
-export async function readFrom(chatsvc: ChatServiceClient, id: string, boundary: number): Promise<RawMessage[]> {
+export async function readFrom(chatsvc: ChatServiceClient, id: string, boundary: number): Promise<FromRead> {
   let capped = false;
-  const fetched = await chatsvc.getMessages(id, {
+  const messages = await chatsvc.getMessages(id, {
     stopAt: (m) => changedMs(m) < boundary,
     max: FROM_MAX_RAW,
     maxPages: FROM_MAX_PAGES,
     onCapped: () => (capped = true),
   });
-  if (capped) {
-    throw new McpToolError(
-      `More than ${FROM_MAX_RAW} messages changed in this conversation since ${new Date(boundary).toISOString()}, ` +
-        'so its oldest cannot be reached: Teams pages newest first.',
-      { hint: 'Pass a later from.' },
-    );
-  }
-  return fetched;
+  if (!capped) return { messages };
+  return { messages, reachedMs: Math.min(...messages.map(changedMs)) };
+}
+
+/** Why a conversation cannot be paged oldest first from `boundary`, and what to do. */
+export function tooBusy(boundary: number, reachedMs: number): { error: string; hint: string } {
+  return {
+    error:
+      `More than ${FROM_MAX_RAW} messages changed in this conversation since ${new Date(boundary).toISOString()}: ` +
+      `a read reached back only to ${new Date(reachedMs).toISOString()}, as Teams pages newest first.`,
+    hint: 'Pass a later from.',
+  };
 }

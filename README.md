@@ -574,8 +574,12 @@ instead.
   messages newest first with no way to seek, so each call reads everything
   that changed since its `from` — a deep backfill gets faster as it catches
   up — and a conversation with more than 20,000 messages since `from`
-  cannot be paged oldest first: it reports an error (in `errors`, for
-  `teams_get_unread`) rather than skip any. `from` replaces `since` /
+  cannot be paged oldest first: `teams_read_conversation` reports an error
+  rather than skip any, and `teams_get_unread` returns what arrived after the
+  oldest point it reached, names the stretch it could not read in
+  `incomplete` (`unread_not_read_from` / `unread_not_read_until`), and keeps
+  `next_from` moving — so one oversized conversation never stalls the stream.
+  `from` replaces `since` /
   `after_message_id` / `mark_read` (and, for `teams_get_unread`, `since_days`,
   `cursors`, the per-conversation limits, `older_unread` and
   `format: "summary"`).

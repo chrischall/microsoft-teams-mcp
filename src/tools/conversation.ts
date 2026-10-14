@@ -44,7 +44,7 @@ import { DEFAULT_LIMIT, limitArg, makeLimitedStopAt, sinceArg } from './limit.js
 import { resolveTimeZone, TIME_ZONE_DESCRIPTION, tzArg } from './timezone.js';
 import { afterMessageIdArg, CURSOR_NO_CACHE_DESCRIPTION, newestId } from './cursor.js';
 import { FORMAT_DESCRIPTION, formatArg, formatBody, formatConversation, type ReadFormat } from './format.js';
-import { decodeFrom, FROM_DESCRIPTION, fromArg, fromReport, readFrom, takePage, type FromPosition } from './from.js';
+import { decodeFrom, FROM_DESCRIPTION, fromArg, fromReport, readFrom, takePage, tooBusy, type FromPosition } from './from.js';
 import { fetchOutsideRoots, MAX_ROOT_FETCHES, rootBudget, type RootBudget } from './roots.js';
 import {
   advancesHorizon,
@@ -244,7 +244,13 @@ async function readOneFrom(
   const conv = raw.find((c) => c.id === summary.id) ?? { id: summary.id };
   const horizon = readHorizon(conv);
   const wanted = (m: RawMessage): boolean => isUserMessage(m) && (!unreadOnly || isUnread(m, horizon, me));
-  const fetched = await readFrom(chatsvc, summary.id, unreadOnly ? Math.max(pos.t, horizon + 1) : pos.t);
+  const boundary = unreadOnly ? Math.max(pos.t, horizon + 1) : pos.t;
+  const { messages: fetched, reachedMs } = await readFrom(chatsvc, summary.id, boundary);
+  // Its oldest messages are unknown, and a page taken from what was read would skip them.
+  if (reachedMs !== undefined) {
+    const { error, hint } = tooBusy(boundary, reachedMs);
+    throw new McpToolError(error, { hint });
+  }
   const { page, has_more, next } = takePage(
     fetched.filter(wanted).map((m) => ({ ms: arrivalMs(m), key: m.id, item: m })),
     pos,

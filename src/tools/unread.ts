@@ -65,6 +65,7 @@ import {
   fromReport,
   readFrom,
   takePage,
+  tooBusy,
   type FromPosition,
   type Keyed,
 } from './from.js';
@@ -129,6 +130,11 @@ function byLastActivityDesc(a: ConversationSummary, b: ConversationSummary): num
  * never moves past the newest change the listing knew of — a message landing
  * mid-call in a conversation already read is then not skipped — nor at all
  * when a read failed, since that conversation may hold older unread messages.
+ *
+ * A conversation too busy to read back to `from` is not a failed read: that
+ * would recur on every call and hold the position for good. What arrived
+ * after the oldest point its read reached is complete, so it is paged like the
+ * rest; the stretch before it is named in `incomplete`, and the position moves.
  */
 async function unreadFrom(
   chatsvc: ChatServiceClient,
@@ -141,14 +147,17 @@ async function unreadFrom(
   const byId = new Map(raw.map((c) => [c.id, c]));
   const toRead = candidates.filter((s) => (lastChangeMs(byId.get(s.id) ?? { id: s.id }) ?? Infinity) >= pos.t);
   type Result =
-    | { kind: 'read'; messages: RawMessage[] }
+    | { kind: 'read'; messages: RawMessage[]; boundary: number; reachedMs?: number }
     | { kind: 'unreachable' }
     | { kind: 'failed'; error: unknown };
   const results = await mapWithConcurrency(toRead, CONFIRM_CONCURRENCY, async (summary): Promise<Result> => {
     const horizon = readHorizon(byId.get(summary.id) ?? { id: summary.id });
     try {
-      const fetched = await readFrom(chatsvc, summary.id, Math.max(pos.t, horizon + 1));
-      return { kind: 'read', messages: fetched.filter((m) => isUnread(m, horizon, me)) };
+      const boundary = Math.max(pos.t, horizon + 1);
+      const { messages, reachedMs } = await readFrom(chatsvc, summary.id, boundary);
+      // Past a too-busy read's reach only what arrived after it is known complete.
+      const known = (m: RawMessage) => reachedMs === undefined || arrivalMs(m) > reachedMs;
+      return { kind: 'read', messages: messages.filter((m) => isUnread(m, horizon, me) && known(m)), boundary, reachedMs };
     } catch (error) {
       return isUnreachable(error) ? { kind: 'unreachable' } : { kind: 'failed', error };
     }
@@ -158,12 +167,14 @@ async function unreadFrom(
   let anyRead = false;
   const items: Keyed<{ summary: ConversationSummary; m: RawMessage }>[] = [];
   const failed: { summary: ConversationSummary; error: unknown }[] = [];
+  const tooDeep: { summary: ConversationSummary; boundary: number; reachedMs: number }[] = [];
   results.forEach((r, i) => {
     const summary = toRead[i];
     if (r.kind === 'unreachable') skippedUnreachable++;
     else if (r.kind === 'failed') failed.push({ summary, error: r.error });
     else {
       anyRead = true;
+      if (r.reachedMs !== undefined) tooDeep.push({ summary, boundary: r.boundary, reachedMs: r.reachedMs });
       for (const m of r.messages) items.push({ ms: arrivalMs(m), key: `${summary.id}/${m.id}`, item: { summary, m } });
     }
   });
@@ -173,9 +184,14 @@ async function unreadFrom(
   const listed = Math.max(pos.t, ...raw.map((c) => lastChangeMs(c) ?? 0));
   const { page, has_more, remaining, next } = takePage(items, pos, limit, failed.length > 0 ? pos.t : listed);
 
-  // Only what is returned is titled: the conversations on this page and those whose read failed.
+  // Only what is returned is titled: the conversations on this page, those whose read failed and those too busy.
   const shown = [...new Map(page.map(({ summary }) => [summary.id, summary])).values()];
-  const titled = await enrichTitles(chatsvc, raw, me, [...shown, ...failed.map((f) => f.summary)]);
+  const titled = await enrichTitles(chatsvc, raw, me, [
+    ...shown,
+    ...failed.map((f) => f.summary),
+    ...tooDeep.map((d) => d.summary),
+  ]);
+  const titledDeep = titled.slice(shown.length + failed.length);
   return {
     total_unread: page.length + remaining,
     messages: page.map(({ summary, m }) => ({
@@ -190,6 +206,16 @@ async function unreadFrom(
           errors: failed.map((f, i) => ({
             conversation: titled[shown.length + i],
             error: wrapApiError(f.error, 'read this conversation').message,
+          })),
+        }
+      : {}),
+    ...(tooDeep.length > 0
+      ? {
+          incomplete: tooDeep.map((d, i) => ({
+            conversation: titledDeep[i],
+            unread_not_read_from: new Date(d.boundary).toISOString(),
+            unread_not_read_until: new Date(d.reachedMs).toISOString(),
+            ...tooBusy(d.boundary, d.reachedMs),
           })),
         }
       : {}),
@@ -239,7 +265,9 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
         'conversation_id; a channel reply keeps replyTo), oldest first, at most limit; conversations (the summary ' +
         'of each one on the page); total_unread (every unread message past from, this page and later ones); ' +
         'from_time, has_more, next_from, next_from_time; skipped_unreachable, muted_skipped and errors. next_from ' +
-        'does not move while a read failed (call again). from takes the place of since_days, cursors, ' +
+        'does not move while a read failed (call again). A conversation with more messages since from than a read ' +
+        'can reach is listed in incomplete instead (unread_not_read_from / unread_not_read_until name the stretch ' +
+        'not read; what arrived after it is returned) and does not hold next_from. from takes the place of since_days, cursors, ' +
         'per_conversation_limit, max_conversations, older_unread and mark_read, and format summary does not apply. ' +
         FORMAT_DESCRIPTION +
         MARK_READ_DESCRIPTION +
