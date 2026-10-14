@@ -144,6 +144,29 @@ describe('teams_get_unread from', () => {
     expect(decodeFrom(data?.next_from as string).t).toBe(T0);
   });
 
+  it('returns what it reached of a conversation too busy to read back to from, names the gap, and keeps moving', async () => {
+    // GROUP's read runs out of depth having reached back only to +5: everything after +5 is known.
+    const getMessages = vi.fn(async (id: string, opts: GetMessagesOptions) => {
+      if (id !== GROUP) return perConversation()(id, opts);
+      opts.onCapped?.();
+      return [rawMsg(T0 + 6 * MIN, { text: 'group b' }), rawMsg(T0 + 5 * MIN, { text: 'group reached' })];
+    });
+    const { data } = await call(chatsvcWith({ getMessages }), { from: iso(T0) });
+    expect(texts(data)).toEqual(['dm a', 'post', 'reply', 'dm b', 'group b']);
+    expect(data).not.toHaveProperty('errors');
+    expect(data?.incomplete).toEqual([
+      expect.objectContaining({
+        conversation: expect.objectContaining({ id: GROUP }),
+        // Its read marker is at +1: nothing before it can be unread, so the gap starts just past it.
+        unread_not_read_from: iso(T0 + 1 * MIN + 1),
+        unread_not_read_until: iso(T0 + 5 * MIN),
+        hint: expect.stringMatching(/later from/),
+      }),
+    ]);
+    // Not pinned like a failed read: the stream moves on.
+    expect(decodeFrom(data?.next_from as string).t).toBe(T0 + 6 * MIN);
+  });
+
   it('skips a conversation that is gone (404) and counts it', async () => {
     const convs = [...CONVS, rawConv(GONE, { topic: 'Gone', at: T0 + 2 * MIN, horizon: T0 })];
     const getMessages = vi.fn(async (id: string, opts: GetMessagesOptions) => {
