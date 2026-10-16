@@ -77,6 +77,12 @@ env:
     help: >-
       Path to the cached Substrate search token file. Defaults to
       ~/.microsoft-teams-mcp/substrate-token.json.
+  - name: TEAMS_SHAREPOINT_TOKEN_FILE
+    required: false
+    help: >-
+      Path to the cached SharePoint token file (one token per SharePoint host,
+      used to download shared files). Defaults to
+      ~/.microsoft-teams-mcp/sharepoint-tokens.json.
 state:
   dataDir: true
   reason: >-
@@ -91,9 +97,17 @@ egress:
   # (us-api.asm.skype.com and the like), retried through the Teams gateway
   # (us-prod.asyncgw.teams.microsoft.com) when the store cannot be reached —
   # the client sends its token nowhere else. Message search goes to Microsoft
-  # Substrate (src/substrate.ts) with its own token.
+  # Substrate (src/substrate.ts) with its own token. Shared files
+  # (teams_get_attachment) download from the file's SharePoint tenant host
+  # (<tenant>.sharepoint.com / <tenant>-my.sharepoint.com, src/sharepoint.ts):
+  # the authed driveItem GET and then its pre-signed @content.downloadUrl,
+  # which SharePoint issues on the same tenant host (download.aspx + tempauth).
+  # That the pre-signed link never redirects off *.sharepoint.com has not been
+  # confirmed on a live fenced download; if it does, the refusal now names the
+  # host it was refused (src/network-error.ts), and that host belongs here.
   allow:
     - teams.cloud.microsoft
     - '*.asm.skype.com'
     - us-prod.asyncgw.teams.microsoft.com
     - substrate.office.com
+    - '*.sharepoint.com'

@@ -168,6 +168,7 @@ Everything is optional — by default the token is captured from your browser.
 | `TEAMS_TOKEN_CACHE` | `false` to keep the captured token in memory only. Defaults to on. |
 | `TEAMS_TOKEN_FILE` | Where the captured token is cached. Defaults to `~/.microsoft-teams-mcp/token.json`. |
 | `TEAMS_SUBSTRATE_TOKEN_FILE` | Where the captured Substrate search token is cached. Defaults to `~/.microsoft-teams-mcp/substrate-token.json`. `TEAMS_TOKEN_CACHE=false` keeps it in memory too. |
+| `TEAMS_SHAREPOINT_TOKEN_FILE` | Where the captured SharePoint tokens (one per host, used to download shared files) are cached. Defaults to `~/.microsoft-teams-mcp/sharepoint-tokens.json`. `TEAMS_TOKEN_CACHE=false` keeps them in memory too. |
 | `TEAMS_TIME_ZONE` | Default IANA time zone (e.g. `America/New_York`) for the `tz` argument of `teams_read_conversation` and `teams_get_unread`: each message then carries `time_local` (ISO 8601 with offset) next to its UTC `time`. Unset means no `time_local` unless `tz` is passed; a name `Intl` does not know is reported as an error. |
 | `TEAMS_WS_PORT` | fetchproxy concentrator port. Defaults to `37149`, the fleet-wide shared port. |
 | `FETCHPROXY_WS_HOST` | Bind interface for the bridge (default `127.0.0.1`; a literal IP only, anything else is ignored). Keep on loopback — it exists for ONE topology: a hosted child in its own network namespace. |

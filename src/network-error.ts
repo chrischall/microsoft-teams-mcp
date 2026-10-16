@@ -84,7 +84,52 @@ function isFetchFailed(err: unknown): boolean {
   return err instanceof TypeError && err.message === 'fetch failed';
 }
 
-function hintFor(code: string | undefined, host: string): string {
+/**
+ * The status a configured HTTPS proxy answered the CONNECT with, when that is
+ * why the request failed. undici reports it only in the message of an
+ * `UND_ERR_ABORTED` cause ("Proxy response (403) !== 200 when HTTP
+ * Tunneling") — there is no structured field to branch on — and Node's own
+ * http proxy support uses code `ERR_PROXY_TUNNEL`.
+ */
+function proxyRefusalStatus(err: unknown): number | 'unknown' | undefined {
+  for (const e of causes(err)) {
+    if (codeOf(e) === 'ERR_PROXY_TUNNEL') {
+      const m = /\b(\d{3})\b/.exec(e instanceof Error ? e.message : '');
+      return m ? Number(m[1]) : 'unknown';
+    }
+    if (e instanceof Error) {
+      const m = /^Proxy response \((\d{3})\) !== 200 when HTTP Tunneling/.exec(e.message);
+      if (m) return Number(m[1]);
+    }
+  }
+  return undefined;
+}
+
+/**
+ * A proxy that answered 403/407 refused the destination by policy: on mcp-host
+ * that is the registration's egress allow-list (mint.yaml `egress.allow`), not
+ * this machine's DNS or VPN, so say that instead of the network-route hints.
+ */
+function proxyRefusalHint(status: number | 'unknown', host: string): string | undefined {
+  if (status !== 403 && status !== 407 && status !== 'unknown') return undefined;
+  return (
+    `The outbound proxy this server runs behind refused the connection to ${host}: its egress ` +
+    'policy does not allow that host. On a hosted (mcp-host) registration, the host must be on the ' +
+    "registration's egress allow-list — the owner accepts the manifest's egress proposal (or adds " +
+    'the host) on the registration, then retries. Elsewhere, ask whoever runs the proxy to allow it.'
+  );
+}
+
+function hintFor(code: string | undefined, host: string, err?: unknown): string {
+  const refused = proxyRefusalStatus(err);
+  if (refused !== undefined) {
+    const policy = proxyRefusalHint(refused, host);
+    if (policy !== undefined) return policy;
+    return (
+      `The outbound proxy this server runs behind could not open a connection to ${host} ` +
+      `(it answered ${refused}). Retry; if it persists, check the proxy can reach the host.`
+    );
+  }
   if (code !== undefined && DNS_CODES.has(code)) {
     return (
       `This machine could not resolve ${host}. Check DNS and VPN: a split-tunnel VPN that resolves ` +
@@ -131,7 +176,7 @@ export function describeTransportFailure(err: unknown, url: string, service: str
   const why = detail.length > 0 ? ` (${[...new Set(detail)].join(': ')})` : '';
   return new McpToolError(`Could not reach ${service} at ${host}${why}.`, {
     kind: 'transport',
-    hint: hintFor(code, host),
+    hint: hintFor(code, host, err),
     cause: err,
   });
 }

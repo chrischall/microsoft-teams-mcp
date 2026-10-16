@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { versionSyncTest } from '@chrischall/mcp-utils/test';
@@ -137,6 +137,8 @@ const ENV = [
   'TEAMS_CHATSVC_BASE',
   'TEAMS_CHATSVC_REGION',
   'TEAMS_DISABLE_FETCHPROXY',
+  'TEAMS_SHAREPOINT_TOKEN_FILE',
+  'TEAMS_SUBSTRATE_TOKEN_FILE',
   'TEAMS_TIME_ZONE',
   'TEAMS_TOKEN_CACHE',
   'TEAMS_TOKEN_FILE',
@@ -204,6 +206,24 @@ describe('write tools are documented as confirm-gated', () => {
 });
 
 describe('install surfaces pass every honoured env key', () => {
+  it('declares every TEAMS_* variable the source reads, on every surface', () => {
+    const walk = (d: string): string[] =>
+      readdirSync(d, { withFileTypes: true }).flatMap((e) =>
+        e.isDirectory() ? walk(join(d, e.name)) : e.name.endsWith('.ts') ? [join(d, e.name)] : [],
+      );
+    const read = new Set<string>();
+    for (const f of walk(join(root, 'src'))) {
+      for (const m of readFileSync(f, 'utf8').matchAll(/['"`](TEAMS_[A-Z_]+)['"`]/g)) read.add(m[1]);
+    }
+    const readme = readFileSync(join(root, 'README.md'), 'utf8');
+    const mint = readFileSync(join(root, 'mint.yaml'), 'utf8');
+    for (const k of read) {
+      expect(ENV, k).toContain(k);
+      expect(readme, `README: ${k}`).toContain(`\`${k}\``);
+      expect(mint, `mint.yaml: ${k}`).toMatch(new RegExp(`- name: ${k}\\b`));
+    }
+  });
+
   it('manifest.json passes each one from an optional user_config entry', () => {
     const m = read('manifest.json');
     const env = (m.server.mcp_config.env ?? {}) as Record<string, string>;
@@ -238,5 +258,13 @@ describe('install surfaces pass every honoured env key', () => {
   it('documents in the README every MCP_CONFIRM_* key it passes', () => {
     const readme = readFileSync(join(root, 'README.md'), 'utf8');
     for (const k of ENV.filter((e) => e.startsWith('MCP_CONFIRM_'))) expect(readme, k).toContain(`\`${k}\``);
+  });
+});
+
+describe('mint.yaml egress', () => {
+  it('allows the SharePoint tenant hosts teams_get_attachment downloads shared files from', () => {
+    const mint = readFileSync(join(root, 'mint.yaml'), 'utf8');
+    const allow = /^egress:\n(?:.*\n)*?\s+allow:\n((?:\s+- .*\n)+)/m.exec(mint)?.[1] ?? '';
+    expect(allow).toMatch(/- '\*\.sharepoint\.com'/);
   });
 });
