@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.1](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.6.0...v0.6.1) (2026-10-16)
+
+
+### Bug Fixes
+
+* **attachment:** allow SharePoint in hosted egress and name an egress refusal plainly ([#70](https://github.com/chrischall/microsoft-teams-mcp/issues/70)) ([e20f9ff](https://github.com/chrischall/microsoft-teams-mcp/commit/e20f9ffbf2b1174f106b14b3388cda0a1e0886bb))
+* **plugin:** launch the published package so marketplace installs start ([#72](https://github.com/chrischall/microsoft-teams-mcp/issues/72)) ([adb947c](https://github.com/chrischall/microsoft-teams-mcp/commit/adb947cf023fb1cae2e96c91cda35bc7b96b0ddc))
+
 ## [0.6.0](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.5.1...v0.6.0) (2026-10-14)
 
 
