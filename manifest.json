@@ -43,6 +43,8 @@
         "TEAMS_CAPTURE_TIMEOUT": "${user_config.capture_timeout}",
         "TEAMS_TOKEN_CACHE": "${user_config.token_cache}",
         "TEAMS_TOKEN_FILE": "${user_config.token_file}",
+        "TEAMS_SUBSTRATE_TOKEN_FILE": "${user_config.substrate_token_file}",
+        "TEAMS_SHAREPOINT_TOKEN_FILE": "${user_config.sharepoint_token_file}",
         "TEAMS_TIME_ZONE": "${user_config.time_zone}",
         "MCP_CONFIRM_MODE": "${user_config.confirm_mode}",
         "MCP_CONFIRM_ELICITATION": "${user_config.confirm_elicitation}",
@@ -111,6 +113,18 @@
       "type": "string",
       "title": "Token cache file (optional)",
       "description": "Optional. Where the captured token is cached. Defaults to ~/.microsoft-teams-mcp/token.json.",
+      "required": false
+    },
+    "substrate_token_file": {
+      "type": "string",
+      "title": "Search token cache file (optional)",
+      "description": "Optional. Where the captured Substrate (message search) token is cached. Defaults to ~/.microsoft-teams-mcp/substrate-token.json.",
+      "required": false
+    },
+    "sharepoint_token_file": {
+      "type": "string",
+      "title": "SharePoint token cache file (optional)",
+      "description": "Optional. Where the captured SharePoint tokens (one per host, for shared-file downloads) are cached. Defaults to ~/.microsoft-teams-mcp/sharepoint-tokens.json.",
       "required": false
     },
     "time_zone": {

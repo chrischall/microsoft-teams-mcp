@@ -87,3 +87,42 @@ describe('describeTransportFailure', () => {
     expect(describeTransportFailure(new TypeError('Invalid URL'), IMG, 'x')).toBeUndefined();
   });
 });
+
+describe('describeTransportFailure — an egress proxy that refused the tunnel', () => {
+  /** What Node's fetch throws when HTTPS_PROXY answers the CONNECT with a non-200 (captured on Node 26). */
+  function proxyRefused(status: number): TypeError {
+    const aborted = Object.assign(new Error(`Proxy response (${status}) !== 200 when HTTP Tunneling`), {
+      name: 'RequestAbortedError',
+      code: 'UND_ERR_ABORTED',
+    });
+    return fetchFailed(Object.assign(new Error('Request was cancelled.', { cause: aborted }), { code: 0 }));
+  }
+
+  const FILE = 'https://contoso.sharepoint.com/_api/v2.1/shares/u!abc/driveItem';
+
+  it('says the network policy refused the host, not "check DNS/VPN"', () => {
+    const err = describeTransportFailure(proxyRefused(403), FILE, 'SharePoint');
+    expect(err).toBeInstanceOf(McpToolError);
+    expect(err!.message).toContain('contoso.sharepoint.com');
+    expect(err!.message).not.toContain('/_api');
+    expect(err!.hint).toMatch(/egress/i);
+    expect(err!.hint).toMatch(/allow/i);
+    expect(err!.hint).not.toMatch(/VPN|DNS|nslookup|curl/);
+  });
+
+  it('treats Node http\'s ERR_PROXY_TUNNEL the same way', () => {
+    const err = describeTransportFailure(
+      fetchFailed(Object.assign(new Error('Failed to establish tunnel: proxy returned 403'), { code: 'ERR_PROXY_TUNNEL' })),
+      FILE,
+      'SharePoint',
+    );
+    expect(err!.hint).toMatch(/egress/i);
+    expect(err!.hint).not.toMatch(/VPN|DNS/);
+  });
+
+  it('a proxy that answered 502 (could not reach the host) is not called a policy refusal', () => {
+    const err = describeTransportFailure(proxyRefused(502), FILE, 'SharePoint');
+    expect(err!.hint).not.toMatch(/egress allow/i);
+    expect(err!.hint).toMatch(/proxy/i);
+  });
+});

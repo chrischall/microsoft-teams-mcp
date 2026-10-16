@@ -87,6 +87,20 @@
           "isSecret": false
         },
         {
+          "name": "TEAMS_SUBSTRATE_TOKEN_FILE",
+          "description": "Where the captured Substrate search token is cached. Defaults to ~/.microsoft-teams-mcp/substrate-token.json.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "TEAMS_SHAREPOINT_TOKEN_FILE",
+          "description": "Where the captured SharePoint tokens are cached. Defaults to ~/.microsoft-teams-mcp/sharepoint-tokens.json.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
           "name": "TEAMS_TIME_ZONE",
           "description": "Default IANA time zone (e.g. America/New_York) for time_local on read results. Unset means UTC only.",
           "isRequired": false,
