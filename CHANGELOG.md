@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.2](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.6.1...v0.6.2) (2026-10-17)
+
+
+### Refactor
+
+* **auth:** capture and cache browser tokens through mcp-utils 3.1 ([#74](https://github.com/chrischall/microsoft-teams-mcp/issues/74)) ([e7ce033](https://github.com/chrischall/microsoft-teams-mcp/commit/e7ce03392e2378a20c3c231fe1d9b62f335a816e))
+
 ## [0.6.1](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.6.0...v0.6.1) (2026-10-16)
 
 
