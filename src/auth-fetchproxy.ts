@@ -26,10 +26,12 @@
  * code that needs a token, as Outlook's client does, so a server run with
  * `TEAMS_ACCESS_TOKEN` never has to load the bridge to boot.
  */
-import { createBootstrapOpts, createFetchproxyTransport } from '@chrischall/mcp-utils/fetchproxy';
+import { captureBearerHeader, createFetchproxyTransport, type CaptureTransport } from '@chrischall/mcp-utils/fetchproxy';
 import { readPortEnv } from '@chrischall/mcp-utils';
-import { bridgeDeadlineMs, captureWindowMs } from './capture-window.js';
+import { captureWindowMs } from './capture-window.js';
 import { PACKAGE_NAME, VERSION } from './version.js';
+
+export { stripBearer } from '@chrischall/mcp-utils/fetchproxy';
 
 /**
  * fetchproxy concentrator port — one for the whole fleet. `TEAMS_WS_PORT`
@@ -68,80 +70,39 @@ export const CAPTURE_DECL = {
 export const TRUST_DOMAINS = [CAPTURE_DECL.host];
 
 /**
- * Shortest plausible token. Real ones are several KB of JWT; this only guards
- * against an empty or echoed header, not against a wrong-audience token.
+ * Build the capture transport through this module's import binding, so a
+ * test's `vi.mock('@chrischall/mcp-utils/fetchproxy')` stub is the one used.
+ * Shared by the SharePoint and Substrate captures.
  */
-const MIN_TOKEN_LENGTH = 100;
-
-/** Normalise a captured header to a bare token, dropping any `Bearer ` prefix. */
-export function stripBearer(raw: string): string {
-  const m = /^\s*Bearer\s+(.+)$/i.exec(raw);
-  return (m ? m[1] : raw).trim();
-}
+export const createCaptureTransport = (opts: Parameters<typeof createFetchproxyTransport>[0]): CaptureTransport =>
+  createFetchproxyTransport<CaptureTransport>(opts);
 
 /**
  * Capture a chat-service access token from the user's signed-in Teams tab.
  * Returns the bare token (no `Bearer ` prefix).
+ *
+ * `captureBearerHeader` declares only `capture_request_header` (beside the
+ * `fetch` base verb mcp-utils always keeps) — the same set as before the
+ * Activity feed left the page, so an existing pairing needs no re-approval —
+ * sets the bridge deadline to the capture window + 15 s, starts the transport
+ * (skipping `start()` makes the first verb throw "ensureConnected called before
+ * listen()", which reads exactly like a pairing problem), guards against a
+ * header too short to be a token, and closes the transport whatever happened.
  */
 export async function captureTokenViaFetchproxy(env: NodeJS.ProcessEnv = process.env): Promise<string> {
-  // Read per capture, not at import: see `capture-window.ts`.
-  const windowMs = captureWindowMs(env);
-  const transport = createFetchproxyTransport({
-    // `createBootstrapOpts` derives the capability set from the declarations:
-    // `capture_request_header`, the only verb this MCP uses, beside the `fetch`
-    // base verb mcp-utils always keeps (the field replaces the server default).
-    // This is the same set as before the Activity feed left the page, so an
-    // existing pairing needs no re-approval.
-    ...createBootstrapOpts({
-      domains: [...TRUST_DOMAINS],
-      bootstrap: { captureHeaders: [{ ...CAPTURE_DECL }] },
-    }),
+  return captureBearerHeader({
+    captures: [CAPTURE_DECL],
+    domains: TRUST_DOMAINS,
+    // Read per capture, not at import: see `capture-window.ts`.
+    windowMs: captureWindowMs(env),
     port: getWsPort(),
-    // Both: the explicit deadline for every bridge version, and the declared
-    // window so mcp-utils' own derivation agrees with it.
-    fetchTimeoutMs: bridgeDeadlineMs(windowMs),
-    captureWindowMs: windowMs,
     serverName: PACKAGE_NAME,
     version: VERSION,
+    what: 'a Teams token',
+    guidance:
+      'Open a signed-in teams.cloud.microsoft tab and click into any chat — ' +
+      'that is what makes the page call the chat service; an idle tab never ' +
+      'does — then retry.',
+    createTransport: createCaptureTransport,
   });
-
-  try {
-    // `start()` loads the identity keypair. It does not bind the port or dial —
-    // that stays lazy until the first verb — but skipping it makes the first
-    // verb throw "ensureConnected called before listen()", which reads exactly
-    // like a pairing problem and is not one.
-    await transport.start();
-
-    try {
-      const raw = await transport.server.captureRequestHeader({
-        ...CAPTURE_DECL,
-        timeoutMs: windowMs,
-      });
-      if (typeof raw !== 'string') {
-        throw new Error(`${CAPTURE_DECL.host}: capture returned no header`);
-      }
-      const token = stripBearer(raw);
-      if (token.length < MIN_TOKEN_LENGTH) {
-        throw new Error(
-          `${CAPTURE_DECL.host}: authorization header was present but too short to be a ` +
-            `token (${token.length} chars)`,
-        );
-      }
-      return token;
-    } catch (e) {
-      const detail = (e as Error).message;
-      throw new Error(
-        `could not capture a Teams token from the browser (${detail}). ` +
-          'Open a signed-in teams.cloud.microsoft tab and click into any chat — ' +
-          'that is what makes the page call the chat service; an idle tab never ' +
-          'does — then retry.',
-      );
-    }
-  } finally {
-    try {
-      await transport.close();
-    } catch {
-      /* the token, or the original failure, is what matters */
-    }
-  }
 }

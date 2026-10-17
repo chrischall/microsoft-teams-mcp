@@ -22,9 +22,9 @@
  * As with `chatsvc.ts`, once a token is held every request is a plain Node
  * `fetch` — the bridge is only ever touched to capture the token.
  */
-import { decodeJwtExp, fetchBounded, McpToolError, parseBoolEnv } from '@chrischall/mcp-utils';
+import { fetchBounded, McpToolError, parseBoolEnv } from '@chrischall/mcp-utils';
 import { describeTransportFailure } from './network-error.js';
-import { TokenManager, type BearerTokens } from '@chrischall/mcp-utils/session';
+import { createCapturedTokenManager, type TokenManager } from '@chrischall/mcp-utils/session';
 import { createSharePointTokenCache, type SharePointTokenCache } from './sharepoint-token-cache.js';
 
 /**
@@ -41,21 +41,6 @@ async function captureSharePointTokenLazily(host: string): Promise<string> {
   return mod.captureSharePointTokenViaFetchproxy(host);
 }
 
-/**
- * Fallback lifetime for a token whose `exp` we cannot read. Real SP tokens are
- * JWTs carrying `exp` (~53 min out), so this is only reached for a malformed
- * capture; deliberately short — being wrong here costs one extra 401-and-replay.
- */
-const UNKNOWN_TOKEN_TTL_MS = 10 * 60 * 1000;
-
-/**
- * Sentinel standing in for a refresh token this flow does not have. The token
- * comes from the browser; "refreshing" means capturing a new one. `TokenManager`
- * only calls `refresh` when a refresh token is present, hence the sentinel.
- * (Copied from `chatsvc.ts`, where it is module-private.)
- */
-const RECAPTURE_SENTINEL = 'fetchproxy:recapture';
-
 /** Per-request deadline, covering the body read. */
 const REQUEST_TIMEOUT_MS = 60_000;
 
@@ -66,18 +51,6 @@ async function reachable<T>(url: string, run: () => Promise<T>): Promise<T> {
   } catch (e) {
     throw describeTransportFailure(e, url, 'SharePoint') ?? e;
   }
-}
-
-/** Copied faithfully from `chatsvc.ts`: a captured token as `TokenManager` input. */
-function toBearerTokens(accessToken: string): BearerTokens {
-  let expiresAt: number;
-  try {
-    // decodeJwtExp returns seconds; a non-JWT throws.
-    expiresAt = decodeJwtExp(accessToken) * 1000;
-  } catch {
-    expiresAt = Date.now() + UNKNOWN_TOKEN_TTL_MS;
-  }
-  return { accessToken, refreshToken: RECAPTURE_SENTINEL, expiresAt };
 }
 
 /** The subset of the driveItem response the download needs. */
@@ -219,12 +192,11 @@ export class SharePointClient {
     // The per-host cache view already swallows-and-reports its own write
     // failures (see `sharepoint-token-cache.ts`), so it is passed straight
     // through — no inline wrapping as chatsvc needs for its raw persistence.
-    const persistence = this.#cache?.forHost(host);
-    const mgr = new TokenManager({
-      initial: async () => toBearerTokens(await this.#capture(host)),
-      // No refresh grant — re-capture instead.
-      refresh: async () => toBearerTokens(await this.#capture(host)),
-      ...(persistence ? { persistence } : {}),
+    // Captured on first use, re-captured on a 401 (no refresh grant), expiring
+    // at the JWT's `exp`.
+    const mgr = createCapturedTokenManager({
+      capture: () => this.#capture(host),
+      persistence: this.#cache?.forHost(host) ?? null,
     });
     this.#managers.set(host, mgr);
     return mgr;

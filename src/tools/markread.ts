@@ -25,8 +25,9 @@ import {
   McpToolError,
   toolAnnotations,
   WriteOutcomeUnknownError,
+  writeOutcomeStatus,
 } from '@chrischall/mcp-utils';
-import { outcomeUnknownStatus, type ChatServiceClient, type RawConversation, type RawMessage } from '../chatsvc.js';
+import { type ChatServiceClient, type RawConversation, type RawMessage } from '../chatsvc.js';
 import { clipText } from '../compose.js';
 import type { TeamsDeps } from '../deps.js';
 import { htmlToText, isUnread, readHorizon, SELF_CHAT, senderMri, type ConversationSummary } from '../model.js';
@@ -171,7 +172,7 @@ export interface MarkOutcome {
 
 /** Why a write went unconfirmed, for a warning. */
 function unconfirmedWhy(e: WriteOutcomeUnknownError): string {
-  const status = outcomeUnknownStatus(e);
+  const status = writeOutcomeStatus(e);
   return e.timedOut ? 'it did not answer in time' : status !== undefined ? `it answered HTTP ${status}` : 'the connection dropped';
 }
 

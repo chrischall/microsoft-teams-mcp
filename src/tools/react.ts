@@ -28,8 +28,9 @@ import {
   McpToolError,
   toolAnnotations,
   WriteOutcomeUnknownError,
+  writeOutcomeStatus,
 } from '@chrischall/mcp-utils';
-import { outcomeUnknownStatus, type ChatServiceClient } from '../chatsvc.js';
+import { type ChatServiceClient } from '../chatsvc.js';
 import { clipText } from '../compose.js';
 import type { TeamsDeps } from '../deps.js';
 import { htmlToText, normaliseMessage, senderMri } from '../model.js';
@@ -219,7 +220,7 @@ export function registerReactTools(server: McpServer, { chatsvc }: Pick<TeamsDep
         const shown = remove ? 'gone' : 'present';
 
         if (unconfirmed !== undefined && verified !== true) {
-          const status = outcomeUnknownStatus(unconfirmed);
+          const status = writeOutcomeStatus(unconfirmed);
           const why = unconfirmed.timedOut
             ? 'it did not answer in time'
             : status !== undefined

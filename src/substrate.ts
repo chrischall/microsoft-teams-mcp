@@ -50,9 +50,9 @@
  * As with the other clients, the bridge is touched only to capture the token
  * (`substrate-auth.ts`); every request is a plain Node `fetch`.
  */
-import { decodeJwtExp, fetchBounded, McpToolError, parseBoolEnv } from '@chrischall/mcp-utils';
+import { fetchBounded, McpToolError, parseBoolEnv } from '@chrischall/mcp-utils';
 import { describeTransportFailure } from './network-error.js';
-import { TokenManager, type BearerTokens } from '@chrischall/mcp-utils/session';
+import { createCapturedTokenManager, type TokenManager } from '@chrischall/mcp-utils/session';
 import { createSubstrateTokenCache } from './substrate-token-cache.js';
 
 export const SUBSTRATE_QUERY_URL = 'https://substrate.office.com/searchservice/api/v2/query';
@@ -65,27 +65,11 @@ export const SUBSTRATE_QUERY_URL = 'https://substrate.office.com/searchservice/a
  */
 export const CAPTURE_RETRY_COOLDOWN_MS = 10 * 60 * 1000;
 
-/** Fallback lifetime for a token whose `exp` we cannot read (as in `sharepoint.ts`). */
-const UNKNOWN_TOKEN_TTL_MS = 10 * 60 * 1000;
-
-/** Stands in for a refresh token this flow does not have (see `sharepoint.ts`). */
-const RECAPTURE_SENTINEL = 'fetchproxy:recapture';
-
 /** Per-request deadline, covering the body read. */
 const REQUEST_TIMEOUT_MS = 30_000;
 
 /** A search response is a page of summaries; anything near this is not one. */
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
-
-function toBearerTokens(accessToken: string): BearerTokens {
-  let expiresAt: number;
-  try {
-    expiresAt = decodeJwtExp(accessToken) * 1000;
-  } catch {
-    expiresAt = Date.now() + UNKNOWN_TOKEN_TTL_MS;
-  }
-  return { accessToken, refreshToken: RECAPTURE_SENTINEL, expiresAt };
-}
 
 /** Capture lazily, so boot never loads the bridge (see `sharepoint.ts`). */
 async function captureSubstrateTokenLazily(): Promise<string> {
@@ -291,21 +275,19 @@ export class SubstrateClient implements SubstrateSearch {
     // A receiver-safe wrapper, never the bare global (see `sharepoint.ts`).
     this.#fetchImpl = opts.fetchImpl ?? ((input, init) => fetch(input, init));
 
-    const recapture = async (): Promise<BearerTokens> => {
+    const recapture = async (): Promise<string> => {
       try {
-        const tokens = toBearerTokens(await capture());
+        const token = await capture();
         this.#captureFailure = null;
-        return tokens;
+        return token;
       } catch (error) {
         this.#captureFailure = { at: Date.now(), error };
         throw error;
       }
     };
-    const persistence = createSubstrateTokenCache(env);
-    this.#manager = new TokenManager({
-      initial: recapture,
-      refresh: recapture,
-      ...(persistence ? { persistence } : {}),
+    this.#manager = createCapturedTokenManager({
+      capture: recapture,
+      persistence: createSubstrateTokenCache(env),
     });
 
     // Like SharePoint, there is no direct-token env var: the bridge is the only source.

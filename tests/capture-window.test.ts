@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-const { bridgeDeadlineMs, captureWindowMs, DEFAULT_CAPTURE_WINDOW_MS } = await import('../src/capture-window.js');
+const { captureWindowMs, DEFAULT_CAPTURE_WINDOW_MS } = await import('../src/capture-window.js');
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -27,10 +27,3 @@ describe('captureWindowMs', () => {
   });
 });
 
-describe('bridgeDeadlineMs', () => {
-  it('outlasts the capture window by 15s, and is never under the library 30s', () => {
-    expect(bridgeDeadlineMs(30_000)).toBe(45_000);
-    expect(bridgeDeadlineMs(120_000)).toBe(135_000);
-    expect(bridgeDeadlineMs(1_000)).toBe(30_000);
-  });
-});

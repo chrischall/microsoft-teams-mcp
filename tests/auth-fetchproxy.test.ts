@@ -100,6 +100,15 @@ describe('captureTokenViaFetchproxy', () => {
     expect(opts.captureWindowMs).toBe(120_000);
   });
 
+  it('never sets the bridge deadline under the library 30s, however short the window', async () => {
+    captureRequestHeader.mockResolvedValue(FAKE_TOKEN);
+    await captureTokenViaFetchproxy({ TEAMS_CAPTURE_TIMEOUT: '1' });
+
+    const opts = createFetchproxyTransport.mock.calls[0][0] as { fetchTimeoutMs: number; captureWindowMs: number };
+    expect(opts.fetchTimeoutMs).toBe(30_000);
+    expect(opts.captureWindowMs).toBe(1_000);
+  });
+
   it('reads TEAMS_CAPTURE_TIMEOUT from process.env when the capture runs, not at import', async () => {
     captureRequestHeader.mockResolvedValue(FAKE_TOKEN);
     vi.stubEnv('TEAMS_CAPTURE_TIMEOUT', '60');

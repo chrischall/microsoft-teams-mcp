@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { McpToolError, RequestTimeoutError, WriteOutcomeUnknownError } from '@chrischall/mcp-utils';
-import { ChatServiceClient, DEFAULT_REGION, chatServiceBase, outcomeUnknownStatus } from '../src/chatsvc.js';
+import { McpToolError, RequestTimeoutError, WriteOutcomeUnknownError, writeOutcomeStatus } from '@chrischall/mcp-utils';
+import { ChatServiceClient, DEFAULT_REGION, chatServiceBase } from '../src/chatsvc.js';
 
 /** A hand-written fixture from `tests/fixtures/` — invented names and text only. */
 function fixture(name: string): unknown {
@@ -632,7 +632,7 @@ describe('sendMessage', () => {
     expect(err).toBeInstanceOf(WriteOutcomeUnknownError);
     const e = err as WriteOutcomeUnknownError;
     expect(e).toMatchObject({ outcomeUnknown: true, timedOut: false, method: 'POST' });
-    expect(outcomeUnknownStatus(e)).toBe(status);
+    expect(writeOutcomeStatus(e)).toBe(status);
     expect(e.hint).toMatch(/check the conversation/i);
     // Exactly one POST: a 5xx is never replayed.
     expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -653,7 +653,7 @@ describe('sendMessage', () => {
     const err = await client(fetchImpl)
       .sendMessage('c', BODY)
       .catch((e: unknown) => e);
-    expect(outcomeUnknownStatus(err as WriteOutcomeUnknownError)).toBeUndefined();
+    expect(writeOutcomeStatus(err as WriteOutcomeUnknownError)).toBeUndefined();
   });
 });
 
@@ -695,7 +695,7 @@ describe('setReaction / removeReaction', () => {
     const err = await call(client(fetchImpl)).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(WriteOutcomeUnknownError);
     expect(err).toMatchObject({ method });
-    expect(outcomeUnknownStatus(err as WriteOutcomeUnknownError)).toBe(503);
+    expect(writeOutcomeStatus(err as WriteOutcomeUnknownError)).toBe(503);
     expect((err as WriteOutcomeUnknownError).hint).toMatch(/check the message/i);
   });
 
@@ -744,7 +744,7 @@ describe('setConsumptionHorizon', () => {
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(WriteOutcomeUnknownError);
     expect(err).toMatchObject({ method: 'PUT' });
-    expect(outcomeUnknownStatus(err as WriteOutcomeUnknownError)).toBe(502);
+    expect(writeOutcomeStatus(err as WriteOutcomeUnknownError)).toBe(502);
     expect((err as WriteOutcomeUnknownError).hint).toMatch(/read marker/i);
   });
 
