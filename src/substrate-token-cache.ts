@@ -1,5 +1,6 @@
 import {
   createFileStatePersistence,
+  isBearerTokens,
   resolveStateFile,
   type BearerTokens,
   type SyncStatePersistence,
@@ -23,18 +24,6 @@ export function substrateTokenCachePath(env: NodeJS.ProcessEnv = process.env): s
   });
 }
 
-/** Same `BearerTokens` guard as the other caches; copied, as it is module-private there. */
-function isToken(raw: unknown): raw is BearerTokens {
-  if (raw === null || typeof raw !== 'object') return false;
-  const t = raw as Partial<BearerTokens>;
-  return (
-    typeof t.accessToken === 'string' &&
-    t.accessToken !== '' &&
-    typeof t.expiresAt === 'number' &&
-    (t.refreshToken === undefined || typeof t.refreshToken === 'string')
-  );
-}
-
 /**
  * The Substrate token cache, or `null` when it is off or there is nothing to
  * cache. Gated like the SharePoint cache: `TEAMS_TOKEN_CACHE` (default on), and
@@ -50,7 +39,7 @@ export function createSubstrateTokenCache(
   const file = createFileStatePersistence<BearerTokens>({
     filePath: substrateTokenCachePath(env),
     boundTo: 'fetchproxy',
-    validate: (raw) => (isToken(raw) ? raw : null),
+    validate: (raw) => (isBearerTokens(raw) ? raw : null),
   });
   return {
     load: () => file.load(),

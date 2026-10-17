@@ -38,9 +38,9 @@
  * code that needs a token, as `auth-fetchproxy.ts` is, so a server run with
  * `TEAMS_DISABLE_FETCHPROXY` never has to load the bridge to boot.
  */
-import { createBootstrapOpts, createFetchproxyTransport } from '@chrischall/mcp-utils/fetchproxy';
-import { bridgeDeadlineMs, captureWindowMs } from './capture-window.js';
-import { getWsPort, stripBearer } from './auth-fetchproxy.js';
+import { captureBearerHeader } from '@chrischall/mcp-utils/fetchproxy';
+import { captureWindowMs } from './capture-window.js';
+import { createCaptureTransport, getWsPort } from './auth-fetchproxy.js';
 import { PACKAGE_NAME, VERSION } from './version.js';
 
 /**
@@ -86,12 +86,6 @@ export function captureHostFor(fileHost: string): string {
 }
 
 /**
- * Shortest plausible token. Real ones are several KB of JWT; this only guards
- * against an empty or echoed header, not against a wrong-audience token.
- */
-const MIN_TOKEN_LENGTH = 100;
-
-/**
  * Capture a SharePoint access token for `host` from the user's signed-in Teams
  * tab. Returns the bare token (no `Bearer ` prefix).
  *
@@ -109,68 +103,25 @@ export async function captureSharePointTokenViaFetchproxy(
     );
   }
 
-  // The one request we capture from: any call the browser makes to this
-  // OneDrive host (the caller resolves it from the file's host via
-  // `captureHostFor`). A concrete host, never a wildcard — see the module note.
-  const captureDecl = { host, path: '/*', headerName: 'authorization' } as const;
-
-  // Read per capture, not at import: see `capture-window.ts`.
-  const windowMs = captureWindowMs(env);
-  const transport = createFetchproxyTransport({
-    // `createBootstrapOpts` derives the capability set from the declarations:
-    // `capture_request_header` beside mcp-utils' always-on `fetch` base verb.
-    // Same verb set as the chatsvc capture, so an existing pairing that already
-    // trusts `sharepoint.com` needs no re-approval.
-    ...createBootstrapOpts({
-      domains: [...SHAREPOINT_TRUST_DOMAINS],
-      bootstrap: { captureHeaders: [{ ...captureDecl }] },
-    }),
+  return captureBearerHeader({
+    // The one request we capture from: any call the browser makes to this
+    // OneDrive host (the caller resolves it from the file's host via
+    // `captureHostFor`). A concrete host, never a wildcard — see the module note.
+    captures: [{ host, path: '/*', headerName: 'authorization' }],
+    // The broad family domain as the trust scope. Same verb set as the chatsvc
+    // capture, so an existing pairing that already trusts `sharepoint.com`
+    // needs no re-approval.
+    domains: SHAREPOINT_TRUST_DOMAINS,
+    // Read per capture, not at import: see `capture-window.ts`.
+    windowMs: captureWindowMs(env),
     port: getWsPort(),
-    // Both: the explicit deadline for every bridge version, and the declared
-    // window so mcp-utils' own derivation agrees with it.
-    fetchTimeoutMs: bridgeDeadlineMs(windowMs),
-    captureWindowMs: windowMs,
     serverName: PACKAGE_NAME,
     version: VERSION,
+    what: `a SharePoint token for ${host}`,
+    guidance:
+      `Click around Teams or open one of your own OneDrive files — that makes the ` +
+      `browser request ${host}, which is where the SharePoint token is captured ` +
+      'from — then retry.',
+    createTransport: createCaptureTransport,
   });
-
-  try {
-    // `start()` loads the identity keypair. It does not bind the port or dial —
-    // that stays lazy until the first verb — but skipping it makes the first
-    // verb throw "ensureConnected called before listen()", which reads exactly
-    // like a pairing problem and is not one.
-    await transport.start();
-
-    try {
-      const raw = await transport.server.captureRequestHeader({
-        ...captureDecl,
-        timeoutMs: windowMs,
-      });
-      if (typeof raw !== 'string') {
-        throw new Error(`${host}: capture returned no header`);
-      }
-      const token = stripBearer(raw);
-      if (token.length < MIN_TOKEN_LENGTH) {
-        throw new Error(
-          `${host}: authorization header was present but too short to be a ` +
-            `token (${token.length} chars)`,
-        );
-      }
-      return token;
-    } catch (e) {
-      const detail = (e as Error).message;
-      throw new Error(
-        `could not capture a SharePoint token for ${host} (${detail}). ` +
-          `Click around Teams or open one of your own OneDrive files — that makes the ` +
-          `browser request ${host}, which is where the SharePoint token is captured ` +
-          'from — then retry.',
-      );
-    }
-  } finally {
-    try {
-      await transport.close();
-    } catch {
-      /* the token, or the original failure, is what matters */
-    }
-  }
 }

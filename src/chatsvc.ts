@@ -21,7 +21,6 @@
  */
 import {
   decodeJwtClaim,
-  decodeJwtExp,
   fetchBounded,
   errorKindOf,
   McpToolError,
@@ -30,7 +29,7 @@ import {
   RequestTimeoutError,
   WriteOutcomeUnknownError,
 } from '@chrischall/mcp-utils';
-import { TokenManager, type BearerTokens } from '@chrischall/mcp-utils/session';
+import { createCapturedTokenManager, type TokenManager } from '@chrischall/mcp-utils/session';
 import { createTokenCache, reportCacheWriteFailure } from './token-cache.js';
 import { SELF_CHAT } from './model.js';
 import { describeTransportFailure } from './network-error.js';
@@ -62,24 +61,6 @@ export function chatServiceBase(env: NodeJS.ProcessEnv = process.env): string {
   const region = readEnvVar('TEAMS_CHATSVC_REGION', { env }) ?? DEFAULT_REGION;
   return `https://teams.cloud.microsoft/api/chatsvc/${encodeURIComponent(region)}/v1`;
 }
-
-/**
- * Fallback lifetime for a token whose `exp` we cannot read.
- *
- * Real tokens are JWTs carrying `exp` (~23.5h out), so this is only reached
- * for a hand-supplied opaque `TEAMS_ACCESS_TOKEN`. Deliberately short: being
- * wrong in this direction costs one extra 401-and-replay.
- */
-const UNKNOWN_TOKEN_TTL_MS = 10 * 60 * 1000;
-
-/**
- * Sentinel standing in for a refresh token this flow does not have.
- *
- * The token comes from MSAL's hidden-iframe flow; there is no refresh grant we
- * can drive, so "refreshing" means capturing a new one. `TokenManager` only
- * calls `refresh` when a refresh token is present, hence the sentinel.
- */
-const RECAPTURE_SENTINEL = 'fetchproxy:recapture';
 
 /** Per-request deadline, covering the body read. */
 const REQUEST_TIMEOUT_MS = 60_000;
@@ -145,27 +126,6 @@ const REACTION_OUTCOME_HINT =
 const HORIZON_OUTCOME_HINT =
   'The read marker may already have moved — check the conversation (teams_read_conversation) before retrying; ' +
   'moving it again to the same message is harmless.';
-
-/**
- * The HTTP status behind a {@link WriteOutcomeUnknownError} that Teams
- * answered with a 5xx, or `undefined` when it timed out or the connection
- * dropped instead.
- */
-export function outcomeUnknownStatus(e: WriteOutcomeUnknownError): number | undefined {
-  const status = (e.cause as { status?: unknown } | undefined)?.status;
-  return typeof status === 'number' ? status : undefined;
-}
-
-function toBearerTokens(accessToken: string): BearerTokens {
-  let expiresAt: number;
-  try {
-    // decodeJwtExp returns seconds; a non-JWT throws.
-    expiresAt = decodeJwtExp(accessToken) * 1000;
-  } catch {
-    expiresAt = Date.now() + UNKNOWN_TOKEN_TTL_MS;
-  }
-  return { accessToken, refreshToken: RECAPTURE_SENTINEL, expiresAt };
-}
 
 /** The last message a conversation listing carries. Every field is a string from the wire. */
 export interface RawLastMessage {
@@ -603,44 +563,18 @@ export class ChatServiceClient {
   }
 
   #tokenManager(): TokenManager {
-    if (this.#tokens) return this.#tokens;
-
-    const direct = this.#direct;
-    const persistence = direct === undefined ? createTokenCache(this.#env) : null;
-    const mint = async (): Promise<BearerTokens> => toBearerTokens(direct ?? (await this.#capture()));
-
-    this.#tokens = new TokenManager({
-      initial: mint,
-      // There is no refresh grant — re-capture instead. But a token supplied as
-      // TEAMS_ACCESS_TOKEN must NOT be "refreshed" from the browser: that would
-      // silently swap the operator's chosen credential for whichever account a
-      // tab is signed into.
-      refresh: async () => {
-        if (direct !== undefined) throw this.#directRejected();
-        return toBearerTokens(await this.#capture());
-      },
-      // A failed cache write must not fail the call that triggered it.
-      ...(persistence
-        ? {
-            persistence: {
-              load: () => persistence.load(),
-              save: (t: BearerTokens) => {
-                try {
-                  persistence.save(t);
-                } catch (e) {
-                  reportCacheWriteFailure(e);
-                }
-              },
-              clear: () => {
-                try {
-                  persistence.clear();
-                } catch {
-                  /* nothing useful to do; the next capture overwrites it */
-                }
-              },
-            },
-          }
-        : {}),
+    // Captures on first use (or loads a still-valid cached capture), re-captures
+    // on a 401 or inside the skew window, and expires a JWT at its `exp` (an
+    // opaque token after 10 minutes). A token supplied as TEAMS_ACCESS_TOKEN is
+    // never cached and never "refreshed" from the browser: that would silently
+    // swap the operator's chosen credential for whichever account a tab is
+    // signed into. A failed cache write is reported, never fatal.
+    this.#tokens ??= createCapturedTokenManager({
+      capture: () => this.#capture(),
+      direct: this.#direct,
+      onDirectRejected: () => this.#directRejected(),
+      persistence: this.#direct === undefined ? createTokenCache(this.#env) : null,
+      onPersistError: reportCacheWriteFailure,
     });
     return this.#tokens;
   }

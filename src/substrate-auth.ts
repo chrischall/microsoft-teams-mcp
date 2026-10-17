@@ -28,9 +28,9 @@
  * `sharepoint-auth.ts` is, so a server run with `TEAMS_DISABLE_FETCHPROXY`
  * never has to load the bridge to boot.
  */
-import { createBootstrapOpts, createFetchproxyTransport } from '@chrischall/mcp-utils/fetchproxy';
-import { bridgeDeadlineMs, captureWindowMs } from './capture-window.js';
-import { getWsPort, stripBearer } from './auth-fetchproxy.js';
+import { captureBearerHeader } from '@chrischall/mcp-utils/fetchproxy';
+import { captureWindowMs } from './capture-window.js';
+import { createCaptureTransport, getWsPort } from './auth-fetchproxy.js';
 import { PACKAGE_NAME, VERSION } from './version.js';
 
 /** The one request we capture from: a search-service call the Teams tab makes. */
@@ -49,63 +49,27 @@ export const SUBSTRATE_CAPTURE_DECL = {
  */
 export const SUBSTRATE_TRUST_DOMAINS = [SUBSTRATE_CAPTURE_DECL.host] as const;
 
-/** Shortest plausible token; guards against an empty or echoed header only. */
-const MIN_TOKEN_LENGTH = 100;
-
 /**
  * Capture a Substrate search token from the user's signed-in Teams tab.
  * Returns the bare token (no `Bearer ` prefix).
  */
 export async function captureSubstrateTokenViaFetchproxy(env: NodeJS.ProcessEnv = process.env): Promise<string> {
-  // Read per capture, not at import: see `capture-window.ts`.
-  const windowMs = captureWindowMs(env);
-  const transport = createFetchproxyTransport({
+  return captureBearerHeader({
     // Same verb set as the other two captures (`capture_request_header` beside
     // the always-on `fetch`); only the trusted domain differs.
-    ...createBootstrapOpts({
-      domains: [...SUBSTRATE_TRUST_DOMAINS],
-      bootstrap: { captureHeaders: [{ ...SUBSTRATE_CAPTURE_DECL }] },
-    }),
+    captures: [SUBSTRATE_CAPTURE_DECL],
+    domains: SUBSTRATE_TRUST_DOMAINS,
+    // Read per capture, not at import: see `capture-window.ts`.
+    windowMs: captureWindowMs(env),
     port: getWsPort(),
-    fetchTimeoutMs: bridgeDeadlineMs(windowMs),
-    captureWindowMs: windowMs,
     serverName: PACKAGE_NAME,
     version: VERSION,
+    what: 'a Substrate search token',
+    guidance:
+      'In a signed-in teams.cloud.microsoft tab, type anything into the search box at the top ' +
+      'and press Enter — that is what makes Teams call substrate.office.com, where the token ' +
+      'is read from — then retry. A "not in declared set" error means the ContextMint Bridge ' +
+      'pairing does not trust substrate.office.com yet: re-pair microsoft-teams-mcp once.',
+    createTransport: createCaptureTransport,
   });
-
-  try {
-    // Loads the identity keypair; skipping it makes the first verb throw
-    // "ensureConnected called before listen()" (see `auth-fetchproxy.ts`).
-    await transport.start();
-
-    try {
-      const raw = await transport.server.captureRequestHeader({ ...SUBSTRATE_CAPTURE_DECL, timeoutMs: windowMs });
-      if (typeof raw !== 'string') {
-        throw new Error(`${SUBSTRATE_CAPTURE_DECL.host}: capture returned no header`);
-      }
-      const token = stripBearer(raw);
-      if (token.length < MIN_TOKEN_LENGTH) {
-        throw new Error(
-          `${SUBSTRATE_CAPTURE_DECL.host}: authorization header was present but too short to be a ` +
-            `token (${token.length} chars)`,
-        );
-      }
-      return token;
-    } catch (e) {
-      const detail = (e as Error).message;
-      throw new Error(
-        `could not capture a Substrate search token from the browser (${detail}). ` +
-          'In a signed-in teams.cloud.microsoft tab, type anything into the search box at the top ' +
-          'and press Enter — that is what makes Teams call substrate.office.com, where the token ' +
-          'is read from — then retry. A "not in declared set" error means the ContextMint Bridge ' +
-          'pairing does not trust substrate.office.com yet: re-pair microsoft-teams-mcp once.',
-      );
-    }
-  } finally {
-    try {
-      await transport.close();
-    } catch {
-      /* the token, or the original failure, is what matters */
-    }
-  }
 }

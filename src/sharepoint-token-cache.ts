@@ -1,5 +1,6 @@
 import {
   createFileStatePersistence,
+  isBearerTokens,
   resolveStateFile,
   type BearerTokens,
   type SyncStatePersistence,
@@ -25,18 +26,6 @@ export function sharePointTokenCachePath(env: NodeJS.ProcessEnv = process.env): 
   });
 }
 
-/** Same `BearerTokens` guard as the chatsvc cache; copied, as it is module-private there. */
-function isToken(raw: unknown): raw is BearerTokens {
-  if (raw === null || typeof raw !== 'object') return false;
-  const t = raw as Partial<BearerTokens>;
-  return (
-    typeof t.accessToken === 'string' &&
-    t.accessToken !== '' &&
-    typeof t.expiresAt === 'number' &&
-    (t.refreshToken === undefined || typeof t.refreshToken === 'string')
-  );
-}
-
 type HostTokenMap = Record<string, BearerTokens>;
 
 /**
@@ -51,7 +40,7 @@ function validateMap(raw: unknown): HostTokenMap | null {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const out: HostTokenMap = {};
   for (const [host, value] of Object.entries(raw as Record<string, unknown>)) {
-    if (isToken(value)) out[host] = value;
+    if (isBearerTokens(value)) out[host] = value;
   }
   return out;
 }

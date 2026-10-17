@@ -20,9 +20,11 @@ import {
   confirmWrite,
   McpToolError,
   toolAnnotations,
-  WriteOutcomeUnknownError,
+  unknownOutcomeReason,
+  writeOrUnknown,
+  type WriteOutcomeUnknownError,
 } from '@chrischall/mcp-utils';
-import { outcomeUnknownStatus, type ChatServiceClient } from '../chatsvc.js';
+import type { ChatServiceClient } from '../chatsvc.js';
 import type { TeamsDeps } from '../deps.js';
 import {
   buildSendBody,
@@ -199,34 +201,18 @@ async function threadRoot(chatsvc: ChatServiceClient, channelId: string, id: str
 /**
  * A send that may or may not have landed becomes a `status: "unknown"`
  * result, never an error: an error invites a fresh preview and a second post.
- * Any other failure is a real failure and still throws.
+ * Any other failure is a real failure and still throws (`writeOrUnknown`).
  */
-async function writeOrUnknown<T>(
-  run: () => Promise<T>,
-  conversation: Target,
-): Promise<{ ok: true; value: T } | { ok: false; result: ReturnType<typeof untrustedResult> }> {
-  try {
-    return { ok: true, value: await run() };
-  } catch (e) {
-    if (!(e instanceof WriteOutcomeUnknownError)) throw e;
-    const status = outcomeUnknownStatus(e);
-    const why = e.timedOut
-      ? 'it did not answer in time'
-      : status !== undefined
-        ? `it answered HTTP ${status} after the post was sent`
-        : 'the connection dropped';
-    return {
-      ok: false,
-      result: untrustedResult({
-        status: 'unknown',
-        conversation,
-        warning:
-          `Teams did not confirm this post (${why}), ` +
-          'so it may already be in the conversation. Check the conversation before retrying ' +
-          '(teams_read_conversation); do not resend blindly.',
-      }),
-    };
-  }
+function unconfirmedPost(conversation: Target) {
+  return (e: WriteOutcomeUnknownError) =>
+    untrustedResult({
+      status: 'unknown',
+      conversation,
+      warning:
+        `Teams did not confirm this post (${unknownOutcomeReason(e, { sent: 'the post' })}), ` +
+        'so it may already be in the conversation. Check the conversation before retrying ' +
+        '(teams_read_conversation); do not resend blindly.',
+    });
 }
 
 export function registerSendTools(server: McpServer, { chatsvc }: Pick<TeamsDeps, 'chatsvc'>): void {
@@ -356,7 +342,7 @@ export function registerSendTools(server: McpServer, { chatsvc }: Pick<TeamsDeps
           now: new Date(),
           ...properties,
         });
-        const sent = await writeOrUnknown(() => chatsvc.sendMessage(postTo, body), target);
+        const sent = await writeOrUnknown(() => chatsvc.sendMessage(postTo, body), unconfirmedPost(target));
         if (!sent.ok) return sent.result;
 
         // Read back: a channel lists its thread replies, so read the channel itself.
