@@ -111,3 +111,16 @@ egress:
     - us-prod.asyncgw.teams.microsoft.com
     - substrate.office.com
     - '*.sharepoint.com'
+# Sample prompts for the public catalog — each is answered by the read tools
+# alone (teams_get_unread, teams_search_messages, teams_get_activity), and none
+# marks anything read.
+examples:
+  - prompt: >-
+      Catch me up on my unread Teams messages and tell me which ones need a
+      reply from me.
+    note: Reads unread chats and channels; nothing is marked read.
+  - prompt: >-
+      Search my Teams chats from the last two weeks for messages about the
+      quarterly budget review.
+    note: Uses the same search the Teams search box does.
+  - prompt: What mentions and replies have I had in my Teams Activity feed today?
