@@ -19,7 +19,7 @@ import {
 } from './confirm.js';
 import { wrapApiError } from './errors.js';
 import { searchRecentMessages, type MessageHit } from './chat-search.js';
-import { enrichTitles } from './titles.js';
+import { enrichTitles, participantsOf } from './titles.js';
 import {
   conversationSummary,
   matchConversations,
@@ -213,7 +213,7 @@ export async function listSummaries(chatsvc: ChatServiceClient, filter: ListFilt
   const errors = (titled: readonly ConversationSummary[]): Listing['errors'] =>
     outcome.failed.length > 0
       ? outcome.failed.map((f, i) => ({
-          conversation: { id: f.summary.id, title: titled[i].title },
+          conversation: { id: f.summary.id, title: titled[i].title, ...participantsOf(titled[i]) },
           error: wrapApiError(f.error, 'confirm this conversation is unread').message,
         }))
       : undefined;

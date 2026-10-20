@@ -265,6 +265,37 @@ export function conversationName(s: Pick<ConversationSummary, 'id' | 'kind' | 't
   };
 }
 
+/** Names for conversation ids, from a listing read that is already under way (see {@link conversationNamer}). */
+export type ConversationNamer = (ids: readonly string[]) => Promise<Map<string, ConversationName>>;
+
+/**
+ * Starts the listing read (conversations and the user's MRI) NOW and returns
+ * a namer that uses it, so a tool can overlap that read with its own work —
+ * the Activity feed scan — rather than waiting for it afterwards. A failed
+ * listing is swallowed as soon as it settles (no unhandled rejection, even
+ * if the namer is never called) and names nothing.
+ */
+export function conversationNamer(chatsvc: ChatServiceClient): ConversationNamer {
+  const listing = Promise.all([chatsvc.listConversations(), chatsvc.meMri()]).then(
+    ([raw, me]) => ({ raw, me }),
+    () => undefined,
+  );
+  return async (ids) => {
+    const out = new Map<string, ConversationName>();
+    const wanted = new Set(ids);
+    if (wanted.size === 0) return out;
+    const read = await listing;
+    if (read === undefined) return out;
+    try {
+      const rows = summariseAll(read.raw, read.me).filter((s) => wanted.has(s.id));
+      for (const s of await enrichTitles(chatsvc, read.raw, read.me, rows)) out.set(s.id, conversationName(s));
+    } catch {
+      // Unnamed, not failed: the caller still has every id.
+    }
+    return out;
+  };
+}
+
 /**
  * Names for the conversations `ids`, for a tool whose result carries ids it
  * did not get from the listing (the Activity feed, an attachment): one listing
@@ -275,15 +306,6 @@ export function conversationName(s: Pick<ConversationSummary, 'id' | 'kind' | 't
  * is never worth failing the call over.
  */
 export async function nameConversations(chatsvc: ChatServiceClient, ids: readonly string[]): Promise<Map<string, ConversationName>> {
-  const out = new Map<string, ConversationName>();
-  const wanted = new Set(ids);
-  if (wanted.size === 0) return out;
-  try {
-    const [raw, me] = await Promise.all([chatsvc.listConversations(), chatsvc.meMri()]);
-    const rows = summariseAll(raw, me).filter((s) => wanted.has(s.id));
-    for (const s of await enrichTitles(chatsvc, raw, me, rows)) out.set(s.id, conversationName(s));
-  } catch {
-    // Unnamed, not failed: the caller still has every id.
-  }
-  return out;
+  if (ids.length === 0) return new Map();
+  return conversationNamer(chatsvc)(ids);
 }

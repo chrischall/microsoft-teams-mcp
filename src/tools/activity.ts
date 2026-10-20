@@ -26,12 +26,12 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { toolAnnotations } from '@chrischall/mcp-utils';
 import type { TeamsDeps } from '../deps.js';
-import type { ChatServiceClient, RawMessage } from '../chatsvc.js';
+import type { RawMessage } from '../chatsvc.js';
 import { htmlToText } from '../model.js';
 import { arrivalMs } from './conversation.js';
 import { sinceCutoff, DEFAULT_SINCE_DAYS, MAX_SINCE_DAYS } from './confirm.js';
 import { limitArg, trimRows } from './limit.js';
-import { nameConversations } from './titles.js';
+import { conversationNamer, type ConversationNamer } from './titles.js';
 import { wrapApiError } from './errors.js';
 import { untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
 
@@ -159,13 +159,12 @@ export function activityRow(m: RawMessage): ActivityRow | undefined {
 
 /**
  * `rows` with each conversation named as the listing tools name it
- * (`nameConversations`): only the conversations of the rows returned, and a
+ * (`conversationNamer`): only the conversations of the rows returned, and a
  * conversation the listing does not carry — or a listing that cannot be read —
  * keeps the feed's own topic.
  */
-async function nameRows(chatsvc: ChatServiceClient, rows: ActivityRow[]): Promise<ActivityRow[]> {
-  const names = await nameConversations(
-    chatsvc,
+async function nameRows(name: ConversationNamer, rows: ActivityRow[]): Promise<ActivityRow[]> {
+  const names = await name(
     rows.flatMap((r) => (r.where.conversation_id !== undefined ? [r.where.conversation_id] : [])),
   );
   return rows.map((r) => {
@@ -230,6 +229,8 @@ export function registerActivityTools(server: McpServer, { chatsvc }: Pick<Teams
     },
     async ({ unread_only, kinds, since_days, limit }) => {
       try {
+        // The listing that names the rows is read alongside the feed scan, not after it.
+        const name = conversationNamer(chatsvc);
         const cutoff = sinceCutoff(since_days);
         let scanCapped = false;
         const entries = await chatsvc.getMessages(ACTIVITY_FEED_ID, {
@@ -255,7 +256,7 @@ export function registerActivityTools(server: McpServer, { chatsvc }: Pick<Teams
         const trimmed = trimRows(rows, limit, 'start', MAX_ROWS);
         return untrustedResult({
           ...trimmed,
-          rows: await nameRows(chatsvc, trimmed.rows),
+          rows: await nameRows(name, trimmed.rows),
           ...(scanCapped
             ? {
                 scan_capped: {

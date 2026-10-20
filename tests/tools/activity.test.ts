@@ -173,6 +173,62 @@ describe('teams_get_activity', () => {
       expect(rowsOf(data)[0].where).toEqual({ conversation_id: GROUP, title: 'Feed Topic', type: 'chat' });
     });
 
+    it('asks for the listing while the feed scan is still running', async () => {
+      pinClock(NOW);
+      let releaseFeed!: () => void;
+      const feedHeld = new Promise<void>((resolve) => {
+        releaseFeed = resolve;
+      });
+      const feed = messagesFrom([entry({ type: 'mention', thread: GROUP, topic: '', ago: 1000 })]);
+      const getMessages = vi.fn(async (id: string, opts: GetMessagesOptions) => {
+        if (id !== ACTIVITY_FEED_ID) return messagesFrom(chats[id] ?? [])(id, opts);
+        await feedHeld;
+        return feed(id, opts);
+      });
+      const chatsvc = fakeChatsvc(listing, { getMessages });
+      const harness = await createTestHarness((server) => registerActivityTools(server, { chatsvc }));
+      const pending = harness.callTool('teams_get_activity', {});
+      pending.catch(() => undefined);
+      try {
+        await vi.waitFor(() => expect(chatsvc.listConversations).toHaveBeenCalledTimes(1));
+        expect(chatsvc.meMri).toHaveBeenCalled();
+        releaseFeed();
+        const data = parseToolResult(await pending) as Record<string, unknown>;
+        expect(rowsOf(data)[0].where?.title).toBe('Group chat: Adams, Kim; Moss, Pat');
+        expect(chatsvc.listConversations).toHaveBeenCalledTimes(1);
+      } finally {
+        releaseFeed();
+        await pending.catch(() => undefined);
+        await harness.close();
+      }
+    });
+
+    it('fails with the feed error, and nothing unhandled, when the feed read fails while the listing is pending', async () => {
+      pinClock(NOW);
+      const unhandled = vi.fn();
+      process.on('unhandledRejection', unhandled);
+      let rejectListing!: (e: Error) => void;
+      const listConversations = vi.fn(
+        () =>
+          new Promise<never>((_, reject) => {
+            rejectListing = reject;
+          }),
+      );
+      const getMessages = vi.fn().mockRejectedValue(new Error('feed down'));
+      const chatsvc = fakeChatsvc(listing, { getMessages, listConversations });
+      const harness = await createTestHarness((server) => registerActivityTools(server, { chatsvc }));
+      try {
+        const result = await harness.callTool('teams_get_activity', {});
+        expect(result.isError).toBe(true);
+        rejectListing(new Error('listing down too'));
+        await new Promise((r) => setTimeout(r, 10));
+        expect(unhandled).not.toHaveBeenCalled();
+      } finally {
+        process.off('unhandledRejection', unhandled);
+        await harness.close();
+      }
+    });
+
     it('reads titles only for the conversations of the rows returned', async () => {
       pinClock(NOW);
       const { getMessages } = await callNamed(
