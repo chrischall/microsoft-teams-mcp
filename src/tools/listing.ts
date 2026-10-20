@@ -1,6 +1,6 @@
 /**
- * The conversation listing shared by `teams_list_chats` and
- * `teams_list_teams_and_channels`: one `listConversations` call, normalised
+ * The conversation listing shared by `teams_list_conversations` and
+ * `teams_list_channels`: one `listConversations` call, normalised
  * against the signed-in user, then filtered by kind, unread state and query.
  * With `unread_only`, the listing's unread flag only nominates candidates; each
  * is confirmed by reading past its horizon (`confirm.ts`).
@@ -82,7 +82,7 @@ export const UNREAD_HINT_DESCRIPTION =
   'Without unread_only, unread is only a hint from the listing (unread_confirmed: false): it can ' +
   'flag a conversation whose only news is a call recording or other system event. For an exact ' +
   'answer use unread_only (confirmed rows carry unread_confirmed: true and unread_count) or ' +
-  'teams_get_unread.';
+  'teams_list_unread_messages.';
 
 /** Real unread messages counted per candidate before unread_count is reported as a lower bound. */
 const CONFIRM_LIMIT = 50;

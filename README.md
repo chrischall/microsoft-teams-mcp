@@ -27,15 +27,15 @@ ones the sidebar shows. To capture a token, an idle tab is not enough: click
 into any chat so Teams calls its chat service.
 
 **The Activity feed comes from the same API.** It is a chat-service
-conversation of its own (`48:notifications`), so `teams_get_activity` reads
+conversation of its own (`48:notifications`), so `teams_list_activity` reads
 it like any chat — no Activity view (or any view) needs to be open, and
 nothing reads the page. The bridge is used for one thing only: capturing the
 token.
 
 By default nothing here marks anything read. Reading a chat through this
 server leaves your Teams unread badges exactly as they were — unless you ask
-for it: `teams_mark_read`, or `mark_read: true` on `teams_read_conversation`
-/ `teams_get_unread`, moves your read marker forward. The writes —
+for it: `teams_mark_read`, or `mark_read: true` on `teams_list_messages`
+/ `teams_list_unread_messages`, moves your read marker forward. The writes —
 `teams_send_message`, `teams_react` and marking read — go through the same
 chat-service API and change nothing until you confirm (see
 [Writes](#writes)).
@@ -169,14 +169,14 @@ Everything is optional — by default the token is captured from your browser.
 | `TEAMS_TOKEN_FILE` | Where the captured token is cached. Defaults to `~/.microsoft-teams-mcp/token.json`. |
 | `TEAMS_SUBSTRATE_TOKEN_FILE` | Where the captured Substrate search token is cached. Defaults to `~/.microsoft-teams-mcp/substrate-token.json`. `TEAMS_TOKEN_CACHE=false` keeps it in memory too. |
 | `TEAMS_SHAREPOINT_TOKEN_FILE` | Where the captured SharePoint tokens (one per host, used to download shared files) are cached. Defaults to `~/.microsoft-teams-mcp/sharepoint-tokens.json`. `TEAMS_TOKEN_CACHE=false` keeps them in memory too. |
-| `TEAMS_TIME_ZONE` | Default IANA time zone (e.g. `America/New_York`) for the `tz` argument of `teams_read_conversation` and `teams_get_unread`: each message then carries `time_local` (ISO 8601 with offset) next to its UTC `time`. Unset means no `time_local` unless `tz` is passed; a name `Intl` does not know is reported as an error. |
+| `TEAMS_TIME_ZONE` | Default IANA time zone (e.g. `America/New_York`) for the `tz` argument of `teams_list_messages` and `teams_list_unread_messages`: each message then carries `time_local` (ISO 8601 with offset) next to its UTC `time`. Unset means no `time_local` unless `tz` is passed; a name `Intl` does not know is reported as an error. |
 | `TEAMS_WS_PORT` | fetchproxy concentrator port. Defaults to `37149`, the fleet-wide shared port. |
 | `FETCHPROXY_WS_HOST` | Bind interface for the bridge (default `127.0.0.1`; a literal IP only, anything else is ignored). Keep on loopback — it exists for ONE topology: a hosted child in its own network namespace. |
 | `FETCHPROXY_IDENTITY_DIR` | Where to store the long-term fetchproxy identity keypair (default `~/.fetchproxy/identity/`; an absolute path only, anything else is ignored). Exists for a host that runs a separate child per caller, so they can share one identity. |
 
 ## Tools
 
-- `teams_list_chats` — every chat you are in (1:1, group and meeting chats,
+- `teams_list_conversations` — every chat you are in (1:1, group and meeting chats,
   not just the visible sidebar, plus your `48:notes` self-chat as kind
   `self` when Teams lists it), favorites and pinned chats first, then most
   recent activity first: id, kind,
@@ -231,16 +231,16 @@ Everything is optional — by default the token is captured from your browser.
   not flagged (verified live 2026-10-10) — the flags mostly reflect favorited
   channels and pinned conversations. A chat you muted in Teams carries
   `muted: true`.
-- `teams_list_teams_and_channels` — every channel you are in, by team then
+- `teams_list_channels` — every channel you are in, by team then
   title, with the same fields — favorite and pinned channels first, flagged
-  as in `teams_list_chats`. Channels you have hidden in Teams are listed
+  as in `teams_list_conversations`. Channels you have hidden in Teams are listed
   after the rest with `hidden: true`, and left out of `unread_only` unless
   `include_hidden` is set. `unread_only`, `include_hidden`, `since_days`
   (with `unread_only`; default 14), `query` (channel or team name, or the
   last-message preview; each match carries `match_reason`, as in
-  `teams_list_chats`) and
+  `teams_list_conversations`) and
   `limit` (default 50, max 500).
-- `teams_read_conversation` — read any chat or channel by id or name,
+- `teams_list_messages` — read any chat or channel by id or name,
   oldest first: sender, time (UTC, ISO 8601), text, subject, edited/deleted
   flags and attachments. A channel comes back as threads (root post + replies).
   A thread whose root post is older than the window (a reply came in after
@@ -274,7 +274,7 @@ Everything is optional — by default the token is captured from your browser.
   returned message's id, or the `after_message_id` you passed when nothing
   is new — so passing it back as `after_message_id` reads only what arrived
   since. `after_message_id` takes message ids only: to read what
-  `teams_get_changes` counted, pass that row's `after_message_id`, not its
+  `teams_list_changed_conversations` counted, pass that row's `after_message_id`, not its
   `next_cursor`. See [Cursors](#cursors-only-what-is-new). `from` pages
   oldest first from a UTC time instead — see
   [Paging from a time](#paging-from-a-time).
@@ -307,13 +307,13 @@ Everything is optional — by default the token is captured from your browser.
   `marked_read: { skipped: "truncated" | "since", hint }` (a `limit` that cut
   only messages you had already read still marks). An empty read, or an
   `after_message_id` with nothing new, marks nothing (`marked_read: false`).
-- `teams_get_unread` — every unread message across your chats and channels,
+- `teams_list_unread_messages` — every unread message across your chats and channels,
   grouped by conversation, most recent first (or, with `from`, one
   oldest-first list across them all — see
   [Paging from a time](#paging-from-a-time)). Filter by `kinds` (`chat`,
   `channel`, `meeting`, `oneOnOne`) or `query` (title, channel or team
   name, an untitled chat's participant name, or the last-message preview —
-  each conversation then carries `match_reason`, as in `teams_list_chats`);
+  each conversation then carries `match_reason`, as in `teams_list_conversations`);
   `per_conversation_limit`
   (default 50) and `max_conversations` (default 20 returned with their
   messages — the rest are named, with their `unread_count`, in
@@ -323,7 +323,7 @@ Everything is optional — by default the token is captured from your browser.
   conversations with unread messages from the last `since_days` (default 14,
   max 3650) are returned; older ones are counted in `older_unread_skipped`,
   and `older_unread: true` also lists them (see below). An untitled group chat or 1:1 is titled after
-  its participants, as in `teams_list_chats` — in `conversations`, in
+  its participants, as in `teams_list_conversations` — in `conversations`, in
   `more_unread_conversations` and in `errors`. By default it does not mark
   anything read; `mark_read: true` also moves the read marker of each
   conversation returned with its messages (not `more_unread_conversations`)
@@ -335,10 +335,10 @@ Everything is optional — by default the token is captured from your browser.
   reports `marked_read: { skipped: "truncated", hint }`, and `outside_window`
   roots never count. `tz` (default
   `TEAMS_TIME_ZONE`) adds each message's `time_local`, as in
-  `teams_read_conversation`. A channel's unread replies come grouped under
+  `teams_list_messages`. A channel's unread replies come grouped under
   their root post; a root you had already read is fetched and marked
   `outside_window: true` (not unread, not counted), up to 25 per call as in
-  `teams_read_conversation`, else `{ id, missing: true }`. `cursors` — `{ "<conversation id>": "<message id>" }`
+  `teams_list_messages`, else `{ id, missing: true }`. `cursors` — `{ "<conversation id>": "<message id>" }`
   — returns, per conversation, only unread messages newer than its cursor
   (each read stops at the later of the read marker and the cursor; a
   conversation with nothing past its cursor is left out). Each returned
@@ -346,34 +346,34 @@ Everything is optional — by default the token is captured from your browser.
   the cursors you passed, updated with every returned conversation's
   `next_cursor` — pass it back as `cursors` next time.
   `format` (`full`, `compact` or `summary`) trims each conversation as in
-  `teams_read_conversation`; every format keeps the conversation `id`,
+  `teams_list_messages`; every format keeps the conversation `id`,
   `unread_count` and `next_cursor`.
-- `teams_get_changes` — which chats and channels got new messages since a
+- `teams_list_changed_conversations` — which chats and channels got new messages since a
   cursor: counts, not messages. Each changed conversation comes back with its
   summary, `new_message_count` (real messages only — call recordings and other
   system events, and deleted messages, are not counted),
   `new_from_others_count`, `newest_time` and, for a channel, `threads`: one
   `{ root_id, new_root, new_reply_count }` per thread the new messages landed
   in, including a thread whose root post is older than the cursor, and
-  `after_message_id` — the value to pass to `teams_read_conversation` as
+  `after_message_id` — the value to pass to `teams_list_messages` as
   `after_message_id` to read exactly the messages counted (a message id is
   its arrival ms, so this is the cursor time written as an id). Without
   `cursor` it looks back 24 hours. `next_cursor` is an opaque token (base64url
   of `{"t": <epoch ms>}`; `cursor` also takes a plain ISO 8601 time) — pass it
   back to see only what arrived since. It is at-least-once: a conversation can
   come back twice, but none is skipped, and it stays put when a read failed
-  (`errors`). `kinds` and `include_hidden` filter as in `teams_get_unread` —
+  (`errors`). `kinds` and `include_hidden` filter as in `teams_list_unread_messages` —
   use the same ones with a cursor as the call that returned it; `limit`
   (default 50, max 200) caps the conversations returned, the rest are named in
   `more_conversations` (each with its `after_message_id` too). Then read what
-  changed with `teams_read_conversation`, handing on the row's
+  changed with `teams_list_messages`, handing on the row's
   `after_message_id` — **not** `next_cursor`, which is a time token that only
-  `teams_get_changes` accepts (`teams_read_conversation` rejects it, and
-  `teams_get_changes` rejects a message id):
+  `teams_list_changed_conversations` accepts (`teams_list_messages` rejects it, and
+  `teams_list_changed_conversations` rejects a message id):
 
   ```jsonc
   // first call: the last 24 hours
-  teams_get_changes({})
+  teams_list_changed_conversations({})
   // → { since, total_new_messages: 5, conversations: [
   //      { conversation: { id: "19:…@thread.tacv2", kind: "channel", title: "Design", … },
   //        new_message_count: 3, new_from_others_count: 3, newest_time: "…",
@@ -381,9 +381,9 @@ Everything is optional — by default the token is captured from your browser.
   //        threads: [{ root_id: "1791803726629", new_root: false, new_reply_count: 2 }, …] }, … ],
   //    next_cursor: "eyJ0IjoxNzkxODE1MjAxMzYxfQ", next_cursor_time: "…", fetched_at }
   // read the messages it counted in one conversation: hand on the row's after_message_id
-  teams_read_conversation({ conversation: "19:…@thread.tacv2", after_message_id: "1791728801361" })
-  // later: only what arrived since — next_cursor goes back to teams_get_changes only
-  teams_get_changes({ cursor: "eyJ0IjoxNzkxODE1MjAxMzYxfQ" })
+  teams_list_messages({ conversation: "19:…@thread.tacv2", after_message_id: "1791728801361" })
+  // later: only what arrived since — next_cursor goes back to teams_list_changed_conversations only
+  teams_list_changed_conversations({ cursor: "eyJ0IjoxNzkxODE1MjAxMzYxfQ" })
   ```
 
   A channel reply moves only the listing's `lastUpdatedMessageId` (its
@@ -396,8 +396,8 @@ Everything is optional — by default the token is captured from your browser.
   channels, newest first: each hit names its conversation (id, title, kind,
   team) and carries the message's id, ISO-8601 time, sender, `fromMe` (scan
   only), plain text, subject and `replyTo` (a channel reply's root) — read it in context
-  with `teams_read_conversation`. `conversation` narrows to one chat or
-  channel (id or name, as in `teams_read_conversation`), `from` to senders
+  with `teams_list_messages`. `conversation` narrows to one chat or
+  channel (id or name, as in `teams_list_messages`), `from` to senders
   whose display name contains it, `since` (ISO 8601; default the last 30 days)
   sets how far back to look, `limit` caps the hits (default 25, max 200;
   `total_hits` and `truncated` say when there were more). `source` says which
@@ -434,8 +434,8 @@ Everything is optional — by default the token is captured from your browser.
   file your account cannot open, or one that could not be fetched, comes back as
   metadata and its open link instead of failing. The caption names the
   conversation beside its id (`title`, plus `participants` for an untitled
-  chat), titled as `teams_list_chats` titles it.
-- `teams_get_activity` — the Activity feed (the bell icon), newest first:
+  chat), titled as `teams_list_conversations` titles it.
+- `teams_list_activity` — the Activity feed (the bell icon), newest first:
   mentions (including @team / @everyone), reactions, replies, meeting
   notices and missed calls across every chat and channel. Each row has its
   time (ISO 8601), `kind` (`mention`, `reaction`, `reply`, `meeting`, `call`
@@ -443,10 +443,10 @@ Everything is optional — by default the token is captured from your browser.
   did it, where (`conversation_id`, `title`, `type`, and `team` /
   `participants` when known), the `message_id` and a plain-text preview. The
   feed carries no name for an untitled group chat or 1:1, so `title` is
-  taken from the conversations listing and titled as `teams_list_chats` titles
+  taken from the conversations listing and titled as `teams_list_conversations` titles
   it (one listing read plus cached title reads for the rows returned; if that
   fails the feed's own topic stands in) — pass `where.conversation_id` to
-  `teams_read_conversation` to read it in context. Filter with
+  `teams_list_messages` to read it in context. Filter with
   `unread_only`, `kinds` and `since_days` (default 14, max 3650); `limit`
   (default 50, max 200). Read from the chat service, so the Activity view
   does not need to be open; it never marks anything read (`teams_mark_read`
@@ -483,7 +483,7 @@ Everything is optional — by default the token is captured from your browser.
   already at or past the target, nothing is written (no confirmation is
   asked) and `status` is `already_read`. Only you see your read marker.
 
-`teams_read_conversation` and `teams_get_unread` also write when — and only
+`teams_list_messages` and `teams_list_unread_messages` also write when — and only
 when — you pass `mark_read: true` (see above). Every other tool is
 read-only, and nothing marks anything read unless you ask it to.
 
@@ -498,7 +498,7 @@ mentions, the quoted message, the reaction, or the message your read marker
 moves to and where it was, with everything other people wrote (titles,
 names, quoted text) fenced as untrusted — plus a `confirmToken`; only a
 repeat call with that token writes. With `mark_read` on
-`teams_read_conversation` / `teams_get_unread`, that first call returns just
+`teams_list_messages` / `teams_list_unread_messages`, that first call returns just
 the preview (no messages); the repeat call reads and marks. The token is single-use, expires, and is
 bound to the exact arguments: change anything between the two calls and it
 is refused with a fresh preview.
@@ -516,7 +516,7 @@ as the real guard on what gets posted.
 
 **Try it in your own notes first.** The conversation `48:notes` (also by the
 name `notes` or `self`) is your Teams self-chat ("notes to self"): every write
-accepts it, `teams_read_conversation` reads it, nobody else sees it, and
+accepts it, `teams_list_messages` reads it, nobody else sees it, and
 it is the safe place to see what a message or reaction will look like. Every
 other `48:` system conversation (calendar and the like) is refused.
 
@@ -559,23 +559,23 @@ instead.
   message id is its arrival time in epoch milliseconds, so "newer than the
   last message I saw" is a numeric comparison and a cursor is just that
   message's id — `next_cursor` is a plain id string, passed back unchanged as
-  `after_message_id` (`teams_read_conversation`) or inside `cursors`
-  (`teams_get_unread`). The server keeps no state and **no cache**: every
+  `after_message_id` (`teams_list_messages`) or inside `cursors`
+  (`teams_list_unread_messages`). The server keeps no state and **no cache**: every
   call reads Teams live, and `fetched_at` (ISO 8601, UTC) says when. There is
   no refresh flag because there is nothing to refresh. A cursor never moves
   the read marker; with `limit` / `per_conversation_limit` the newest
   messages are kept and `next_cursor` jumps to the newest, so check
   `truncated` before assuming nothing was skipped. **Two cursor kinds:**
-  `teams_get_changes` has its own *time* cursor (an opaque token, or an ISO
-  8601 time) that goes back only to `teams_get_changes`; it is not a message
+  `teams_list_changed_conversations` has its own *time* cursor (an opaque token, or an ISO
+  8601 time) that goes back only to `teams_list_changed_conversations`; it is not a message
   id. Each of its conversation rows carries the message-id cursor to hand on,
-  `after_message_id`, for `teams_read_conversation` (or `teams_get_unread`'s
+  `after_message_id`, for `teams_list_messages` (or `teams_list_unread_messages`'s
   `cursors`). Each tool rejects the other kind.
 - <a id="paging-from-a-time"></a>**Paging from a time (ingestion and
-  backfill).** `teams_read_conversation` and `teams_get_unread` take `from`:
+  backfill).** `teams_list_messages` and `teams_list_unread_messages` take `from`:
   a UTC time (ISO 8601; one with no zone is read as UTC) or a previous
   result's `next_from`. They return what arrived at or after it **oldest
-  first**, at most `limit` (default 50; `teams_get_unread` pools every
+  first**, at most `limit` (default 50; `teams_list_unread_messages` pools every
   conversation into one `messages` list, each message carrying its
   `conversation_id`), plus `has_more`, `next_from` and `next_from_time`.
   Pass `next_from` back as `from` until `has_more` is false; it is returned
@@ -587,13 +587,13 @@ instead.
   messages newest first with no way to seek, so each call reads everything
   that changed since its `from` — a deep backfill gets faster as it catches
   up — and a conversation with more than 20,000 messages since `from`
-  cannot be paged oldest first: `teams_read_conversation` reports an error
-  rather than skip any, and `teams_get_unread` returns what arrived after the
+  cannot be paged oldest first: `teams_list_messages` reports an error
+  rather than skip any, and `teams_list_unread_messages` returns what arrived after the
   oldest point it reached, names the stretch it could not read in
   `incomplete` (`unread_not_read_from` / `unread_not_read_until`), and keeps
   `next_from` moving — so one oversized conversation never stalls the stream.
   `from` replaces `since` /
-  `after_message_id` / `mark_read` (and, for `teams_get_unread`, `since_days`,
+  `after_message_id` / `mark_read` (and, for `teams_list_unread_messages`, `since_days`,
   `cursors`, the per-conversation limits, `older_unread` and
   `format: "summary"`).
 
@@ -612,7 +612,7 @@ instead.
   tell on its own: `lastimreceivedtime` moves for a call recording too,
   `lastMessage` can be stale, and a chat you never opened has no marker at
   all. So the listing only nominates candidates (anything past the marker,
-  or no marker), and `unread_only` and `teams_get_unread` read each
+  or no marker), and `unread_only` and `teams_list_unread_messages` read each
   candidate's messages past its marker (four at a time) and keep only those
   holding a real unread message, with its `unread_count`. Without
   `unread_only` the list tools' `unread` is just that cheap hint, marked
@@ -627,8 +627,8 @@ instead.
   you never open. A candidate with no activity at all inside the window is
   not even read. Whatever the window leaves out is counted in
   `older_unread_skipped` (with a hint to widen `since_days`), never dropped
-  silently. `older_unread: true` (on `teams_get_unread`, and on
-  `teams_list_chats` with `unread_only`) also lists them in
+  silently. `older_unread: true` (on `teams_list_unread_messages`, and on
+  `teams_list_conversations` with `unread_only`) also lists them in
   `older_unread_conversations` — `id`, `kind`, `title`, `team` (a channel's),
   `lastActivity`, most recent first — with an `unread_count` for each one
   whose messages were already read to place it outside the window; one with
@@ -637,9 +637,9 @@ instead.
   be only system events). Muted chats: the conversation listing marks a chat
   you muted with `properties.alerts: "false"` (verified live 2026-10-12: 8 of
   1,435 conversations, every other one `"true"` or absent), surfaced as
-  `muted: true`. `teams_get_unread` leaves them out without reading them and
+  `muted: true`. `teams_list_unread_messages` leaves them out without reading them and
   counts them in `muted_skipped`; `include_muted` adds them back. The list
-  tools' `unread_only` still includes them. `teams_read_conversation` is not windowed: it takes an explicit
+  tools' `unread_only` still includes them. `teams_list_messages` is not windowed: it takes an explicit
   `since` and `limit`. This server only reads the marker; it never moves it.
 - **The token only goes to Teams.** The chat-service token is sent to the
   chat-service base and, for inline images, only to https hosts under
@@ -661,16 +661,16 @@ instead.
 
 0.5 only adds arguments and fields, except for these changes in behaviour:
 
-- **Ambiguous names in `teams_read_conversation`:** a name that matches
+- **Ambiguous names in `teams_list_messages`:** a name that matches
   several conversations used to fail with an error listing the candidates. It
   now succeeds with `{ ambiguous: true, query, match_count, candidates, hint }`
   and no messages. Check for `ambiguous` before reading `messages` or
   `threads`. Send, react and attachment still fail on an ambiguous name.
-- **Muted chats in `teams_get_unread`:** chats you muted in Teams are left out
+- **Muted chats in `teams_list_unread_messages`:** chats you muted in Teams are left out
   and counted in `muted_skipped`. Pass `include_muted: true` for the old
   behaviour.
-- **Read tools are no longer annotated read-only:** `teams_read_conversation`
-  and `teams_get_unread` take an opt-in `mark_read` flag, so they are published
+- **Read tools are no longer annotated read-only:** `teams_list_messages`
+  and `teams_list_unread_messages` take an opt-in `mark_read` flag, so they are published
   with `readOnly: false`. A client that auto-approves only read-only tools may
   now ask before each read. Without `mark_read` they still never write.
 
@@ -680,9 +680,9 @@ instead.
 changed shape. If you script against them:
 
 - **Removed tools:** `teams_get_open_chat_messages` and
-  `teams_get_open_channel_posts` — use `teams_read_conversation`, which reads
+  `teams_get_open_channel_posts` — use `teams_list_messages`, which reads
   any chat or channel by id or name without it being open.
-- **`teams_get_activity`:** rows now come from the Activity feed itself.
+- **`teams_list_activity`:** rows now come from the Activity feed itself.
   `title` and `location` are replaced by `type`/`subtype`/`kind`, `from`,
   `where: { conversation_id, title, type }`, `message_id`, `reply_chain_id`
   and `preview`; `time` is ISO 8601 (it was prose like "1:19 PM"); `read` is
@@ -700,7 +700,7 @@ changed shape. If you script against them:
 - **Chat titles:** untitled chats are titled `(1:1 chat)` (or the other
   person's name), `Group chat: A; B; C +N` (with a `participants` array), or
   `(untitled group chat)` — no longer the last sender's name or
-  `(untitled chat)`. Plain `teams_list_chats` / `teams_list_teams_and_channels`
+  `(untitled chat)`. Plain `teams_list_conversations` / `teams_list_channels`
   listings put `favorite` and then `pinned` conversations first.
 - **Unread:** confirmed by reading messages after your read point (call
   recordings and other system events never count), hidden channels are left

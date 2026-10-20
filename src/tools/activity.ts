@@ -1,5 +1,5 @@
 /**
- * `teams_get_activity` — the Activity feed (the bell icon in Teams' left nav),
+ * `teams_list_activity` — the Activity feed (the bell icon in Teams' left nav),
  * read through the chat-service API rather than off the page.
  *
  * Verified live 2026-10-10 against a real tenant: the feed IS a chat-service
@@ -8,7 +8,7 @@
  * the 200 newest entries carried `properties.activity` — a JSON string, or an
  * object — describing what happened (`activityType` / `activitySubtype`), who
  * did it, where (`sourceThreadId` + `sourceMessageId`, which
- * `teams_read_conversation` takes) and a message preview; `properties.isread`
+ * `teams_list_messages` takes) and a message preview; `properties.isread`
  * is `"true"` / `"false"`. `48:mentions` holds the mention subset in the same
  * shape, so it is not read separately. An entry with `deletetime` set is
  * deleted and skipped, as is one with no activity payload.
@@ -186,7 +186,7 @@ const newestFirst = (a: ActivityRow, b: ActivityRow): number => (b.time ?? '').l
 
 export function registerActivityTools(server: McpServer, { chatsvc }: Pick<TeamsDeps, 'chatsvc'>): void {
   server.registerTool(
-    'teams_get_activity',
+    'teams_list_activity',
     {
       title: 'Read the Activity feed',
       description:
@@ -195,11 +195,11 @@ export function registerActivityTools(server: McpServer, { chatsvc }: Pick<Teams
         'Teams chat-service API, so it works without the Activity view (or any particular view) ' +
         'open in the browser. Each row has id, time (ISO 8601), kind (mention, reaction, reply, ' +
         'meeting, call or other) with the raw type/subtype, read, from (who did it), where ' +
-        '(conversation_id; title — named as teams_list_chats names it, so an untitled group chat is ' +
+        '(conversation_id; title — named as teams_list_conversations names it, so an untitled group chat is ' +
         '"Group chat: A; B; C +N" with its participants and a 1:1 is the other person; type; team for a channel), ' +
         'message_id, reply_chain_id (a channel thread\'s root, when there is one), ' +
         'and a plain-text preview (at most 200 characters). Pass where.conversation_id to ' +
-        'teams_read_conversation to read the message in context. unread_only keeps rows the user ' +
+        'teams_list_messages to read the message in context. unread_only keeps rows the user ' +
         'has not seen; kinds narrows to some buckets; since_days (default 14) sets how far back ' +
         'to look. This does NOT mark anything read — the user\'s Activity badge is unaffected.' +
         UNTRUSTED_DESCRIPTION_SUFFIX,

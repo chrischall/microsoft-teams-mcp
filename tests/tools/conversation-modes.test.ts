@@ -1,4 +1,4 @@
-// teams_read_conversation's output-size modes (format) and multi-conversation reads.
+// teams_list_messages's output-size modes (format) and multi-conversation reads.
 import { describe, it, expect, vi } from 'vitest';
 import { createTestHarness, parseToolResult } from '@chrischall/mcp-utils/test';
 import { McpToolError } from '@chrischall/mcp-utils';
@@ -49,7 +49,7 @@ function chatsvcWith(overrides: Record<string, unknown> = {}): ChatServiceClient
 async function call(chatsvc: ChatServiceClient, args: Record<string, unknown>) {
   const harness = await createTestHarness((server) => registerConversationTools(server, { chatsvc }));
   try {
-    const result = await harness.callTool('teams_read_conversation', args);
+    const result = await harness.callTool('teams_list_messages', args);
     return { result, data: result.isError ? undefined : (parseToolResult(result) as Record<string, unknown>) };
   } finally {
     await harness.close();
@@ -58,7 +58,7 @@ async function call(chatsvc: ChatServiceClient, args: Record<string, unknown>) {
 
 type Entry = Record<string, unknown> & { conversation: { id: string } };
 
-describe('teams_read_conversation format', () => {
+describe('teams_list_messages format', () => {
   it('defaults to full: every message field and the whole conversation summary', async () => {
     const { data } = await call(chatsvcWith(), { conversation: GROUP });
     const full = await call(chatsvcWith(), { conversation: GROUP, format: 'full' });
@@ -133,7 +133,7 @@ describe('teams_read_conversation format', () => {
   it('documents format', async () => {
     const harness = await createTestHarness((server) => registerConversationTools(server, { chatsvc: chatsvcWith() }));
     try {
-      const tool = (await harness.client.listTools()).tools.find((t) => t.name === 'teams_read_conversation')!;
+      const tool = (await harness.client.listTools()).tools.find((t) => t.name === 'teams_list_messages')!;
       expect(tool.description).toMatch(/format/);
       expect(tool.description).toMatch(/compact/);
       expect(tool.description).toMatch(/summary/);
@@ -143,7 +143,7 @@ describe('teams_read_conversation format', () => {
   });
 });
 
-describe('teams_read_conversation with several conversations', () => {
+describe('teams_list_messages with several conversations', () => {
   it('reads each one, in the order asked, as {conversations: [...]} of the single-read result', async () => {
     const chatsvc = chatsvcWith();
     const { data } = await call(chatsvc, { conversation: [GROUP, 'design'] });
@@ -202,7 +202,7 @@ describe('teams_read_conversation with several conversations', () => {
     expect(errors[1]).not.toHaveProperty('title');
     expect(errors[0].error).toMatch(/rate-limiting/);
     expect(errors[1].error).toMatch(/no chat or channel matches/i);
-    expect(errors[1].hint).toMatch(/teams_list_chats/);
+    expect(errors[1].hint).toMatch(/teams_list_conversations/);
   });
 
   it('returns an ambiguous name among the conversations, in the order asked, as the single-read candidates object', async () => {
@@ -280,7 +280,7 @@ describe('teams_read_conversation with several conversations', () => {
   it('documents passing several conversations', async () => {
     const harness = await createTestHarness((server) => registerConversationTools(server, { chatsvc: chatsvcWith() }));
     try {
-      const tool = (await harness.client.listTools()).tools.find((t) => t.name === 'teams_read_conversation')!;
+      const tool = (await harness.client.listTools()).tools.find((t) => t.name === 'teams_list_messages')!;
       expect(tool.description).toMatch(/array/);
       expect(tool.description).toMatch(/errors/);
     } finally {

@@ -60,13 +60,13 @@ export function registerAttachmentTools(
       title: 'Get a Teams message attachment',
       description:
         'Fetch one attachment of a Teams chat or channel message, as listed by ' +
-        'teams_read_conversation / teams_get_unread. An inline image (attachments.images[].ref) ' +
+        'teams_list_messages / teams_list_unread_messages. An inline image (attachments.images[].ref) ' +
         'is returned as the image itself. A shared file (attachments.files[].name) is downloaded ' +
         'from SharePoint and returned as its contents: an image as the image, anything else as an ' +
         'embedded resource carrying the bytes. The first file from a given SharePoint host in a ' +
         'session may need opening once in Teams to mint a short-lived token; a file your account ' +
         'cannot open, or one that could not be fetched, comes back as metadata and its open link ' +
-        'instead of failing. Its caption names the conversation beside its id: title (as teams_list_chats ' +
+        'instead of failing. Its caption names the conversation beside its id: title (as teams_list_conversations ' +
         'names it — an untitled group chat by its participants, a 1:1 by the other person) and participants. ' +
         'Does not mark anything read.' +
         UNTRUSTED_DESCRIPTION_SUFFIX,
@@ -75,7 +75,7 @@ export function registerAttachmentTools(
         conversation: z
           .string()
           .min(1)
-          .describe('The conversation id the message is in (from teams_read_conversation or teams_get_unread).'),
+          .describe('The conversation id the message is in (from teams_list_messages or teams_list_unread_messages).'),
         message_id: z.string().min(1).describe('The message id, exactly as a message listing returned it.'),
         ref: z
           .string()
@@ -93,7 +93,7 @@ export function registerAttachmentTools(
         const raw = fetched.find((m) => m.id === message_id);
         if (raw === undefined) {
           throw new McpToolError(`Message ${message_id} was not found in conversation ${conversation}.`, {
-            hint: 'Pass the conversation id and message id exactly as teams_read_conversation returned them.',
+            hint: 'Pass the conversation id and message id exactly as teams_list_messages returned them.',
           });
         }
         // Only the attachments are read, so whose message it is does not matter.
@@ -131,7 +131,7 @@ export function registerAttachmentTools(
         throw new McpToolError(`Message ${message_id} has no attachment "${ref}".`, {
           hint:
             `It has ${images.length} inline image(s) and ${files.length} shared file(s); pass an ` +
-            'image ref or a file name exactly as teams_read_conversation listed it.',
+            'image ref or a file name exactly as teams_list_messages listed it.',
         });
       } catch (err) {
         throw wrapApiError(err, 'get the attachment');

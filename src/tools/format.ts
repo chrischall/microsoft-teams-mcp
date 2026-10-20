@@ -1,6 +1,6 @@
 /**
- * Output-size modes for the read tools (`teams_read_conversation`,
- * `teams_get_unread`): how much of each conversation a result carries.
+ * Output-size modes for the read tools (`teams_list_messages`,
+ * `teams_list_unread_messages`): how much of each conversation a result carries.
  *
  * - `full` (default) — every message field and the whole conversation summary,
  *   exactly as before.
@@ -107,7 +107,7 @@ function compactMessage(m: NormalisedMessage): CompactMessage {
 }
 
 /**
- * One message of a flat, cross-conversation list (`teams_get_unread` with
+ * One message of a flat, cross-conversation list (`teams_list_unread_messages` with
  * `from`): whole in full; compact, but keeping `replyTo`, since no thread
  * grouping says what a channel reply answers. Summary has no messages.
  */

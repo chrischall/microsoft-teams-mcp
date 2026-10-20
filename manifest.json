@@ -130,7 +130,7 @@
     "time_zone": {
       "type": "string",
       "title": "Time zone (optional)",
-      "description": "Optional. Default IANA time zone (e.g. America/New_York) for the tz argument of teams_read_conversation and teams_get_unread: each message then carries time_local next to its UTC time. Leave blank for UTC only.",
+      "description": "Optional. Default IANA time zone (e.g. America/New_York) for the tz argument of teams_list_messages and teams_list_unread_messages: each message then carries time_local next to its UTC time. Leave blank for UTC only.",
       "required": false
     },
     "confirm_mode": {
@@ -161,15 +161,15 @@
   },
   "tools": [
     {
-      "name": "teams_list_chats",
+      "name": "teams_list_conversations",
       "description": "List every chat (group, meeting, 1:1) the signed-in user is in, with unread state"
     },
     {
-      "name": "teams_list_teams_and_channels",
+      "name": "teams_list_channels",
       "description": "List every channel the signed-in user is in, by team, with unread state"
     },
     {
-      "name": "teams_read_conversation",
+      "name": "teams_list_messages",
       "description": "Read any chat or channel by id or name — leaves it unread unless you ask it to mark it read (asks you to confirm first)"
     },
     {
@@ -177,11 +177,11 @@
       "description": "Search messages by text across chats and channels with Teams' own search (Microsoft Substrate), falling back to a bounded scan of recent conversations, without marking anything read"
     },
     {
-      "name": "teams_get_unread",
+      "name": "teams_list_unread_messages",
       "description": "Get every unread message across chats and channels — leaves them unread unless you ask it to mark them read (asks you to confirm first)"
     },
     {
-      "name": "teams_get_changes",
+      "name": "teams_list_changed_conversations",
       "description": "List the chats and channels with new messages since a cursor (default the last 24 hours), with counts and the channel threads that got replies"
     },
     {
@@ -201,7 +201,7 @@
       "description": "Mark a chat or channel read up to a message, clearing its unread badge (never backwards) — asks you to confirm first"
     },
     {
-      "name": "teams_get_activity",
+      "name": "teams_list_activity",
       "description": "Read the Activity feed — mentions, reactions, replies, meeting notices and missed calls across every chat and channel, without opening it"
     },
     {

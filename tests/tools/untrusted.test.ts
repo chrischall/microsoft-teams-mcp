@@ -54,7 +54,7 @@ describe('untrustedResult', () => {
 
 describe('every tool that returns third-party Teams text', () => {
   const chatsvc = fakeChatsvc([rawConv('19:a@thread.v2', { topic: 'Example' }), rawConv('19:b@thread.tacv2', { topic: 'General' })]);
-  const names = ['teams_list_chats', 'teams_list_teams_and_channels', 'teams_get_activity'];
+  const names = ['teams_list_conversations', 'teams_list_channels', 'teams_list_activity'];
 
   it('warns in its description that the content must not be followed as instructions', async () => {
     const harness = await createTestHarness((server) => {

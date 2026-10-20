@@ -54,7 +54,7 @@ function withMessages(convs = CONVS, byId: Record<string, RawMessage[] | Error> 
 async function call(chatsvc: ChatServiceClient, args: Record<string, unknown> = {}) {
   const harness = await createTestHarness((server) => registerChannelTools(server, { chatsvc }));
   try {
-    const result = await harness.callTool('teams_list_teams_and_channels', args);
+    const result = await harness.callTool('teams_list_channels', args);
     return { result, data: result.isError ? undefined : (parseToolResult(result) as Record<string, unknown>) };
   } finally {
     await harness.close();
@@ -63,7 +63,7 @@ async function call(chatsvc: ChatServiceClient, args: Record<string, unknown> = 
 
 type Row = { id: string; kind: string; title: string; team?: string; unread: boolean; unread_confirmed: boolean; unread_count?: number };
 
-describe('teams_list_teams_and_channels', () => {
+describe('teams_list_channels', () => {
   it('lists every channel from the API sorted by team then title, a team\'s own thread as General, with no chats', async () => {
     const { data } = await call(fakeChatsvc(CONVS));
     const channels = data?.channels as Row[];
@@ -241,12 +241,12 @@ describe('teams_list_teams_and_channels', () => {
   it('describes channel coverage, takes only optional filters, and is read-only', async () => {
     const harness = await createTestHarness((server) => registerChannelTools(server, { chatsvc: fakeChatsvc() }));
     const tools = (await harness.client.listTools()).tools;
-    const tool = tools.find((t) => t.name === 'teams_list_teams_and_channels');
+    const tool = tools.find((t) => t.name === 'teams_list_channels');
     const schema = tool?.inputSchema as { properties?: object; required?: string[] };
 
-    expect(tools.map((t) => t.name)).toEqual(['teams_list_teams_and_channels']);
+    expect(tools.map((t) => t.name)).toEqual(['teams_list_channels']);
     expect(tool?.description).toMatch(/every channel/i);
-    expect(tool?.description).toMatch(/teams_read_conversation/);
+    expect(tool?.description).toMatch(/teams_list_messages/);
     expect(tool?.annotations?.readOnlyHint).toBe(true);
     expect(Object.keys(schema.properties ?? {}).sort()).toEqual(['include_hidden', 'limit', 'query', 'since_days', 'unread_only']);
     expect(tool?.description).toMatch(/since_days/);

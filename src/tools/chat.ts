@@ -1,5 +1,5 @@
 /**
- * `teams_list_chats` — every chat the user is in (group, meeting, 1:1), read
+ * `teams_list_conversations` — every chat the user is in (group, meeting, 1:1), read
  * from the Teams chat-service API. Unlike the old sidebar read it needs no
  * particular Teams view open, and it is not limited to what the sidebar has
  * rendered: the listing is the user's whole conversation set.
@@ -85,7 +85,7 @@ function sortChats(rows: ListedRow[], sort: ChatSort, unreadOnly: boolean | unde
 
 export function registerChatTools(server: McpServer, { chatsvc }: Pick<TeamsDeps, 'chatsvc'>): void {
   server.registerTool(
-    'teams_list_chats',
+    'teams_list_conversations',
     {
       title: 'List Teams chats',
       description:
@@ -99,7 +99,7 @@ export function registerChatTools(server: McpServer, { chatsvc }: Pick<TeamsDeps
         ' search_messages extends the match to each chat\'s recent messages. ' +
         FAVORITES_DESCRIPTION +
         ' ' +
-        'Pass an id (or the title) to teams_read_conversation to read the messages. Use ' +
+        'Pass an id (or the title) to teams_list_messages to read the messages. Use ' +
         'unread_only to find chats with messages the user has not read, exactly as Teams counts ' +
         'them: each candidate is confirmed by reading its messages past the read marker, so a ' +
         'call recording, transcript or other system event never makes a chat unread. By default ' +
@@ -111,7 +111,7 @@ export function registerChatTools(server: McpServer, { chatsvc }: Pick<TeamsDeps
         ' since / until (ISO 8601 date-times) keep chats whose last activity falls in that window; ' +
         'sort picks the order: activity (default, as above), activity_only (most recent first, ' +
         'ignoring favorites and pinned) or title (alphabetical, case-insensitive).' +
-        ' Listing never marks anything read (teams_mark_read does). Channels are listed by teams_list_teams_and_channels instead.' +
+        ' Listing never marks anything read (teams_mark_read does). Channels are listed by teams_list_channels instead.' +
         UNTRUSTED_DESCRIPTION_SUFFIX,
       annotations: toolAnnotations({ readOnly: true, openWorld: true }),
       inputSchema: {

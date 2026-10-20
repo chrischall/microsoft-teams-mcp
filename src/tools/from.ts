@@ -17,7 +17,7 @@
  * reading everything that changed since `from` and taking its oldest: a call
  * costs what has happened since its `from`, not its `limit`. Reads therefore
  * stop on a message's last change, not its arrival (`changedMs`, as
- * `teams_get_changes` learned), and run deeper than other reads
+ * `teams_list_changed_conversations` learned), and run deeper than other reads
  * ({@link FROM_MAX_RAW}); a conversation busier than that since `from` cannot
  * be paged oldest first and says so.
  */

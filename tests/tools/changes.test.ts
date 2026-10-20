@@ -107,7 +107,7 @@ function chatsvcWith(overrides: Record<string, unknown> = {}, convs = CONVS, mes
 async function call(chatsvc: ChatServiceClient, args: Record<string, unknown> = {}) {
   const harness = await createTestHarness((server) => registerChangesTools(server, { chatsvc }));
   try {
-    const result = await harness.callTool('teams_get_changes', args);
+    const result = await harness.callTool('teams_list_changed_conversations', args);
     return { result, data: result.isError ? undefined : (parseToolResult(result) as Record<string, unknown>) };
   } finally {
     await harness.close();
@@ -172,10 +172,10 @@ describe('lastChangeMs', () => {
   });
 });
 
-describe('teams_get_changes', () => {
+describe('teams_list_changed_conversations', () => {
   it('is a read-only open-world tool whose description carries the untrusted suffix', async () => {
     const harness = await createTestHarness((server) => registerChangesTools(server, { chatsvc: chatsvcWith() }));
-    const tool = (await harness.client.listTools()).tools.find((t) => t.name === 'teams_get_changes');
+    const tool = (await harness.client.listTools()).tools.find((t) => t.name === 'teams_list_changed_conversations');
     await harness.close();
     expect(tool?.annotations).toMatchObject({ readOnlyHint: true, openWorldHint: true });
     expect(tool?.description).toContain(UNTRUSTED_DESCRIPTION_SUFFIX);
@@ -253,7 +253,7 @@ describe('teams_get_changes', () => {
     for (const r of rows(later.data)) expect(r.after_message_id).toBe(String(NOW - 2.5 * HOUR));
   });
 
-  it("hands off: a row's after_message_id passed to teams_read_conversation returns the messages it counted", async () => {
+  it("hands off: a row's after_message_id passed to teams_list_messages returns the messages it counted", async () => {
     const { data } = await call(chatsvcWith());
     const group = row(data, GROUP)!;
     // Pages as the live service does after the newest-change ordering is settled: one page, the rejected skipped.
@@ -265,7 +265,7 @@ describe('teams_get_changes', () => {
     );
     try {
       const read = parseToolResult(
-        await harness.callTool('teams_read_conversation', { conversation: GROUP, after_message_id: group.after_message_id }),
+        await harness.callTool('teams_list_messages', { conversation: GROUP, after_message_id: group.after_message_id }),
       ) as { messages: { text: string; deleted?: boolean }[] };
       const counted = read.messages.filter((m) => m.deleted !== true);
       expect(counted.map((m) => m.text)).toEqual(['new 1', 'mine', 'new 2']);
@@ -275,16 +275,16 @@ describe('teams_get_changes', () => {
     }
   });
 
-  it('is refused by teams_read_conversation when its next_cursor is passed as after_message_id', async () => {
+  it('is refused by teams_list_messages when its next_cursor is passed as after_message_id', async () => {
     const { data } = await call(chatsvcWith());
     const harness = await createTestHarness((server) => registerConversationTools(server, { chatsvc: chatsvcWith() }));
     try {
-      const result = await harness.callTool('teams_read_conversation', {
+      const result = await harness.callTool('teams_list_messages', {
         conversation: GROUP,
         after_message_id: data?.next_cursor,
       });
       expect(result.isError).toBe(true);
-      expect(errorText(result)).toMatch(/teams_get_changes next_cursor is not one/);
+      expect(errorText(result)).toMatch(/teams_list_changed_conversations next_cursor is not one/);
     } finally {
       await harness.close();
     }
@@ -292,7 +292,7 @@ describe('teams_get_changes', () => {
 
   it('documents that its cursor and after_message_id are different kinds, and which goes where', async () => {
     const harness = await createTestHarness((server) => registerChangesTools(server, { chatsvc: chatsvcWith() }));
-    const tool = (await harness.client.listTools()).tools.find((t) => t.name === 'teams_get_changes');
+    const tool = (await harness.client.listTools()).tools.find((t) => t.name === 'teams_list_changed_conversations');
     await harness.close();
     expect(tool?.description).toMatch(/after_message_id/);
     expect(tool?.description).toMatch(/not a message id/i);

@@ -37,7 +37,7 @@ function chatsvcWith(messages = GROUP_MSGS, overrides: Record<string, unknown> =
 async function call(chatsvc: ChatServiceClient, args: Record<string, unknown>) {
   const harness = await createTestHarness((server) => registerConversationTools(server, { chatsvc }));
   try {
-    const result = await harness.callTool('teams_read_conversation', args);
+    const result = await harness.callTool('teams_list_messages', args);
     return { result, data: result.isError ? undefined : (parseToolResult(result) as Record<string, unknown>) };
   } finally {
     await harness.close();
@@ -51,7 +51,7 @@ function errorText(result: { content?: unknown[] }): string {
 type Msg = { id: string; text: string; fromMe: boolean; replyTo?: string };
 type Thread = { root: Msg | { id: string; missing: true }; replies: Msg[] };
 
-describe('teams_read_conversation', () => {
+describe('teams_list_messages', () => {
   it('reads a chat by id, oldest first, without system events', async () => {
     const chatsvc = chatsvcWith();
     const { data } = await call(chatsvc, { conversation: GROUP });
@@ -204,7 +204,7 @@ describe('teams_read_conversation', () => {
 
     expect(result.isError).toBe(true);
     expect(errorText(result)).toMatch(/no chat or channel matches/i);
-    expect(errorText(result)).toMatch(/teams_list_chats/);
+    expect(errorText(result)).toMatch(/teams_list_conversations/);
   });
 
   it('returns only unread messages with unread_only, stopping at the read horizon', async () => {
@@ -463,7 +463,7 @@ describe('teams_read_conversation', () => {
     const tools = (await harness.client.listTools()).tools;
     await harness.close();
 
-    expect(tools.map((t) => t.name)).toEqual(['teams_read_conversation']);
+    expect(tools.map((t) => t.name)).toEqual(['teams_list_messages']);
     const tool = tools[0];
     expect(tool.description).toMatch(/any chat or channel/i);
     expect(tool.description).toMatch(/without opening/i);
@@ -545,7 +545,7 @@ describe('teams_read_conversation', () => {
   });
 });
 
-describe('teams_read_conversation after_message_id (cursor)', () => {
+describe('teams_list_messages after_message_id (cursor)', () => {
   const ids = (data: Record<string, unknown> | undefined) => (data?.messages as Msg[]).map((m) => m.id);
   const at = (min: number) => String(T0 + min * MIN);
 
@@ -694,7 +694,7 @@ describe('teams_read_conversation after_message_id (cursor)', () => {
     const harness = await createTestHarness((server) => registerConversationTools(server, { chatsvc: chatsvcWith() }));
     try {
       const { tools } = await harness.client.listTools();
-      const tool = tools.find((t) => t.name === 'teams_read_conversation')!;
+      const tool = tools.find((t) => t.name === 'teams_list_messages')!;
       expect(tool.description).toMatch(/after_message_id/);
       expect(tool.description).toMatch(/next_cursor/);
       expect(tool.description).toMatch(/fetched_at/);
@@ -706,7 +706,7 @@ describe('teams_read_conversation after_message_id (cursor)', () => {
   });
 });
 
-describe('teams_read_conversation — mark_read', () => {
+describe('teams_list_messages — mark_read', () => {
   const ENV_KEYS = ['MCP_CONFIRM_MODE', 'MCP_CONFIRM_TTL_SECONDS', 'MCP_CONFIRM_SECRET'] as const;
   let savedEnv: Record<string, string | undefined>;
   beforeEach(() => {
@@ -724,10 +724,10 @@ describe('teams_read_conversation — mark_read', () => {
   async function callConfirmed(chatsvc: ChatServiceClient, args: Record<string, unknown>) {
     const harness = await createTestHarness((server) => registerConversationTools(server, { chatsvc }));
     try {
-      const first = await harness.callTool('teams_read_conversation', args);
+      const first = await harness.callTool('teams_list_messages', args);
       const one = first.isError ? undefined : (parseToolResult(first) as Record<string, unknown>);
       if (typeof one?.confirmToken !== 'string') return { first, preview: undefined, data: one };
-      const second = await harness.callTool('teams_read_conversation', { ...args, confirmToken: one.confirmToken });
+      const second = await harness.callTool('teams_list_messages', { ...args, confirmToken: one.confirmToken });
       return { first, preview: one, data: second.isError ? undefined : (parseToolResult(second) as Record<string, unknown>) };
     } finally {
       await harness.close();

@@ -69,7 +69,7 @@ function chatsvcWith(overrides: Record<string, unknown> = {}, convs = CONVS): Ch
 async function call(chatsvc: ChatServiceClient, args: Record<string, unknown> = {}) {
   const harness = await createTestHarness((server) => registerUnreadTools(server, { chatsvc }));
   try {
-    const result = await harness.callTool('teams_get_unread', args);
+    const result = await harness.callTool('teams_list_unread_messages', args);
     return { result, data: result.isError ? undefined : (parseToolResult(result) as Record<string, unknown>) };
   } finally {
     await harness.close();
@@ -94,7 +94,7 @@ const ids = (data: Record<string, unknown> | undefined) => (data?.conversations 
 const entry = (data: Record<string, unknown> | undefined, id: string) =>
   (data?.conversations as Entry[]).find((e) => e.conversation.id === id)!;
 
-describe('teams_get_unread', () => {
+describe('teams_list_unread_messages', () => {
   it('returns every unread conversation, most recent first, with only its unread messages', async () => {
     const chatsvc = chatsvcWith();
     const { data } = await call(chatsvc);
@@ -313,7 +313,7 @@ describe('teams_get_unread', () => {
     const busy = entry(data, GROUP);
     expect(busy.messages?.map((m) => m.text)).toEqual(['unread 5', 'unread 6', 'unread 7']);
     expect(busy.truncated).toMatchObject({ returned: 3 });
-    expect(busy.truncated?.hint).toMatch(/teams_read_conversation/);
+    expect(busy.truncated?.hint).toMatch(/teams_list_messages/);
     expect(busy.unread_count).toBe(3);
   });
 
@@ -728,7 +728,7 @@ describe('teams_get_unread', () => {
     const tools = (await harness.client.listTools()).tools;
     await harness.close();
 
-    expect(tools.map((t) => t.name)).toEqual(['teams_get_unread']);
+    expect(tools.map((t) => t.name)).toEqual(['teams_list_unread_messages']);
     const tool = tools[0];
     expect(tool.description).toMatch(/every unread message/i);
     expect(tool.description).toMatch(/by default this does NOT mark anything read/i);
@@ -770,7 +770,7 @@ describe('teams_get_unread', () => {
   });
 });
 
-describe('teams_get_unread cursors', () => {
+describe('teams_list_unread_messages cursors', () => {
   const at = (min: number) => String(T0 + min * MIN);
   type CursorEntry = Entry & { next_cursor?: string };
 
@@ -908,7 +908,7 @@ describe('teams_get_unread cursors', () => {
   });
 });
 
-describe('teams_get_unread — mark_read', () => {
+describe('teams_list_unread_messages — mark_read', () => {
   const ENV_KEYS = ['MCP_CONFIRM_MODE', 'MCP_CONFIRM_TTL_SECONDS', 'MCP_CONFIRM_SECRET'] as const;
   let savedEnv: Record<string, string | undefined>;
   beforeEach(() => {
@@ -926,10 +926,10 @@ describe('teams_get_unread — mark_read', () => {
   async function callConfirmed(chatsvc: ChatServiceClient, args: Record<string, unknown>) {
     const harness = await createTestHarness((server) => registerUnreadTools(server, { chatsvc }));
     try {
-      const first = await harness.callTool('teams_get_unread', args);
+      const first = await harness.callTool('teams_list_unread_messages', args);
       const one = first.isError ? undefined : (parseToolResult(first) as Record<string, unknown>);
       if (typeof one?.confirmToken !== 'string') return { preview: undefined, data: one };
-      const second = await harness.callTool('teams_get_unread', { ...args, confirmToken: one.confirmToken });
+      const second = await harness.callTool('teams_list_unread_messages', { ...args, confirmToken: one.confirmToken });
       return { preview: one, data: second.isError ? undefined : (parseToolResult(second) as Record<string, unknown>) };
     } finally {
       await harness.close();

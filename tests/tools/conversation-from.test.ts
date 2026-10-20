@@ -1,4 +1,4 @@
-// teams_read_conversation's `from` paging: oldest first from a UTC time, resumable with next_from.
+// teams_list_messages's `from` paging: oldest first from a UTC time, resumable with next_from.
 import { describe, it, expect, vi } from 'vitest';
 import { createTestHarness, parseToolResult } from '@chrischall/mcp-utils/test';
 import { registerConversationTools } from '../../src/tools/conversation.js';
@@ -53,7 +53,7 @@ function chatsvcWith(overrides: Record<string, unknown> = {}): ChatServiceClient
 async function call(chatsvc: ChatServiceClient, args: Record<string, unknown>) {
   const harness = await createTestHarness((server) => registerConversationTools(server, { chatsvc }));
   try {
-    const result = await harness.callTool('teams_read_conversation', args);
+    const result = await harness.callTool('teams_list_messages', args);
     return { result, data: result.isError ? undefined : (parseToolResult(result) as Record<string, unknown>) };
   } finally {
     await harness.close();
@@ -63,7 +63,7 @@ async function call(chatsvc: ChatServiceClient, args: Record<string, unknown>) {
 const errorText = (result: { content?: unknown[] }) => (result.content?.[0] as { text?: string })?.text ?? '';
 const texts = (data: Record<string, unknown> | undefined) => (data?.messages as { text: string }[]).map((m) => m.text);
 
-describe('teams_read_conversation from', () => {
+describe('teams_list_messages from', () => {
   it('returns what arrived at or after from, oldest first, up to limit, with next_from and has_more', async () => {
     const { data } = await call(chatsvcWith(), { conversation: GROUP, from: iso(T0 + 2 * MIN), limit: 2 });
     expect(texts(data)).toEqual(['two', 'three']);

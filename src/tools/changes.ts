@@ -1,5 +1,5 @@
 /**
- * `teams_get_changes` — which conversations got new messages since a cursor,
+ * `teams_list_changed_conversations` — which conversations got new messages since a cursor,
  * across every chat and channel, in one call.
  *
  * The cursor is a time: an opaque base64url `{"t": <epoch ms>}` this tool hands
@@ -14,7 +14,7 @@
  * messages arrived (system events and deleted messages are not counted) and,
  * for a channel, the threads they landed in — including a thread whose root is
  * older than the cursor. Read the messages themselves with
- * `teams_read_conversation`: each row carries the `after_message_id` to pass
+ * `teams_list_messages`: each row carries the `after_message_id` to pass
  * it. That is a message-id cursor, a different kind from this tool's time
  * cursor — a message id IS its arrival ms, so it is the cursor time written as
  * an id, and reads back exactly the messages counted here.
@@ -78,7 +78,7 @@ function badCursor(cursor: string): McpToolError {
   return new McpToolError(`"${cursor}" is not a changes cursor.`, {
     hint:
       "Pass a previous result's next_cursor unchanged, or an ISO 8601 time such as 2026-10-12T09:00:00Z. " +
-      'A message id (digits) is not a changes cursor: pass it to teams_read_conversation as after_message_id.',
+      'A message id (digits) is not a changes cursor: pass it to teams_list_messages as after_message_id.',
   });
 }
 
@@ -174,7 +174,7 @@ async function readChanges(
 
 export function registerChangesTools(server: McpServer, { chatsvc }: Pick<TeamsDeps, 'chatsvc'>): void {
   server.registerTool(
-    'teams_get_changes',
+    'teams_list_changed_conversations',
     {
       title: 'Get Teams conversations with new messages',
       description:
@@ -184,10 +184,10 @@ export function registerChangesTools(server: McpServer, { chatsvc }: Pick<TeamsD
         'new_from_others_count, newest_time and, for a channel, threads: one { root_id, new_root, ' +
         'new_reply_count } per thread the new messages landed in, including a thread whose root post is ' +
         'older than the cursor, and after_message_id: read the messages it counted with ' +
-        'teams_read_conversation({ conversation: <its id>, after_message_id: <its after_message_id> }). ' +
+        'teams_list_messages({ conversation: <its id>, after_message_id: <its after_message_id> }). ' +
         'Two cursor kinds, not interchangeable: this tool\'s cursor/next_cursor is a time token for ' +
-        'teams_get_changes only and is not a message id; after_message_id is a message-id cursor (ids are ' +
-        'arrival ms, so it is the cursor time as an id) for teams_read_conversation (or teams_get_unread ' +
+        'teams_list_changed_conversations only and is not a message id; after_message_id is a message-id cursor (ids are ' +
+        'arrival ms, so it is the cursor time as an id) for teams_list_messages (or teams_list_unread_messages ' +
         'cursors). Without cursor it looks back 24 hours. next_cursor is an opaque token — pass it back as ' +
         'cursor to get only what arrived since this call (cursor also takes a plain ISO 8601 time). It is ' +
         'at-least-once: a conversation can come back again but none is skipped; it stays at the input ' +
@@ -208,9 +208,9 @@ export function registerChangesTools(server: McpServer, { chatsvc }: Pick<TeamsD
           .min(1)
           .optional()
           .describe(
-            "A previous teams_get_changes result's next_cursor, or an ISO 8601 time (e.g. 2026-10-12T09:00:00Z): " +
+            "A previous teams_list_changed_conversations result's next_cursor, or an ISO 8601 time (e.g. 2026-10-12T09:00:00Z): " +
               'only messages that arrived after it count. Default: 24 hours ago. Not a message id, and not ' +
-              "teams_read_conversation's next_cursor.",
+              "teams_list_messages's next_cursor.",
           ),
         kinds: z
           .array(z.enum(Object.keys(KIND_FILTERS) as [KindFilter, ...KindFilter[]]))
@@ -283,7 +283,7 @@ export function registerChangesTools(server: McpServer, { chatsvc }: Pick<TeamsD
           ...rest.map((c) => c.summary),
           ...failed.map((f) => f.summary),
         ]);
-        // The read_conversation hand-off: a message id is its arrival ms, so the cursor time as an id
+        // The list_messages hand-off: a message id is its arrival ms, so the cursor time as an id
         // stops that read exactly where this one stopped counting.
         const after_message_id = String(Math.floor(t));
         const conversations = shown.map(({ read }, i) => ({

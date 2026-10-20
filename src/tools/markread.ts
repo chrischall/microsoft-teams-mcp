@@ -208,13 +208,13 @@ export function registerMarkReadTools(server: McpServer, { chatsvc }: Pick<Teams
       title: 'Mark a Teams conversation read',
       description:
         'Mark a chat or channel read in Teams, clearing its unread badge: moves the signed-in user\'s read ' +
-        'marker up to up_to_message_id (from teams_read_conversation), or by default up to the newest message ' +
-        'in the conversation. conversation is an id or name as for teams_read_conversation; ' +
+        'marker up to up_to_message_id (from teams_list_messages), or by default up to the newest message ' +
+        'in the conversation. conversation is an id or name as for teams_list_messages; ' +
         `"${SELF_CHAT}" (or "notes" / "self") is the user's own notes self-chat — use it to try this tool. ` +
         'The marker never moves backwards: when it is already at or past the target, nothing is written and ' +
         'status is "already_read". Returns the conversation, previous_horizon_message_id (null if it was never ' +
         'opened) and new_horizon_message_id; status "unknown" means Teams did not confirm the move — retrying is ' +
-        'harmless. teams_read_conversation and teams_get_unread can do the same after a read with mark_read. ' +
+        'harmless. teams_list_messages and teams_list_unread_messages can do the same after a read with mark_read. ' +
         CONFIRM_FLOW_SENTENCE +
         ' The preview shows the conversation, the message the marker moves to and where it was. ' +
         CONFIRM_INJECTION_RULE +
@@ -233,7 +233,7 @@ export function registerMarkReadTools(server: McpServer, { chatsvc }: Pick<Teams
           .min(1)
           .optional()
           .describe(
-            'Mark read up to and including this message, as teams_read_conversation lists it (default: the ' +
+            'Mark read up to and including this message, as teams_list_messages lists it (default: the ' +
               'newest message in the conversation). Messages after it stay unread.',
           ),
         confirmToken: confirmTokenParam,
@@ -253,7 +253,7 @@ export function registerMarkReadTools(server: McpServer, { chatsvc }: Pick<Teams
           target = await chatsvc.getMessage(summary.id, up_to_message_id);
           if (target === undefined) {
             throw new McpToolError(`There is no message ${up_to_message_id} in this conversation to mark read up to.`, {
-              hint: 'Take message ids from teams_read_conversation, or leave up_to_message_id out to mark it all read.',
+              hint: 'Take message ids from teams_list_messages, or leave up_to_message_id out to mark it all read.',
             });
           }
         } else {
