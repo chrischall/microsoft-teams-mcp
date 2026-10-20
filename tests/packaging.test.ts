@@ -180,11 +180,14 @@ describe('manifest tool roster', () => {
   /**
    * Tool names follow the list/get rule: list_* returns a collection, get_*
    * returns one item or a single view. The pre-rule names were dropped with no
-   * aliases, so the served roster is exactly the list/get set.
+   * aliases, so the served roster is exactly the list/get set plus the bulk
+   * export (teams_export_messages, which writes files rather than returning
+   * a collection).
    */
-  it('serves exactly the list/get tool names', async () => {
+  it('serves exactly the list/get tool names plus the export', async () => {
     const registered = (await servedTools()).map((t) => t.name).sort();
     expect(registered).toEqual([
+      'teams_export_messages',
       'teams_get_attachment',
       'teams_healthcheck',
       'teams_list_activity',
