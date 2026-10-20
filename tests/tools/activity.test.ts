@@ -3,8 +3,8 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { createTestHarness, parseToolResult } from '@chrischall/mcp-utils/test';
 import { activityKind, ACTIVITY_FEED_ID, registerActivityTools } from '../../src/tools/activity.js';
-import type { RawMessage } from '../../src/chatsvc.js';
-import { DAY, fakeChatsvc, messagesFrom, pinClock } from './fake-chatsvc.js';
+import type { GetMessagesOptions, RawMessage } from '../../src/chatsvc.js';
+import { DAY, fakeChatsvc, ME, messagesFrom, pinClock, rawConv, rawMsg } from './fake-chatsvc.js';
 
 const NOW = 1_760_000_000_000;
 
@@ -102,13 +102,142 @@ describe('teams_get_activity', () => {
     vi.useRealTimers();
   });
 
-  it('reads the 48:notifications conversation directly, never the conversation listing', async () => {
+  it('reads the 48:notifications conversation directly, the listing only to name conversations', async () => {
     pinClock(NOW);
     const { getMessages, chatsvc } = await call([entry({ type: 'mention', subtype: 'person' })]);
 
     expect(getMessages).toHaveBeenCalledWith(ACTIVITY_FEED_ID, expect.anything());
-    expect(chatsvc.listConversations).not.toHaveBeenCalled();
+    expect(chatsvc.listConversations).toHaveBeenCalledTimes(1);
     expect(ACTIVITY_FEED_ID).toBe('48:notifications');
+  });
+
+  describe('names each row\'s conversation as the listing tools do', () => {
+    const GROUP = '19:untitled0001@thread.v2';
+    const MY_OID = ME.slice('8:orgid:'.length);
+    const PEER_OID = '00000000-0000-0000-0000-0000000000c3';
+    const DM = `19:${MY_OID}_${PEER_OID}@unq.gbl.spaces`;
+    const contact = (mri: string) => `https://x/contacts/${mri}`;
+    const said = (conv: string, at: number, name: string, mri: string): RawMessage => ({
+      ...rawMsg(at, { conv, sender: name }),
+      from: contact(mri),
+    });
+    const listing = [rawConv(GROUP, { at: NOW - DAY, sender: 'Moss, Pat' }), rawConv(DM, { at: NOW - DAY, fromMe: true })];
+    const chats: Record<string, RawMessage[]> = {
+      [GROUP]: [said(GROUP, NOW - DAY, 'Moss, Pat', '8:orgid:pat'), said(GROUP, NOW - 2 * DAY, 'Adams, Kim', '8:orgid:kim')],
+      [DM]: [rawMsg(NOW - DAY, { conv: DM, fromMe: true }), said(DM, NOW - 2 * DAY, 'Rivera, Sam', `8:orgid:${PEER_OID}`)],
+    };
+
+    async function callNamed(entries: RawMessage[], overrides: Record<string, unknown> = {}, args: Record<string, unknown> = {}) {
+      const feed = messagesFrom(entries);
+      const getMessages = vi.fn(async (id: string, opts: GetMessagesOptions) =>
+        id === ACTIVITY_FEED_ID ? feed(id, opts) : messagesFrom(chats[id] ?? [])(id, opts),
+      );
+      const chatsvc = fakeChatsvc(listing, { getMessages, ...overrides });
+      const harness = await createTestHarness((server) => registerActivityTools(server, { chatsvc }));
+      try {
+        const result = await harness.callTool('teams_get_activity', args);
+        return { result, data: parseToolResult(result) as Record<string, unknown>, getMessages };
+      } finally {
+        await harness.close();
+      }
+    }
+
+    it('gives an untitled group chat its participant title and a 1:1 the other person\'s name', async () => {
+      pinClock(NOW);
+      const { data } = await callNamed([
+        entry({ type: 'mention', thread: GROUP, topic: '', ago: 1000 }),
+        entry({ type: 'reply', thread: DM, topic: '', ago: 2000 }),
+      ]);
+      const [g, d] = rowsOf(data);
+      expect(g.where).toEqual({
+        conversation_id: GROUP,
+        title: 'Group chat: Adams, Kim; Moss, Pat',
+        type: 'chat',
+        participants: ['Adams, Kim', 'Moss, Pat'],
+      });
+      expect(d.where).toEqual({ conversation_id: DM, title: 'Rivera, Sam', type: 'chat', participants: ['Rivera, Sam'] });
+    });
+
+    it('keeps the feed\'s topic for a conversation the listing does not carry', async () => {
+      pinClock(NOW);
+      const { data } = await callNamed([entry({ type: 'mention', thread: '19:elsewhere@thread.v2', topic: 'Feed Topic' })]);
+      expect(rowsOf(data)[0].where).toEqual({ conversation_id: '19:elsewhere@thread.v2', title: 'Feed Topic', type: 'chat' });
+    });
+
+    it('still returns every row when the listing cannot be read', async () => {
+      pinClock(NOW);
+      const { data, result } = await callNamed([entry({ type: 'mention', thread: GROUP, topic: 'Feed Topic' })], {
+        listConversations: vi.fn().mockRejectedValue(new Error('down')),
+      });
+      expect(result.isError).toBeFalsy();
+      expect(rowsOf(data)[0].where).toEqual({ conversation_id: GROUP, title: 'Feed Topic', type: 'chat' });
+    });
+
+    it('asks for the listing while the feed scan is still running', async () => {
+      pinClock(NOW);
+      let releaseFeed!: () => void;
+      const feedHeld = new Promise<void>((resolve) => {
+        releaseFeed = resolve;
+      });
+      const feed = messagesFrom([entry({ type: 'mention', thread: GROUP, topic: '', ago: 1000 })]);
+      const getMessages = vi.fn(async (id: string, opts: GetMessagesOptions) => {
+        if (id !== ACTIVITY_FEED_ID) return messagesFrom(chats[id] ?? [])(id, opts);
+        await feedHeld;
+        return feed(id, opts);
+      });
+      const chatsvc = fakeChatsvc(listing, { getMessages });
+      const harness = await createTestHarness((server) => registerActivityTools(server, { chatsvc }));
+      const pending = harness.callTool('teams_get_activity', {});
+      pending.catch(() => undefined);
+      try {
+        await vi.waitFor(() => expect(chatsvc.listConversations).toHaveBeenCalledTimes(1));
+        expect(chatsvc.meMri).toHaveBeenCalled();
+        releaseFeed();
+        const data = parseToolResult(await pending) as Record<string, unknown>;
+        expect(rowsOf(data)[0].where?.title).toBe('Group chat: Adams, Kim; Moss, Pat');
+        expect(chatsvc.listConversations).toHaveBeenCalledTimes(1);
+      } finally {
+        releaseFeed();
+        await pending.catch(() => undefined);
+        await harness.close();
+      }
+    });
+
+    it('fails with the feed error, and nothing unhandled, when the feed read fails while the listing is pending', async () => {
+      pinClock(NOW);
+      const unhandled = vi.fn();
+      process.on('unhandledRejection', unhandled);
+      let rejectListing!: (e: Error) => void;
+      const listConversations = vi.fn(
+        () =>
+          new Promise<never>((_, reject) => {
+            rejectListing = reject;
+          }),
+      );
+      const getMessages = vi.fn().mockRejectedValue(new Error('feed down'));
+      const chatsvc = fakeChatsvc(listing, { getMessages, listConversations });
+      const harness = await createTestHarness((server) => registerActivityTools(server, { chatsvc }));
+      try {
+        const result = await harness.callTool('teams_get_activity', {});
+        expect(result.isError).toBe(true);
+        rejectListing(new Error('listing down too'));
+        await new Promise((r) => setTimeout(r, 10));
+        expect(unhandled).not.toHaveBeenCalled();
+      } finally {
+        process.off('unhandledRejection', unhandled);
+        await harness.close();
+      }
+    });
+
+    it('reads titles only for the conversations of the rows returned', async () => {
+      pinClock(NOW);
+      const { getMessages } = await callNamed(
+        [entry({ type: 'mention', thread: GROUP, topic: '', ago: 1000 }), entry({ type: 'reply', thread: DM, topic: '', ago: 2000 })],
+        {},
+        { limit: 1 },
+      );
+      expect(getMessages.mock.calls.map(([id]) => id)).toEqual([ACTIVITY_FEED_ID, GROUP]);
+    });
   });
 
   it('normalises an entry into a row whose ids feed teams_read_conversation', async () => {

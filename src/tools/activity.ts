@@ -15,6 +15,12 @@
  *
  * Reading the feed never writes its read marker: the bell's badge is exactly
  * as it was.
+ *
+ * The feed's `sourceThreadTopic` is empty for an untitled group chat or 1:1,
+ * so each returned row's conversation is named from the listing instead, the
+ * way every other tool names it (`titles.ts`): one listing read plus the
+ * bounded, cached title reads for just those conversations. That naming never
+ * fails the call — the feed's own topic stands in.
  */
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
@@ -25,6 +31,7 @@ import { htmlToText } from '../model.js';
 import { arrivalMs } from './conversation.js';
 import { sinceCutoff, DEFAULT_SINCE_DAYS, MAX_SINCE_DAYS } from './confirm.js';
 import { limitArg, trimRows } from './limit.js';
+import { conversationNamer, type ConversationNamer } from './titles.js';
 import { wrapApiError } from './errors.js';
 import { untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
 
@@ -79,7 +86,13 @@ export interface ActivityRow {
   subtype: string;
   read: boolean;
   from?: string;
-  where: { conversation_id?: string; title?: string; type?: string };
+  /**
+   * The conversation: its id, its title — as the listing tools name it (an
+   * untitled group chat by its participants, a 1:1 by the other person) when
+   * the listing carries it, else the feed's own topic — the feed's thread type,
+   * and a channel's team and an untitled chat's participants when known.
+   */
+  where: { conversation_id?: string; title?: string; type?: string; team?: string; participants?: string[] };
   message_id?: string;
   reply_chain_id?: string;
   preview: string;
@@ -144,6 +157,31 @@ export function activityRow(m: RawMessage): ActivityRow | undefined {
   };
 }
 
+/**
+ * `rows` with each conversation named as the listing tools name it
+ * (`conversationNamer`): only the conversations of the rows returned, and a
+ * conversation the listing does not carry — or a listing that cannot be read —
+ * keeps the feed's own topic.
+ */
+async function nameRows(name: ConversationNamer, rows: ActivityRow[]): Promise<ActivityRow[]> {
+  const names = await name(
+    rows.flatMap((r) => (r.where.conversation_id !== undefined ? [r.where.conversation_id] : [])),
+  );
+  return rows.map((r) => {
+    const n = r.where.conversation_id !== undefined ? names.get(r.where.conversation_id) : undefined;
+    if (n === undefined) return r;
+    return {
+      ...r,
+      where: {
+        ...r.where,
+        title: n.title,
+        ...(n.team !== undefined ? { team: n.team } : {}),
+        ...(n.participants !== undefined ? { participants: n.participants } : {}),
+      },
+    };
+  });
+}
+
 const newestFirst = (a: ActivityRow, b: ActivityRow): number => (b.time ?? '').localeCompare(a.time ?? '');
 
 export function registerActivityTools(server: McpServer, { chatsvc }: Pick<TeamsDeps, 'chatsvc'>): void {
@@ -157,7 +195,9 @@ export function registerActivityTools(server: McpServer, { chatsvc }: Pick<Teams
         'Teams chat-service API, so it works without the Activity view (or any particular view) ' +
         'open in the browser. Each row has id, time (ISO 8601), kind (mention, reaction, reply, ' +
         'meeting, call or other) with the raw type/subtype, read, from (who did it), where ' +
-        '(conversation_id, title, type), message_id, reply_chain_id (a channel thread\'s root, when there is one), ' +
+        '(conversation_id; title — named as teams_list_chats names it, so an untitled group chat is ' +
+        '"Group chat: A; B; C +N" with its participants and a 1:1 is the other person; type; team for a channel), ' +
+        'message_id, reply_chain_id (a channel thread\'s root, when there is one), ' +
         'and a plain-text preview (at most 200 characters). Pass where.conversation_id to ' +
         'teams_read_conversation to read the message in context. unread_only keeps rows the user ' +
         'has not seen; kinds narrows to some buckets; since_days (default 14) sets how far back ' +
@@ -189,6 +229,8 @@ export function registerActivityTools(server: McpServer, { chatsvc }: Pick<Teams
     },
     async ({ unread_only, kinds, since_days, limit }) => {
       try {
+        // The listing that names the rows is read alongside the feed scan, not after it.
+        const name = conversationNamer(chatsvc);
         const cutoff = sinceCutoff(since_days);
         let scanCapped = false;
         const entries = await chatsvc.getMessages(ACTIVITY_FEED_ID, {
@@ -211,8 +253,10 @@ export function registerActivityTools(server: McpServer, { chatsvc }: Pick<Teams
           .filter((r) => wanted === undefined || wanted.has(r.kind))
           .sort(newestFirst);
 
+        const trimmed = trimRows(rows, limit, 'start', MAX_ROWS);
         return untrustedResult({
-          ...trimRows(rows, limit, 'start', MAX_ROWS),
+          ...trimmed,
+          rows: await nameRows(name, trimmed.rows),
           ...(scanCapped
             ? {
                 scan_capped: {

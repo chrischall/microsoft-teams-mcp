@@ -198,7 +198,8 @@ describe('teams_read_conversation with several conversations', () => {
     expect((data?.conversations as Entry[]).map((c) => c.conversation.id)).toEqual([GROUP]);
     const errors = data?.errors as { conversation: string; id?: string; error: string; hint?: string }[];
     expect(errors.map((e) => e.conversation)).toEqual([CHANNEL, 'no such chat']);
-    expect(errors[0]).toMatchObject({ id: CHANNEL });
+    expect(errors[0]).toMatchObject({ id: CHANNEL, title: 'Design', kind: 'channel', team: 'Platform Team' });
+    expect(errors[1]).not.toHaveProperty('title');
     expect(errors[0].error).toMatch(/rate-limiting/);
     expect(errors[1].error).toMatch(/no chat or channel matches/i);
     expect(errors[1].hint).toMatch(/teams_list_chats/);

@@ -300,7 +300,7 @@ describe('teams_list_chats', () => {
       expect(chatsvc.getMessages).toHaveBeenCalledTimes(2);
     });
 
-    it('titles an untitled group chat named in unread_only errors by its participants', async () => {
+    it('titles an untitled group chat named in unread_only errors by its participants, and lists them', async () => {
       const id = UNTITLED[0];
       const unread = [rawConv(id, { at: T0 + 5 * MIN, horizon: T0, sender: 'King, Greg' })];
       const limited = new McpToolError('Teams chat service is rate-limiting requests (429).', { status: 429 });
@@ -316,7 +316,9 @@ describe('teams_list_chats', () => {
 
       expect(data?.errors).toEqual(
         expect.arrayContaining([
-          { conversation: { id, title: `Group chat: King, Greg; ${other(0)}` }, error: expect.stringMatching(/rate-limiting/) },
+          {
+            conversation: { id, title: `Group chat: King, Greg; ${other(0)}`, participants: ['King, Greg', other(0)] },
+            error: expect.stringMatching(/rate-limiting/) },
         ]),
       );
     });

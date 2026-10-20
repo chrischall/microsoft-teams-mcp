@@ -28,6 +28,7 @@ import type { FileAttachment, NormalisedMessage } from '../model.js';
 import { normaliseMessage } from '../model.js';
 import { wrapApiError } from './errors.js';
 import { untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
+import { nameConversations, type ConversationName } from './titles.js';
 
 /**
  * Raw messages read looking for the one asked for (20 pages of 200). The
@@ -65,7 +66,9 @@ export function registerAttachmentTools(
         'embedded resource carrying the bytes. The first file from a given SharePoint host in a ' +
         'session may need opening once in Teams to mint a short-lived token; a file your account ' +
         'cannot open, or one that could not be fetched, comes back as metadata and its open link ' +
-        'instead of failing. Does not mark anything read.' +
+        'instead of failing. Its caption names the conversation beside its id: title (as teams_list_chats ' +
+        'names it — an untitled group chat by its participants, a 1:1 by the other person) and participants. ' +
+        'Does not mark anything read.' +
         UNTRUSTED_DESCRIPTION_SUFFIX,
       annotations: toolAnnotations({ readOnly: true, openWorld: true }),
       inputSchema: {
@@ -95,6 +98,8 @@ export function registerAttachmentTools(
         }
         // Only the attachments are read, so whose message it is does not matter.
         const message = normaliseMessage(raw, '');
+        // Named while the attachment is fetched; naming never throws, so it never fails the call.
+        const naming = nameConversations(chatsvc, [conversation]).then((names) => nameFields(names.get(conversation)));
 
         const image = message.attachments.images.find((i) => i.ref === ref);
         if (image !== undefined) {
@@ -106,6 +111,7 @@ export function registerAttachmentTools(
             ref,
             message_id,
             conversation,
+            ...(await naming),
             sender: message.sender,
             time: message.time,
             mimeType,
@@ -118,7 +124,7 @@ export function registerAttachmentTools(
 
         const file = message.attachments.files.find((f) => f.name === ref);
         if (file !== undefined) {
-          return downloadSharedFile(sharepoint, file, message, { conversation, message_id });
+          return downloadSharedFile(sharepoint, file, message, { conversation, message_id }, naming);
         }
 
         const { images, files } = message.attachments;
@@ -146,6 +152,7 @@ async function downloadSharedFile(
   file: FileAttachment,
   message: NormalisedMessage,
   ids: { conversation: string; message_id: string },
+  naming: Promise<ConversationNameFields>,
 ): Promise<CallToolResult> {
   if (file.url === undefined) {
     return untrustedResult({ ...file, content_available: false, hint: FILE_HINT });
@@ -167,6 +174,7 @@ async function downloadSharedFile(
       time: message.time,
       message_id: ids.message_id,
       conversation: ids.conversation,
+      ...(await naming),
     });
 
     if (mimeType.startsWith('image/')) {
@@ -191,6 +199,14 @@ async function downloadSharedFile(
     // and its link, never as a tool failure (see the docblock).
     return untrustedResult({ ...file, content_available: false, hint: degradeHint(err, hostOf(file.url)) });
   }
+}
+
+/** The conversation's name beside its id in a caption: `title`, and `participants` for an untitled chat. */
+type ConversationNameFields = { title?: string; participants?: string[] };
+
+function nameFields(n: ConversationName | undefined): ConversationNameFields {
+  if (n === undefined) return {};
+  return { title: n.title, ...(n.participants !== undefined ? { participants: n.participants } : {}) };
 }
 
 /** The host of the file's url, for the degrade hint; a stand-in if it will not parse. */

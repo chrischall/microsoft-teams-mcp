@@ -1,13 +1,27 @@
 /**
- * Titles for untitled group chats and 1:1s, made from who is in them.
+ * Names for conversations: untitled group chats and 1:1s titled from who is in
+ * them, and {@link nameConversations} for any tool whose result carries a
+ * conversation id.
  *
  * A group chat with no topic has nothing in the listing to call it by: the
  * listing's stand-in is the last message's sender (`conversationSummary`).
  * Live (2026-10-10, a real tenant) that made 15 different group chats all
  * "King, Greg" — one person who posts everywhere — so a list could not tell
- * them apart and name resolution was always ambiguous. The chat service has no
- * member-list call, but every message carries its sender's name and MRI, so
- * reading a chat's recent messages names the people in it.
+ * them apart and name resolution was always ambiguous.
+ *
+ * This server has no member-list call: nothing in the recorded API notes
+ * (`docs/plans/2026-10-10-chatsvc-api.md`) or the fixtures shows one (a
+ * `threads/{id}` read, say) working with the captured chat-service token, so
+ * none is guessed at. Every message does carry its sender's name and MRI, so
+ * reading a chat's recent messages names the people in it — the members who
+ * WROTE in that sample, not every member.
+ *
+ * The title is a pure function of that sampled set of people: they are sorted
+ * by display name (lower-cased, compared by code unit — no locale rules — and
+ * by MRI on a tie), the first three named and the rest counted as "+N". Who
+ * posted most recently does not move it, so a chat keeps its name from one
+ * message to the next; it changes only when the sample's people do (someone
+ * new writes, or someone's last message ages out of the page read).
  *
  * An untitled 1:1 is named after the other person, whose MRI its id carries
  * (`oneOnOnePeerMri`). The listing has their name only when they sent the last
@@ -34,6 +48,8 @@ import {
   senderMri,
   UNTITLED_GROUP_TITLE,
   UNTITLED_ONE_ON_ONE_TITLE,
+  summariseAll,
+  type ConversationKind,
   type ConversationSummary,
 } from '../model.js';
 
@@ -54,8 +70,9 @@ const NAME_SEPARATOR = '; ';
 export interface GroupTitle {
   title: string;
   /**
-   * Every distinct sender other than the user seen in the messages read, most
-   * recent first — the title names only the first three.
+   * Every distinct sender other than the user seen in the messages read,
+   * sorted by name (see {@link groupTitleFrom}) — the title names only the
+   * first three.
    */
   participants: string[];
 }
@@ -65,29 +82,42 @@ export function isUntitledGroup(c: RawConversation): boolean {
   return conversationKind(c) === 'group' && !c.threadProperties?.topic?.trim();
 }
 
+/** Lower-cased names by code unit, then MRI: the same order on every machine, whatever its locale. */
+export function byNameThenMri(a: { name: string; mri: string }, b: { name: string; mri: string }): number {
+  const x = a.name.toLowerCase();
+  const y = b.name.toLowerCase();
+  if (x !== y) return x < y ? -1 : 1;
+  return a.mri < b.mri ? -1 : a.mri > b.mri ? 1 : 0;
+}
+
 /**
- * The title for a group chat from its messages (newest first): up to three
- * distinct senders other than the user, most recent first, then "+N" for the
- * other distinct senders seen — all of whom are its `participants`. A sender
- * is distinct by MRI and by display name, so one person under two accounts
- * appears once. System events are skipped — their display name is whoever
- * triggered them. `undefined` when no one else wrote.
+ * The title for a group chat from its messages (newest first): its distinct
+ * senders other than the user, sorted by name ({@link byNameThenMri}), the
+ * first three named and the rest counted as "+N" — all of whom are its
+ * `participants`, in that order. Who wrote most recently does not change it:
+ * it depends only on who is in the messages read. A sender is distinct by MRI
+ * (named by their newest message, so a rename shows) and by display name
+ * ignoring case (of two accounts under one name, the lower MRI is kept), so
+ * one person under two accounts appears once. System events are skipped —
+ * their display name is whoever triggered them. `undefined` when no one else
+ * wrote.
  */
 export function groupTitleFrom(messagesNewestFirst: readonly RawMessage[], meMri: string): GroupTitle | undefined {
-  const seenMris = new Set<string>();
-  const seenNames = new Set<string>();
-  const participants: string[] = [];
+  const byMri = new Map<string, string>();
   for (const m of messagesNewestFirst) {
     if (!isUserMessage(m)) continue;
     const mri = senderMri(m.from);
     const name = m.imdisplayname?.trim();
-    if (mri === undefined || mri === meMri || !name) continue;
-    const key = name.toLowerCase();
-    if (seenMris.has(mri) || seenNames.has(key)) continue;
-    seenMris.add(mri);
-    seenNames.add(key);
-    participants.push(name);
+    if (mri === undefined || mri === meMri || !name || byMri.has(mri)) continue;
+    byMri.set(mri, name);
   }
+  const byName = new Map<string, { name: string; mri: string }>();
+  for (const [mri, name] of byMri) {
+    const key = name.toLowerCase();
+    const kept = byName.get(key);
+    if (kept === undefined || mri < kept.mri) byName.set(key, { name, mri });
+  }
+  const participants = [...byName.values()].sort(byNameThenMri).map((p) => p.name);
   if (participants.length === 0) return undefined;
   const named = participants.slice(0, NAMED_PARTICIPANTS);
   const more = participants.length - named.length;
@@ -208,4 +238,74 @@ export async function enrichTitles<T extends ConversationSummary>(
     if (t) return { ...row, title: t.title, participants: t.participants };
     return { ...row, title: row.kind === 'oneOnOne' ? UNTITLED_ONE_ON_ONE_TITLE : UNTITLED_GROUP_TITLE };
   });
+}
+
+/** What a result says a conversation is called: the fields a listing row names it by. */
+export interface ConversationName {
+  id: string;
+  kind: ConversationKind;
+  title: string;
+  team?: string;
+  participants?: string[];
+}
+
+/** `{ participants }` when a (titled) summary has them — an untitled chat's — else nothing, for spreading into a row. */
+export function participantsOf(s: Pick<ConversationSummary, 'participants'>): { participants?: string[] } {
+  return s.participants !== undefined ? { participants: s.participants } : {};
+}
+
+/** The naming fields of a (titled) summary, for a result that carries a conversation by id. */
+export function conversationName(s: Pick<ConversationSummary, 'id' | 'kind' | 'title' | 'team' | 'participants'>): ConversationName {
+  return {
+    id: s.id,
+    kind: s.kind,
+    title: s.title,
+    ...(s.team !== undefined ? { team: s.team } : {}),
+    ...participantsOf(s),
+  };
+}
+
+/** Names for conversation ids, from a listing read that is already under way (see {@link conversationNamer}). */
+export type ConversationNamer = (ids: readonly string[]) => Promise<Map<string, ConversationName>>;
+
+/**
+ * Starts the listing read (conversations and the user's MRI) NOW and returns
+ * a namer that uses it, so a tool can overlap that read with its own work —
+ * the Activity feed scan — rather than waiting for it afterwards. A failed
+ * listing is swallowed as soon as it settles (no unhandled rejection, even
+ * if the namer is never called) and names nothing.
+ */
+export function conversationNamer(chatsvc: ChatServiceClient): ConversationNamer {
+  const listing = Promise.all([chatsvc.listConversations(), chatsvc.meMri()]).then(
+    ([raw, me]) => ({ raw, me }),
+    () => undefined,
+  );
+  return async (ids) => {
+    const out = new Map<string, ConversationName>();
+    const wanted = new Set(ids);
+    if (wanted.size === 0) return out;
+    const read = await listing;
+    if (read === undefined) return out;
+    try {
+      const rows = summariseAll(read.raw, read.me).filter((s) => wanted.has(s.id));
+      for (const s of await enrichTitles(chatsvc, read.raw, read.me, rows)) out.set(s.id, conversationName(s));
+    } catch {
+      // Unnamed, not failed: the caller still has every id.
+    }
+    return out;
+  };
+}
+
+/**
+ * Names for the conversations `ids`, for a tool whose result carries ids it
+ * did not get from the listing (the Activity feed, an attachment): one listing
+ * read, then {@link enrichTitles} on just those conversations, so an untitled
+ * group chat gets its participant title and a 1:1 the other person's name. An
+ * id the listing does not carry is left out. Never throws — a failed listing
+ * names nothing, a failed title read keeps the listing's title — since a name
+ * is never worth failing the call over.
+ */
+export async function nameConversations(chatsvc: ChatServiceClient, ids: readonly string[]): Promise<Map<string, ConversationName>> {
+  if (ids.length === 0) return new Map();
+  return conversationNamer(chatsvc)(ids);
 }

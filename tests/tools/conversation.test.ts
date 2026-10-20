@@ -165,14 +165,14 @@ describe('teams_read_conversation', () => {
     const ambiguous = await call(chatsvc, { conversation: 'king' });
     expect(ambiguous.data?.ambiguous).toBe(true);
     expect((ambiguous.data?.candidates as { title: string }[]).map((c) => c.title)).toContain(
-      'Group chat: King, Greg; Bravo, Bob',
+      'Group chat: Bravo, Bob; King, Greg',
     );
 
     const { data } = await call(chatsvc, { conversation: 'bravo' });
     expect(data?.conversation).toMatchObject({
       id: groups[1],
-      title: 'Group chat: King, Greg; Bravo, Bob',
-      participants: ['King, Greg', 'Bravo, Bob'],
+      title: 'Group chat: Bravo, Bob; King, Greg',
+      participants: ['Bravo, Bob', 'King, Greg'],
     });
   });
 
