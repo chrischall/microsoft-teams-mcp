@@ -168,7 +168,7 @@ export function resolveConversation(
  * share a last sender, or a 1:1 the user wrote in last. The whole-listing
  * titling runs once, however many names the resolver is asked for.
  */
-function listedResolver(
+export function listedResolver(
   chatsvc: ChatServiceClient,
   raw: readonly RawConversation[],
   me: string,

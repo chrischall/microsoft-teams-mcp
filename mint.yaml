@@ -72,6 +72,11 @@ env:
     help: >-
       Default IANA time zone (e.g. America/New_York) for the tz argument of
       the read tools; messages then carry time_local. Unset means UTC only.
+  - name: TEAMS_OUTPUT_DIR
+    required: false
+    help: >-
+      Folder teams_export writes exports into (each export gets its own
+      subfolder). Unset means ~/Downloads/microsoft-teams-mcp.
   - name: TEAMS_SUBSTRATE_TOKEN_FILE
     required: false
     help: >-

@@ -46,6 +46,7 @@
         "TEAMS_SUBSTRATE_TOKEN_FILE": "${user_config.substrate_token_file}",
         "TEAMS_SHAREPOINT_TOKEN_FILE": "${user_config.sharepoint_token_file}",
         "TEAMS_TIME_ZONE": "${user_config.time_zone}",
+        "TEAMS_OUTPUT_DIR": "${user_config.output_dir}",
         "MCP_CONFIRM_MODE": "${user_config.confirm_mode}",
         "MCP_CONFIRM_ELICITATION": "${user_config.confirm_elicitation}",
         "MCP_CONFIRM_TTL_SECONDS": "${user_config.confirm_ttl_seconds}",
@@ -133,6 +134,12 @@
       "description": "Optional. Default IANA time zone (e.g. America/New_York) for the tz argument of teams_list_messages and teams_list_unread_messages: each message then carries time_local next to its UTC time. Leave blank for UTC only.",
       "required": false
     },
+    "output_dir": {
+      "type": "string",
+      "title": "Export folder (optional)",
+      "description": "Optional. Folder teams_export writes exports into (each export gets its own subfolder); a per-call dest must then lie inside it. Leave blank for ~/Downloads/microsoft-teams-mcp.",
+      "required": false
+    },
     "confirm_mode": {
       "type": "string",
       "title": "Write confirmation mode (optional)",
@@ -203,6 +210,10 @@
     {
       "name": "teams_list_activity",
       "description": "Read the Activity feed — mentions, reactions, replies, meeting notices and missed calls across every chat and channel, without opening it"
+    },
+    {
+      "name": "teams_export",
+      "description": "Bulk-export chats and channels to JSONL or Markdown files (local paths, or a download link when hosted) without the messages entering the conversation; resumable"
     },
     {
       "name": "teams_healthcheck",

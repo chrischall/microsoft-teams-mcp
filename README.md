@@ -170,6 +170,7 @@ Everything is optional — by default the token is captured from your browser.
 | `TEAMS_SUBSTRATE_TOKEN_FILE` | Where the captured Substrate search token is cached. Defaults to `~/.microsoft-teams-mcp/substrate-token.json`. `TEAMS_TOKEN_CACHE=false` keeps it in memory too. |
 | `TEAMS_SHAREPOINT_TOKEN_FILE` | Where the captured SharePoint tokens (one per host, used to download shared files) are cached. Defaults to `~/.microsoft-teams-mcp/sharepoint-tokens.json`. `TEAMS_TOKEN_CACHE=false` keeps them in memory too. |
 | `TEAMS_TIME_ZONE` | Default IANA time zone (e.g. `America/New_York`) for the `tz` argument of `teams_list_messages` and `teams_list_unread_messages`: each message then carries `time_local` (ISO 8601 with offset) next to its UTC `time`. Unset means no `time_local` unless `tz` is passed; a name `Intl` does not know is reported as an error. |
+| `TEAMS_OUTPUT_DIR` | Folder `teams_export` writes exports into (each export gets its own timestamped subfolder). Defaults to `~/Downloads/microsoft-teams-mcp`. When set, a per-call `dest` must lie inside it; when unset, `dest` must be under `~/Downloads`, `~/Documents` or `~/Desktop`. |
 | `TEAMS_WS_PORT` | fetchproxy concentrator port. Defaults to `37149`, the fleet-wide shared port. |
 | `FETCHPROXY_WS_HOST` | Bind interface for the bridge (default `127.0.0.1`; a literal IP only, anything else is ignored). Keep on loopback — it exists for ONE topology: a hosted child in its own network namespace. |
 | `FETCHPROXY_IDENTITY_DIR` | Where to store the long-term fetchproxy identity keypair (default `~/.fetchproxy/identity/`; an absolute path only, anything else is ignored). Exists for a host that runs a separate child per caller, so they can share one identity. |
@@ -451,6 +452,37 @@ Everything is optional — by default the token is captured from your browser.
   (default 50, max 200). Read from the chat service, so the Activity view
   does not need to be open; it never marks anything read (`teams_mark_read`
   marks chats and channels read, not the Activity feed).
+- `teams_export` — bulk-export chats and channels to files, so thousands of
+  messages can be archived or searched with shell tools without any of them
+  entering the conversation: the result is only a manifest (where the files
+  are, each file's size and record count, counts, the time span, errors,
+  `has_more` / `cursor`), never a message. One file per conversation, named
+  after it (`<title>-<8-char id hash>.jsonl`; an untitled group chat is named
+  after its participants), plus `manifest.json`. JSONL by default — a header
+  record (`{"_export": {...}}`: source, account, time, arguments, the
+  conversation, and a note that the content is untrusted third-party text),
+  then one record per message, oldest first, each carrying its conversation's
+  `id`, `kind`, `title`, `team` (channels) and `participants` (chats: the
+  people seen writing, other than you) — or `format: "markdown"` for readable
+  transcripts, channels threaded under their root posts. `conversations`
+  (ids or names, one or an array; omit for every conversation), `kinds`
+  (`chat`, `channel`, `meeting`), `since` / `until` (by arrival; default all
+  history), `tz`. Each call stops at `max_items` messages (default 5000, max
+  50000) or `budget_seconds` (default 90, max 600); with `has_more: true`, pass
+  the `cursor` back (alone, or with `max_items` / `budget_seconds`) to continue
+  the SAME export — on disk into the same folder, a conversation split across
+  calls continuing in `<name>.part-0002.jsonl` beside its first file (and
+  `manifest.part-0002.json`). A rejected credential, rate limiting that
+  outlasts three backed-off retries, or a Teams-side failure stops the call
+  early with a cursor, keeping what was written (re-authenticate and resume);
+  a conversation that cannot be read (403/404) is listed in `errors` and
+  skipped. Where the files go depends on the install: a local (stdio) install
+  writes a fresh folder under `dest` → `TEAMS_OUTPUT_DIR` →
+  `~/Downloads/microsoft-teams-mcp` and returns **absolute local paths**; a
+  hosted install (mcp-host sets `MCP_BLOB_BASE_URL` and
+  `MCP_BLOB_SIGNING_KEY`) uploads one zip per call and returns a signed
+  download link that expires after an hour (`url_expires_at`). Never marks
+  anything read.
 - `teams_healthcheck` — resolves the token the way every tool does
   (capturing one on a cold start) and probes the chat service with one
   conversations listing. Reports where the token came from and when it
