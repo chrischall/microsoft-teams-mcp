@@ -1,5 +1,5 @@
 /**
- * `teams_list_chats`' opt-in `search_messages`: a query matched against what
+ * `teams_list_conversations`' opt-in `search_messages`: a query matched against what
  * was said in each chat, not only what the chat is called.
  *
  * The chat service has no search call this server can reach, so each chat no

@@ -90,7 +90,7 @@ const mentionArg = z.object({
 
 /**
  * The conversation a write goes to: `48:notes` (also by the names `notes` /
- * `self`), else an id or name as `teams_read_conversation` resolves it. `verb` words the refusals ("post to",
+ * `self`), else an id or name as `teams_list_messages` resolves it. `verb` words the refusals ("post to",
  * "react in").
  */
 export async function resolveTarget(
@@ -173,7 +173,7 @@ async function quoted(chatsvc: ChatServiceClient, conversationId: string, id: st
   const m = await chatsvc.getMessage(conversationId, id);
   if (m === undefined) {
     throw new McpToolError(`There is no message ${id} in this conversation to quote.`, {
-      hint: 'Take message ids from teams_read_conversation.',
+      hint: 'Take message ids from teams_list_messages.',
     });
   }
   const mri = senderMri(m.from) ?? '';
@@ -189,7 +189,7 @@ async function threadRoot(chatsvc: ChatServiceClient, channelId: string, id: str
   const m = await chatsvc.getMessage(channelId, id);
   if (m === undefined) {
     throw new McpToolError(`There is no post ${id} in this channel to reply under.`, {
-      hint: 'Take the root post\'s id from teams_read_conversation.',
+      hint: 'Take the root post\'s id from teams_list_messages.',
     });
   }
   const replyTo = normaliseMessage(m, me).replyTo;
@@ -213,7 +213,7 @@ function unconfirmedPost(conversation: Target) {
       warning:
         `Teams did not confirm this post (${unknownOutcomeReason(e, { sent: 'the post' })}), ` +
         'so it may already be in the conversation. Check the conversation before retrying ' +
-        '(teams_read_conversation); do not resend blindly.',
+        '(teams_list_messages); do not resend blindly.',
     });
 }
 
@@ -223,8 +223,8 @@ export function registerSendTools(server: McpServer, { chatsvc }: Pick<TeamsDeps
     {
       title: 'Send a Teams message',
       description:
-        'Post a message as the signed-in user to any chat or channel, by id (from teams_list_chats / ' +
-        'teams_list_teams_and_channels) or by name. text is plain text: it is escaped, newlines are kept, ' +
+        'Post a message as the signed-in user to any chat or channel, by id (from teams_list_conversations / ' +
+        'teams_list_channels) or by name. text is plain text: it is escaped, newlines are kept, ' +
         'and :key: shortcodes (e.g. :smile:, :1f389_partypopper:) become Teams emoji. reply_to in a ' +
         'channel posts into that root post\'s thread; in a chat it quote-replies that message. quote ' +
         'quote-replies a message in any conversation. mentions @-mention people: name_in_text must appear ' +

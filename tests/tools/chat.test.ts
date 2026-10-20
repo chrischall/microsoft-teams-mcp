@@ -54,7 +54,7 @@ function chatsvcWith(convs = CONVS, byId: Record<string, RawMessage[] | Error> =
 async function call(chatsvc: ChatServiceClient, args: Record<string, unknown> = {}) {
   const harness = await createTestHarness((server) => registerChatTools(server, { chatsvc }));
   try {
-    const result = await harness.callTool('teams_list_chats', args);
+    const result = await harness.callTool('teams_list_conversations', args);
     return { result, data: result.isError ? undefined : (parseToolResult(result) as Record<string, unknown>) };
   } finally {
     await harness.close();
@@ -63,7 +63,7 @@ async function call(chatsvc: ChatServiceClient, args: Record<string, unknown> = 
 
 type Row = { id: string; kind: string; title: string; unread: boolean; unread_confirmed: boolean; unread_count?: number };
 
-describe('teams_list_chats', () => {
+describe('teams_list_conversations', () => {
   it('lists every chat (group, meeting, 1:1) from the API, newest activity first, without channels', async () => {
     const { data } = await call(fakeChatsvc(CONVS));
     const chats = data?.chats as Row[];
@@ -718,14 +718,14 @@ describe('teams_list_chats', () => {
     });
   });
 
-  it('says it covers every chat and that ids feed teams_read_conversation', async () => {
+  it('says it covers every chat and that ids feed teams_list_messages', async () => {
     const harness = await createTestHarness((server) => registerChatTools(server, { chatsvc: fakeChatsvc() }));
-    const tool = (await harness.client.listTools()).tools.find((t) => t.name === 'teams_list_chats');
+    const tool = (await harness.client.listTools()).tools.find((t) => t.name === 'teams_list_conversations');
 
     expect(tool?.description).toMatch(/every chat/i);
-    expect(tool?.description).toMatch(/teams_read_conversation/);
+    expect(tool?.description).toMatch(/teams_list_messages/);
     expect(tool?.description).toMatch(/unread_confirmed: false/);
-    expect(tool?.description).toMatch(/teams_get_unread/);
+    expect(tool?.description).toMatch(/teams_list_unread_messages/);
     expect(tool?.annotations?.readOnlyHint).toBe(true);
     expect(Object.keys((tool?.inputSchema as { properties?: object }).properties ?? {}).sort()).toEqual([
       'limit',
@@ -744,10 +744,10 @@ describe('teams_list_chats', () => {
     await harness.close();
   });
 
-  it('registers only teams_list_chats (the open-chat DOM reader is gone)', async () => {
+  it('registers only teams_list_conversations (the open-chat DOM reader is gone)', async () => {
     const harness = await createTestHarness((server) => registerChatTools(server, { chatsvc: fakeChatsvc() }));
 
-    expect((await harness.client.listTools()).tools.map((t) => t.name)).toEqual(['teams_list_chats']);
+    expect((await harness.client.listTools()).tools.map((t) => t.name)).toEqual(['teams_list_conversations']);
     await harness.close();
   });
 });

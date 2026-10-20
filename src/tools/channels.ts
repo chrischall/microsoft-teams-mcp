@@ -1,5 +1,5 @@
 /**
- * `teams_list_teams_and_channels` — every channel the user is in, read from
+ * `teams_list_channels` — every channel the user is in, read from
  * the Teams chat-service API, so no Teams view has to be open. A channel's
  * team is named only when the team's own thread is in the listing (see
  * `conversationSummary`); otherwise `team` is absent and it sorts last.
@@ -43,7 +43,7 @@ function byTeamThenTitle(a: ConversationSummary, b: ConversationSummary): number
 
 export function registerChannelTools(server: McpServer, { chatsvc }: Pick<TeamsDeps, 'chatsvc'>): void {
   server.registerTool(
-    'teams_list_teams_and_channels',
+    'teams_list_channels',
     {
       title: 'List Teams channels',
       description:
@@ -51,7 +51,7 @@ export function registerChannelTools(server: McpServer, { chatsvc }: Pick<TeamsD
         'name then channel title. Each has an id, title, team (when Teams makes it ' +
         'determinable), unread hint, last-activity time (ISO 8601), and a last-message preview ' +
         'and sender. Channels the user has hidden in Teams are listed after the rest with ' +
-        'hidden: true. Pass an id (or the channel name) to teams_read_conversation to read its ' +
+        'hidden: true. Pass an id (or the channel name) to teams_list_messages to read its ' +
         'posts and replies. Use unread_only for channels with real posts the user has not read, ' +
         'each confirmed by reading past the read marker (a channel that is gone or no longer ' +
         'readable is skipped and counted in skipped_unreachable); hidden channels are left out ' +

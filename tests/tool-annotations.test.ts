@@ -42,10 +42,10 @@ describe('every tool declares what it does', () => {
       .map((t) => t.name)
       .sort();
     expect(writes).toEqual([
-      'teams_get_unread',
+      'teams_list_messages',
+      'teams_list_unread_messages',
       'teams_mark_read',
       'teams_react',
-      'teams_read_conversation',
       'teams_send_message',
     ]);
   });
@@ -70,7 +70,7 @@ describe('every tool declares what it does', () => {
     });
   });
 
-  it.each(['teams_mark_read', 'teams_read_conversation', 'teams_get_unread'])(
+  it.each(['teams_mark_read', 'teams_list_messages', 'teams_list_unread_messages'])(
     'publishes %s as non-destructive and idempotent (the read marker only moves forwards)',
     async (name) => {
       const tool = (await servedTools()).find((t) => t.name === name);

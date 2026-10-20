@@ -126,8 +126,8 @@ export function registerReactTools(server: McpServer, { chatsvc }: Pick<TeamsDep
       title: 'React to a Teams message',
       description:
         'Add (or, with remove: true, withdraw) the signed-in user\'s reaction on a message in any chat or ' +
-        'channel. conversation is an id or name as for teams_read_conversation; message_id comes from ' +
-        'teams_read_conversation. reaction is an emoji or name — thumbsup/👍/like, heart/❤️, laugh/😆, ' +
+        'channel. conversation is an id or name as for teams_list_messages; message_id comes from ' +
+        'teams_list_messages. reaction is an emoji or name — thumbsup/👍/like, heart/❤️, laugh/😆, ' +
         `surprised/😮, sad/😢, angry/😡, checkmark/✅ — or any raw Teams reaction key (e.g. fire, ` +
         '1f389_partypopper); an emoji without a known key is refused with the rule for spelling its key. ' +
         `conversation "${SELF_CHAT}" (or "notes" / "self") is the user's own notes self-chat — use it to try this tool. Everyone ` +
@@ -147,7 +147,7 @@ export function registerReactTools(server: McpServer, { chatsvc }: Pick<TeamsDep
             `The conversation id (or "${SELF_CHAT}" — also by the name "notes" or "self" — for the self-chat), ` +
               "or a case-insensitive substring of the chat title, channel name, team name or an untitled chat's participant names.",
           ),
-        message_id: z.string().min(1).describe('The message to react to, as teams_read_conversation lists it.'),
+        message_id: z.string().min(1).describe('The message to react to, as teams_list_messages lists it.'),
         reaction: z.string().min(1).describe('An emoji (👍), a name (thumbsup) or a Teams reaction key (like, 1f389_partypopper).'),
         remove: z.boolean().optional().describe('Withdraw this reaction instead of adding it (default false).'),
         confirmToken: confirmTokenParam,
@@ -162,7 +162,7 @@ export function registerReactTools(server: McpServer, { chatsvc }: Pick<TeamsDep
         const m = await chatsvc.getMessage(target.id, message_id);
         if (m === undefined) {
           throw new McpToolError(`There is no message ${message_id} in this conversation to react to.`, {
-            hint: 'Take message ids from teams_read_conversation.',
+            hint: 'Take message ids from teams_list_messages.',
           });
         }
         const already = normaliseMessage(m, me).reactions?.some((r) => r.key === key && r.byMe) ?? false;
@@ -235,7 +235,7 @@ export function registerReactTools(server: McpServer, { chatsvc }: Pick<TeamsDep
             warning:
               `Teams did not confirm this change (${why}), and reading the message back ` +
               `${readBackFailed ? 'failed' : verified === null ? 'did not find it' : `did not show the reaction ${shown}`} — ` +
-              'check the message (teams_read_conversation) before retrying.',
+              'check the message (teams_list_messages) before retrying.',
           });
         }
 
@@ -243,13 +243,13 @@ export function registerReactTools(server: McpServer, { chatsvc }: Pick<TeamsDep
         if (unconfirmed !== undefined) {
           warning = `Teams did not confirm this change, but reading the message back shows the reaction ${shown}.`;
         } else if (readBackFailed) {
-          warning = 'Teams accepted the change, but reading the message back failed — check the message (teams_read_conversation).';
+          warning = 'Teams accepted the change, but reading the message back failed — check the message (teams_list_messages).';
         } else if (verified === null) {
           warning =
             'Teams accepted the change, but the message was not found on reading it back (it may have been deleted) — ' +
-            'check the conversation (teams_read_conversation).';
+            'check the conversation (teams_list_messages).';
         } else if (!verified) {
-          warning = `Teams accepted the change, but reading the message back did not show the reaction ${shown} — check the message (teams_read_conversation); the key may not be one Teams knows.`;
+          warning = `Teams accepted the change, but reading the message back did not show the reaction ${shown} — check the message (teams_list_messages); the key may not be one Teams knows.`;
         }
         return untrustedResult({
           status: remove ? 'removed' : 'reacted',

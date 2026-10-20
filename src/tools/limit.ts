@@ -84,7 +84,7 @@ export interface LimitedStopAt {
 }
 
 /**
- * The `stopAt` behind `teams_read_conversation` and `teams_get_unread`. It
+ * The `stopAt` behind `teams_list_messages` and `teams_list_unread_messages`. It
  * sees each message once, newest first, so it can count: the first wanted
  * message past `limit` is the boundary, and its existence is what says the
  * result was truncated. `horizon` (when given) ends the read at the first

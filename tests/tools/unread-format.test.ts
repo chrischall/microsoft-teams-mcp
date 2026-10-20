@@ -1,4 +1,4 @@
-// teams_get_unread's output-size modes (format).
+// teams_list_unread_messages's output-size modes (format).
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { createTestHarness, parseToolResult } from '@chrischall/mcp-utils/test';
 import { registerUnreadTools } from '../../src/tools/unread.js';
@@ -44,7 +44,7 @@ function chatsvcWith(): ChatServiceClient {
 async function call(args: Record<string, unknown> = {}) {
   const harness = await createTestHarness((server) => registerUnreadTools(server, { chatsvc: chatsvcWith() }));
   try {
-    const result = await harness.callTool('teams_get_unread', args);
+    const result = await harness.callTool('teams_list_unread_messages', args);
     return { result, data: result.isError ? undefined : (parseToolResult(result) as Record<string, unknown>) };
   } finally {
     await harness.close();
@@ -55,7 +55,7 @@ type Entry = Record<string, unknown> & { conversation: Record<string, unknown> &
 const entry = (data: Record<string, unknown> | undefined, id: string) =>
   (data?.conversations as Entry[]).find((e) => e.conversation.id === id)!;
 
-describe('teams_get_unread format', () => {
+describe('teams_list_unread_messages format', () => {
   it('defaults to full, the same as format "full"', async () => {
     const { data } = await call();
     const full = await call({ format: 'full' });

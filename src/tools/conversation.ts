@@ -1,5 +1,5 @@
 /**
- * `teams_read_conversation` — read any chat or channel, by id or name, from
+ * `teams_list_messages` — read any chat or channel, by id or name, from
  * the Teams chat-service API. Nothing has to be open in the browser, and by
  * default the read marker is never written, so the user's unread badges are
  * untouched; `mark_read` (confirm-gated, as `teams_mark_read` is) moves it up
@@ -96,7 +96,7 @@ function describeCandidate(s: ConversationSummary): string {
 /**
  * A name that matched several conversations. It is an `McpToolError` — the
  * write tools let it through, as a write must never guess — that also carries
- * every match, so `teams_read_conversation` can return the candidates as data.
+ * every match, so `teams_list_messages` can return the candidates as data.
  */
 export class AmbiguousConversationError extends McpToolError {
   constructor(
@@ -151,7 +151,7 @@ export function resolveConversation(
   const matches = matchConversations(summaries, conversation);
   if (matches.length === 0) {
     throw new McpToolError(`No chat or channel matches "${conversation}".`, {
-      hint: 'List them with teams_list_chats or teams_list_teams_and_channels and pass an id.',
+      hint: 'List them with teams_list_conversations or teams_list_channels and pass an id.',
     });
   }
   if (matches.length > 1) throw new AmbiguousConversationError(conversation, matches, verb);
@@ -452,12 +452,12 @@ async function readMany(
 
 export function registerConversationTools(server: McpServer, { chatsvc }: Pick<TeamsDeps, 'chatsvc'>): void {
   server.registerTool(
-    'teams_read_conversation',
+    'teams_list_messages',
     {
       title: 'Read a Teams chat or channel',
       description:
         'Read the messages of any chat or channel the signed-in user is in, by id (from ' +
-        'teams_list_chats / teams_list_teams_and_channels) or by name, without opening it in ' +
+        'teams_list_conversations / teams_list_channels) or by name, without opening it in ' +
         'Teams. "48:notes" (or the name "notes" / "self") is the user\'s own notes self-chat. Messages come oldest first, each with id, time (UTC, ISO 8601), sender, fromMe, ' +
         'text (never truncated; table cells separated by " | "), subject, edited/deleted flags and attachments; a channel is returned as threads, ' +
         'each root post with its replies. A root older than the window is fetched and marked outside_window: ' +
@@ -469,8 +469,8 @@ export function registerConversationTools(server: McpServer, { chatsvc }: Pick<T
         'unread_count only covers what limit/since/after_message_id let through). after_message_id returns only ' +
         'messages newer than that id; next_cursor is the newest returned message id (or after_message_id ' +
         'when nothing is new) — pass it back as after_message_id to read only what arrived since. ' +
-        'after_message_id takes message-id cursors only: to read what teams_get_changes counted, pass that ' +
-        "row's after_message_id, never teams_get_changes' next_cursor (a time token for teams_get_changes). " +
+        'after_message_id takes message-id cursors only: to read what teams_list_changed_conversations counted, pass that ' +
+        "row's after_message_id, never teams_list_changed_conversations' next_cursor (a time token for teams_list_changed_conversations). " +
         CURSOR_NO_CACHE_DESCRIPTION +
         FORMAT_DESCRIPTION +
         `conversation may also be an array of up to ${MAX_CONVERSATIONS} ids/names: the result is then ` +
@@ -564,7 +564,7 @@ export function registerConversationTools(server: McpServer, { chatsvc }: Pick<T
             if (skip === undefined && advancesHorizon(conv, newest)) plans.push({ summary, previous: horizonMessageId(conv), target: newest });
           }
           if (plans.length > 0) {
-            const gate = await confirmMarks(ctx, { tool: 'teams_read_conversation', me, plans, confirmToken });
+            const gate = await confirmMarks(ctx, { tool: 'teams_list_messages', me, plans, confirmToken });
             if (gate) return gate;
           }
           marks = await applyMarks(chatsvc, plans);

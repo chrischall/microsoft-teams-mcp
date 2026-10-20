@@ -168,7 +168,7 @@ export function registerSearchTools(
         'Find messages by text across the chats and channels the signed-in user is in. Hits come ' +
         'newest first, each with its conversation (id, title, kind, team) and the message (id, time ' +
         'ISO 8601, sender, fromMe (scan only), text, subject, replyTo for a channel reply); read a hit in context ' +
-        'with teams_read_conversation. conversation narrows to one chat or channel (id or name); from ' +
+        'with teams_list_messages. conversation narrows to one chat or channel (id or name); from ' +
         'keeps messages whose sender display name contains it; since (ISO 8601) sets how far back to ' +
         `look (default the last ${DEFAULT_SINCE_DAYS} days); limit caps the hits (default ` +
         `${DEFAULT_LIMIT}, max ${MAX_LIMIT}; total_hits and truncated say when there were more). ` +

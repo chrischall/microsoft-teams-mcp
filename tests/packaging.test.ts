@@ -175,6 +175,29 @@ describe('manifest tool roster', () => {
       expect(t.description, `${t.name} needs a description`).toBeTruthy();
     }
   });
+
+  /**
+   * Tool names follow the list/get rule: list_* returns a collection, get_*
+   * returns one item or a single view. The pre-rule names were dropped with no
+   * aliases, so the served roster is exactly the list/get set.
+   */
+  it('serves exactly the list/get tool names', async () => {
+    const registered = (await servedTools()).map((t) => t.name).sort();
+    expect(registered).toEqual([
+      'teams_get_attachment',
+      'teams_healthcheck',
+      'teams_list_activity',
+      'teams_list_changed_conversations',
+      'teams_list_channels',
+      'teams_list_conversations',
+      'teams_list_messages',
+      'teams_list_unread_messages',
+      'teams_mark_read',
+      'teams_react',
+      'teams_search_messages',
+      'teams_send_message',
+    ]);
+  });
 });
 
 /**

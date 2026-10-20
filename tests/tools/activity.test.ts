@@ -1,4 +1,4 @@
-// teams_get_activity over the chat service's `48:notifications` conversation.
+// teams_list_activity over the chat service's `48:notifications` conversation.
 // Every fixture is invented: names, ids and text are placeholders.
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { createTestHarness, parseToolResult } from '@chrischall/mcp-utils/test';
@@ -70,7 +70,7 @@ async function call(entries: RawMessage[], args: Record<string, unknown> = {}) {
   const chatsvc = fakeChatsvc([], { getMessages });
   const harness = await createTestHarness((server) => registerActivityTools(server, { chatsvc }));
   try {
-    const result = await harness.callTool('teams_get_activity', args);
+    const result = await harness.callTool('teams_list_activity', args);
     return { result, data: parseToolResult(result) as Record<string, unknown>, getMessages, chatsvc };
   } finally {
     await harness.close();
@@ -97,7 +97,7 @@ describe('activityKind', () => {
   });
 });
 
-describe('teams_get_activity', () => {
+describe('teams_list_activity', () => {
   afterEach(() => {
     vi.useRealTimers();
   });
@@ -135,7 +135,7 @@ describe('teams_get_activity', () => {
       const chatsvc = fakeChatsvc(listing, { getMessages, ...overrides });
       const harness = await createTestHarness((server) => registerActivityTools(server, { chatsvc }));
       try {
-        const result = await harness.callTool('teams_get_activity', args);
+        const result = await harness.callTool('teams_list_activity', args);
         return { result, data: parseToolResult(result) as Record<string, unknown>, getMessages };
       } finally {
         await harness.close();
@@ -187,7 +187,7 @@ describe('teams_get_activity', () => {
       });
       const chatsvc = fakeChatsvc(listing, { getMessages });
       const harness = await createTestHarness((server) => registerActivityTools(server, { chatsvc }));
-      const pending = harness.callTool('teams_get_activity', {});
+      const pending = harness.callTool('teams_list_activity', {});
       pending.catch(() => undefined);
       try {
         await vi.waitFor(() => expect(chatsvc.listConversations).toHaveBeenCalledTimes(1));
@@ -218,7 +218,7 @@ describe('teams_get_activity', () => {
       const chatsvc = fakeChatsvc(listing, { getMessages, listConversations });
       const harness = await createTestHarness((server) => registerActivityTools(server, { chatsvc }));
       try {
-        const result = await harness.callTool('teams_get_activity', {});
+        const result = await harness.callTool('teams_list_activity', {});
         expect(result.isError).toBe(true);
         rejectListing(new Error('listing down too'));
         await new Promise((r) => setTimeout(r, 10));
@@ -240,7 +240,7 @@ describe('teams_get_activity', () => {
     });
   });
 
-  it('normalises an entry into a row whose ids feed teams_read_conversation', async () => {
+  it('normalises an entry into a row whose ids feed teams_list_messages', async () => {
     pinClock(NOW);
     const { data } = await call([
       entry({
@@ -323,7 +323,7 @@ describe('teams_get_activity', () => {
       registerActivityTools(server, { chatsvc: fakeChatsvc([], { getMessages }) }),
     );
 
-    const data = parseToolResult(await harness.callTool('teams_get_activity')) as Record<string, unknown>;
+    const data = parseToolResult(await harness.callTool('teams_list_activity')) as Record<string, unknown>;
 
     expect(rowsOf(data).map((r) => r.preview)).toEqual(['newer', 'older']);
     await harness.close();
@@ -459,7 +459,7 @@ describe('teams_get_activity', () => {
     });
     const harness = await createTestHarness((server) => registerActivityTools(server, { chatsvc }));
 
-    const result = await harness.callTool('teams_get_activity');
+    const result = await harness.callTool('teams_list_activity');
 
     expect(result.isError).toBe(true);
     const text = (result.content?.[0] as { text?: string })?.text ?? '';
@@ -471,7 +471,7 @@ describe('teams_get_activity', () => {
   it('takes only optional arguments: unread_only, kinds, since_days and limit', async () => {
     const harness = await createTestHarness((server) => registerActivityTools(server, { chatsvc: fakeChatsvc() }));
 
-    const tool = (await harness.client.listTools()).tools.find((t) => t.name === 'teams_get_activity');
+    const tool = (await harness.client.listTools()).tools.find((t) => t.name === 'teams_list_activity');
     const schema = tool?.inputSchema as { properties?: Record<string, unknown>; required?: string[] };
 
     expect(Object.keys(schema.properties ?? {}).sort()).toEqual(['kinds', 'limit', 'since_days', 'unread_only']);
@@ -481,10 +481,10 @@ describe('teams_get_activity', () => {
 
   it('is read-only and says it needs no Activity view and marks nothing read', async () => {
     const harness = await createTestHarness((server) => registerActivityTools(server, { chatsvc: fakeChatsvc() }));
-    const tool = (await harness.client.listTools()).tools.find((t) => t.name === 'teams_get_activity');
+    const tool = (await harness.client.listTools()).tools.find((t) => t.name === 'teams_list_activity');
 
     expect(tool?.annotations?.readOnlyHint).toBe(true);
-    expect(tool?.description).toMatch(/teams_read_conversation/);
+    expect(tool?.description).toMatch(/teams_list_messages/);
     expect(tool?.description).toMatch(/does NOT mark anything read/);
     expect(tool?.description).not.toMatch(/bell icon in the left nav\) open|requires the user's browser/i);
     await harness.close();

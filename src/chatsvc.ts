@@ -118,13 +118,13 @@ function outcomeUnknown(method: string, e: unknown, hint: string): unknown {
 }
 
 const SEND_OUTCOME_HINT =
-  'The message may already have been posted — check the conversation (teams_read_conversation) before retrying; do not resend blindly.';
+  'The message may already have been posted — check the conversation (teams_list_messages) before retrying; do not resend blindly.';
 
 const REACTION_OUTCOME_HINT =
-  'The reaction change may already have been applied — check the message (teams_read_conversation) before retrying.';
+  'The reaction change may already have been applied — check the message (teams_list_messages) before retrying.';
 
 const HORIZON_OUTCOME_HINT =
-  'The read marker may already have moved — check the conversation (teams_read_conversation) before retrying; ' +
+  'The read marker may already have moved — check the conversation (teams_list_messages) before retrying; ' +
   'moving it again to the same message is harmless.';
 
 /** The last message a conversation listing carries. Every field is a string from the wire. */

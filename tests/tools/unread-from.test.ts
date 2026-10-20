@@ -1,4 +1,4 @@
-// teams_get_unread's `from` paging: every unread message since a UTC time, across conversations, oldest first.
+// teams_list_unread_messages's `from` paging: every unread message since a UTC time, across conversations, oldest first.
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { createTestHarness, parseToolResult } from '@chrischall/mcp-utils/test';
 import { McpToolError } from '@chrischall/mcp-utils';
@@ -58,7 +58,7 @@ function chatsvcWith(overrides: Record<string, unknown> = {}, convs = CONVS): Ch
 async function call(chatsvc: ChatServiceClient, args: Record<string, unknown> = {}) {
   const harness = await createTestHarness((server) => registerUnreadTools(server, { chatsvc }));
   try {
-    const result = await harness.callTool('teams_get_unread', args);
+    const result = await harness.callTool('teams_list_unread_messages', args);
     return { result, data: result.isError ? undefined : (parseToolResult(result) as Record<string, unknown>) };
   } finally {
     await harness.close();
@@ -69,7 +69,7 @@ const errorText = (result: { content?: unknown[] }) => (result.content?.[0] as {
 type Flat = { conversation_id: string; text: string; replyTo?: string };
 const texts = (data: Record<string, unknown> | undefined) => (data?.messages as Flat[]).map((m) => m.text);
 
-describe('teams_get_unread from', () => {
+describe('teams_list_unread_messages from', () => {
   it('returns every unread message since from across conversations, oldest first, as one list', async () => {
     const { data } = await call(chatsvcWith(), { from: iso(T0) });
     // group a and dm a share a millisecond: ties go by conversation id.

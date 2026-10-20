@@ -1,5 +1,5 @@
 /**
- * `teams_get_unread` — every message the user has not read, across all their
+ * `teams_list_unread_messages` — every message the user has not read, across all their
  * chats and channels, in one call, from the Teams chat-service API.
  *
  * One listing nominates candidates (activity past the read horizon, or no
@@ -115,7 +115,7 @@ const TRUNCATED_SKIP: MarkSkip = {
   hint:
     'The read marker was left where it was: per_conversation_limit cut this read, so unread messages older ' +
     `than those returned were not returned. Read again with a larger per_conversation_limit (max ${MAX_PER_CONVERSATION}) ` +
-    'or with teams_read_conversation (unread_only) to mark it read, or use teams_mark_read to mark it all read deliberately.',
+    'or with teams_list_messages (unread_only) to mark it read, or use teams_mark_read to mark it all read deliberately.',
 };
 
 /** Newest activity first; a conversation with no messages at all sorts last. */
@@ -227,7 +227,7 @@ const NOT_WITH_FROM = ['since_days', 'cursors', 'per_conversation_limit', 'max_c
 
 export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDeps, 'chatsvc'>): void {
   server.registerTool(
-    'teams_get_unread',
+    'teams_list_unread_messages',
     {
       title: 'Get unread Teams messages',
       description:
@@ -251,7 +251,7 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
         'otherwise). Chats the user muted in Teams (muted: true) are left out too and counted in ' +
         'muted_skipped, without being read; include_muted adds them. ' +
         'Unread conversations past max_conversations are listed by id, title and unread_count in ' +
-        'more_unread_conversations; read one with teams_read_conversation. A conversation that ' +
+        'more_unread_conversations; read one with teams_list_messages. A conversation that ' +
         'could not be read is listed in errors and the rest still come back. total_unread covers ' +
         'every unread conversation found; total_unread_exact is false when a per-conversation ' +
         'limit truncated or a read failed. cursors ({ conversationId: messageId }) returns only unread ' +
@@ -455,7 +455,7 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
             if (advancesHorizon(conv, target)) plans.push({ summary, previous: horizonMessageId(conv), target });
           }
           if (plans.length > 0) {
-            const gate = await confirmMarks(ctx, { tool: 'teams_get_unread', me, plans, confirmToken });
+            const gate = await confirmMarks(ctx, { tool: 'teams_list_unread_messages', me, plans, confirmToken });
             if (gate) return gate;
           }
           marks = await applyMarks(chatsvc, plans);
@@ -486,7 +486,7 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
                   hint:
                     `Only the newest ${messages.length} unread messages were returned; pass a larger ` +
                     `per_conversation_limit (max ${MAX_PER_CONVERSATION}) or read the conversation ` +
-                    'with teams_read_conversation (unread_only).',
+                    'with teams_list_messages (unread_only).',
                 },
               }
             : {}),

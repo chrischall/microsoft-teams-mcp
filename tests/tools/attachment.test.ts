@@ -247,7 +247,7 @@ describe('teams_get_attachment', () => {
 
     expect(result.isError).toBe(true);
     expect(errorText(result)).toMatch(/message .* not found/i);
-    expect(errorText(result)).toMatch(/teams_read_conversation/);
+    expect(errorText(result)).toMatch(/teams_list_messages/);
   });
 
   it('errors when the message has no attachment with that ref or name', async () => {
