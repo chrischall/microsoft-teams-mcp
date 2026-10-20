@@ -16,6 +16,7 @@ import { registerMarkReadTools } from '../src/tools/markread.js';
 import { registerActivityTools } from '../src/tools/activity.js';
 import { registerSearchTools } from '../src/tools/search.js';
 import { registerHealthcheckTool } from '../src/tools/healthcheck.js';
+import { registerExportTools } from '../src/tools/export.js';
 
 export async function servedTools() {
   const deps = {
@@ -37,6 +38,7 @@ export async function servedTools() {
     registerActivityTools(server, deps);
     registerSearchTools(server, deps);
     registerHealthcheckTool(server, deps);
+    registerExportTools(server, deps);
   });
   try {
     return (await h.client.listTools()).tools;

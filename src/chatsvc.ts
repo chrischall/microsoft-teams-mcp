@@ -235,6 +235,12 @@ export interface GetMessagesOptions {
    * `stopAt` boundary or the start of the history — i.e. there may be more.
    */
   onCapped?: () => void;
+  /**
+   * Called between pages — after page `pages` is read (with `messages`
+   * collected so far) and before the next is requested. A long read reports
+   * progress here; a throw ends the read with that error and fetches nothing more.
+   */
+  onPage?: (pages: number, messages: number) => void | Promise<void>;
 }
 
 export interface ChatServiceClientOptions {
@@ -409,6 +415,7 @@ export class ChatServiceClient {
       }
       if (stopped) return out;
       url = this.#nextLink(body);
+      if (url !== undefined) await opts.onPage?.(page + 1, out.length);
     }
     return out;
   }

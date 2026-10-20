@@ -42,7 +42,7 @@ const MAX_RAW_MESSAGES = 4000;
  * this the bounded read in `SharePointClient` aborts and the file degrades to
  * metadata + link — a file this big belongs behind its link, not in a result.
  */
-const MAX_FILE_BYTES = 25 * 1024 * 1024;
+export const MAX_FILE_BYTES = 25 * 1024 * 1024;
 
 const FILE_HINT =
   'A shared file is downloaded from SharePoint and returned as its contents (an image as an image, ' +
@@ -210,7 +210,7 @@ function nameFields(n: ConversationName | undefined): ConversationNameFields {
 }
 
 /** The host of the file's url, for the degrade hint; a stand-in if it will not parse. */
-function hostOf(url: string): string {
+export function hostOf(url: string): string {
   try {
     return new URL(url).hostname;
   } catch {
@@ -219,12 +219,13 @@ function hostOf(url: string): string {
 }
 
 /**
- * Why a shared file degraded to metadata + link, as a user-facing hint.
+ * Why a shared file degraded to metadata + link, as a user-facing hint (also
+ * why `teams_export_messages` skipped one).
  * `SharePointClient` throws `McpToolError`s carrying `status`/`kind`/`hint`; a
  * token-capture failure arrives as a plain `Error`. Branch on structure, not
  * message text (fleet convention).
  */
-function degradeHint(err: unknown, host: string): string {
+export function degradeHint(err: unknown, host: string): string {
   if (errorStatusOf(err) === 403) {
     return (
       `Your account cannot open this file, or it is on a SharePoint host (${host}) your captured ` +

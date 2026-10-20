@@ -17,6 +17,7 @@ import { registerMarkReadTools } from './tools/markread.js';
 import { registerActivityTools } from './tools/activity.js';
 import { registerSearchTools } from './tools/search.js';
 import { registerHealthcheckTool } from './tools/healthcheck.js';
+import { registerExportTools } from './tools/export.js';
 
 loadDotenvSafely();
 
@@ -53,6 +54,7 @@ await runMcp({
     registerMarkReadTools,
     registerActivityTools,
     registerSearchTools,
+    registerExportTools,
     registerHealthcheckTool,
   ],
 });

@@ -377,6 +377,27 @@ describe('getMessages', () => {
     expect(onCapped).toHaveBeenCalledTimes(1);
   });
 
+  it('calls onPage between pages, and a throw from it stops the read before the next page', async () => {
+    const onPage = vi.fn();
+    const fetchImpl = pagedFetch();
+    await client(fetchImpl).getMessages(CONV, { max: 100, onPage });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(onPage).toHaveBeenCalledTimes(1);
+    expect(onPage).toHaveBeenCalledWith(1, 2);
+
+    const stopping = pagedFetch();
+    const stop = new Error('budget spent');
+    await expect(
+      client(stopping).getMessages(CONV, {
+        max: 100,
+        onPage: () => {
+          throw stop;
+        },
+      }),
+    ).rejects.toBe(stop);
+    expect(stopping).toHaveBeenCalledTimes(1);
+  });
+
   it('reports hitting max through onCapped', async () => {
     const onCapped = vi.fn();
     await client(pagedFetch()).getMessages(CONV, { max: 3, onCapped });
