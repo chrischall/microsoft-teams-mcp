@@ -106,6 +106,25 @@ describe('matchesQuery', () => {
 });
 
 describe('teams_search_messages', () => {
+  it('names an untitled group chat in a hit by its participants, as the listing tools do', async () => {
+    pinClock(NOW);
+    const UNTITLED = '19:untitled0001@thread.v2';
+    const convs = [rawConv(UNTITLED, { at: NOW - MIN, sender: 'Bob Example' })];
+    const msgs = {
+      [UNTITLED]: [
+        { ...rawMsg(NOW - 10 * MIN, { text: 'deploy done', sender: 'Ada Example', conv: UNTITLED }), from: 'https://x/contacts/8:orgid:ada' },
+        rawMsg(NOW - MIN, { text: 'ok', sender: 'Bob Example', conv: UNTITLED }),
+      ],
+    };
+    const { data } = await call(fakeChatsvc(convs, { getMessages: perConversation(msgs) }), { query: 'deploy' });
+    expect((data?.hits as Hit[])[0].conversation).toEqual({
+      id: UNTITLED,
+      title: 'Group chat: Ada Example; Bob Example',
+      kind: 'group',
+      participants: ['Ada Example', 'Bob Example'],
+    });
+  });
+
   it('finds matching user messages across conversations, newest first, from the last 30 days', async () => {
     pinClock(NOW);
     const { data } = await call(chatsvcWith(), { query: 'deploy' });

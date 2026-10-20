@@ -193,13 +193,18 @@ Everything is optional — by default the token is captured from your browser.
   recent first, ignoring favorites and pinned) or `title` (alphabetical,
   case-insensitive — this titles every untitled chat in the listing before
   `limit` applies, so it reads more than the other orders). A group chat with no topic is titled after
-  who is in it — `Group chat: <up to three recent senders other than you,
-  most recent first>` plus `+N` for more, with every recent sender in
-  `participants` — rather than after whoever posted last, so chats that
-  share a last sender stay distinguishable. The chat service has no member
-  list, so this reads up to 30 recent messages (one small page) of each such
-  chat returned (four at a time, cached until a new message arrives); if that
-  read fails, the chat keeps its last-sender title. A 1:1 is titled by the
+  who is in it — `Group chat: <the first three recent senders other than
+  you, sorted by name>` plus `+N` for more, with every recent sender in
+  `participants` in the same order — rather than after whoever posted last,
+  so chats that share a last sender stay distinguishable, and a chat keeps
+  its title when someone different posts next. This server has no member-list
+  call, so this reads up to 30 recent messages (one small page) of each such
+  chat returned (four at a time, cached until a new message arrives) and
+  names the people who wrote in them; the title changes only when that set
+  of people does. If the read fails, the chat keeps its last-sender title.
+  Every other tool that returns a conversation names it the same way: the
+  Activity feed's `where`, an attachment's caption, search hits, read errors,
+  and the conversation a send, reaction or mark-read targets. A 1:1 is titled by the
   other person (its id names them) and carries them as its one
   `participants` entry — read from their recent messages when you sent the
   last one, `(1:1 chat)` if they wrote nothing recently. `query` matches such
@@ -287,7 +292,8 @@ Everything is optional — by default the token is captured from your browser.
   a time; an ambiguous name takes its place in `conversations` as the same
   `{ambiguous: true, query, match_count, candidates, hint}` object a single
   read returns, one that cannot be resolved or read is listed in `errors`
-  with its reason, and the rest still come back. A single string returns
+  with its reason (and, once it resolved, its `id`, `title`, `kind`, `team`
+  and `participants`), and the rest still come back. A single string returns
   exactly the shape above.
   By default it does not mark anything read; `mark_read: true` also moves
   your read marker up to the newest message returned (never backwards;
@@ -426,14 +432,20 @@ Everything is optional — by default the token is captured from your browser.
   SharePoint token captured per SharePoint host, so the first file from a given
   host may need [opening once in Teams](#sharepoint-file-download) to mint it; a
   file your account cannot open, or one that could not be fetched, comes back as
-  metadata and its open link instead of failing.
+  metadata and its open link instead of failing. The caption names the
+  conversation beside its id (`title`, plus `participants` for an untitled
+  chat), titled as `teams_list_chats` titles it.
 - `teams_get_activity` — the Activity feed (the bell icon), newest first:
   mentions (including @team / @everyone), reactions, replies, meeting
   notices and missed calls across every chat and channel. Each row has its
   time (ISO 8601), `kind` (`mention`, `reaction`, `reply`, `meeting`, `call`
   or `other`) with Teams' raw type/subtype, whether you have seen it, who
-  did it, where (`conversation_id`, title, type), the `message_id` and a
-  plain-text preview — pass `where.conversation_id` to
+  did it, where (`conversation_id`, `title`, `type`, and `team` /
+  `participants` when known), the `message_id` and a plain-text preview. The
+  feed carries no name for an untitled group chat or 1:1, so `title` is
+  taken from the conversations listing and titled as `teams_list_chats` titles
+  it (one listing read plus cached title reads for the rows returned; if that
+  fails the feed's own topic stands in) — pass `where.conversation_id` to
   `teams_read_conversation` to read it in context. Filter with
   `unread_only`, `kinds` and `since_days` (default 14, max 3650); `limit`
   (default 50, max 200). Read from the chat service, so the Activity view

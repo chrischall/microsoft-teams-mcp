@@ -37,7 +37,7 @@ import {
   type ConversationSummary,
 } from '../model.js';
 import { confirmedSummary } from './confirm.js';
-import { enrichTitles } from './titles.js';
+import { conversationName, enrichTitles, type ConversationName } from './titles.js';
 import { wrapApiError } from './errors.js';
 import { untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
 import { DEFAULT_LIMIT, limitArg, makeLimitedStopAt, sinceArg } from './limit.js';
@@ -374,20 +374,22 @@ async function readOne(
 }
 
 /** One `conversation` of a multi-conversation read that could not be resolved or read. */
-interface ReadError {
+interface ReadError extends Partial<ConversationName> {
   /** The argument as passed. */
   conversation: string;
-  /** The conversation it resolved to, when it got that far. */
-  id?: string;
   error: string;
   hint?: string;
 }
 
-function readError(conversation: string, err: unknown, id?: string): ReadError {
+/**
+ * A failed read, as `errors` lists it: the argument as passed and, once it
+ * resolved, the conversation's id and name (title, kind, team, participants).
+ */
+function readError(conversation: string, err: unknown, resolved?: ConversationSummary): ReadError {
   const e = wrapApiError(err, 'read this conversation');
   return {
     conversation,
-    ...(id !== undefined ? { id } : {}),
+    ...(resolved !== undefined ? conversationName(resolved) : {}),
     error: e.message,
     ...(e.hint !== undefined ? { hint: e.hint } : {}),
   };
@@ -434,7 +436,7 @@ async function readMany(
     try {
       return { ok: true as const, result: await readOne(chatsvc, raw, me, slot.summary, opts) };
     } catch (err) {
-      return { ok: false as const, error: readError(slot.asked, err, slot.summary.id) };
+      return { ok: false as const, error: readError(slot.asked, err, slot.summary) };
     }
   });
   const results: (ReadOne | AmbiguousRead)[] = [];
@@ -475,6 +477,7 @@ export function registerConversationTools(server: McpServer, { chatsvc }: Pick<T
         '{ conversations: [...], errors, fetched_at }, one single-read result per conversation (the other ' +
         'arguments apply to each); an ambiguous name takes its place among them as the same { ambiguous: true, ' +
         '... } object a single read returns, and one that cannot be resolved or read is listed in errors ' +
+        '(the argument as passed and, once it resolved, its id, title, kind, team and participants) ' +
         'while the rest still come back. ' +
         FROM_DESCRIPTION +
         'With from, limit keeps the OLDEST messages, unread_only pages only unread ones, and since, ' +

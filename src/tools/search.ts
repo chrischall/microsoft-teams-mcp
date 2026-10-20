@@ -56,7 +56,7 @@ import {
 import type { SubstrateMessage, SubstrateSearch } from '../substrate.js';
 import { arrivalMs, resolveListed } from './conversation.js';
 import { CONFIRM_CONCURRENCY, isUnreachable } from './confirm.js';
-import { enrichTitles } from './titles.js';
+import { conversationName, enrichTitles, participantsOf, type ConversationName } from './titles.js';
 import { wrapApiError } from './errors.js';
 import { untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
 
@@ -132,7 +132,7 @@ type SubstrateHitMessage = Omit<HitMessage, 'id' | 'time' | 'edited' | 'time_loc
 };
 
 interface Hit {
-  conversation: Pick<ConversationSummary, 'id' | 'title' | 'kind' | 'team'>;
+  conversation: ConversationName;
   message: HitMessage | SubstrateHitMessage;
 }
 
@@ -141,8 +141,9 @@ function hitMessage(m: NormalisedMessage): HitMessage {
   return rest;
 }
 
+/** A hit's conversation: its id and its name — title, kind, team, and an untitled chat's participants. */
 function hitConversation(s: ConversationSummary): Hit['conversation'] {
-  return { id: s.id, title: s.title, kind: s.kind, ...(s.team !== undefined ? { team: s.team } : {}) };
+  return conversationName(s);
 }
 
 /** What both paths are asked for. */
@@ -533,7 +534,7 @@ async function scanSearch(
       conversations_not_scanned: notScanned,
       messages_scanned: messagesScanned,
       skipped_unreachable: unreachable,
-      ...(partial.length > 0 ? { partially_scanned: partial.map((s) => ({ id: s.id, title: final(s).title })) } : {}),
+      ...(partial.length > 0 ? { partially_scanned: partial.map((s) => ({ id: s.id, title: final(s).title, ...participantsOf(final(s)) })) } : {}),
       ...(leftOut
         ? {
             hint:

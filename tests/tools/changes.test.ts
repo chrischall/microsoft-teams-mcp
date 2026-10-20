@@ -364,7 +364,7 @@ describe('teams_get_changes', () => {
     const { data } = await call(chatsvcWith(), { limit: 2 });
     expect(ids(data)).toEqual([CHANNEL, GROUP]);
     expect(data?.more_conversations).toEqual([
-      expect.objectContaining({ id: DM, new_message_count: 1 }),
+      expect.objectContaining({ id: DM, title: 'Example Friend', participants: ['Example Friend'], new_message_count: 1 }),
     ]);
     expect(data?.total_new_messages).toBe(4 + 3 + 1);
     // Every changed conversation was read, so the cursor still covers them all.

@@ -114,6 +114,20 @@ describe('newestMessageId', () => {
 });
 
 describe('teams_mark_read — confirm gate', () => {
+  it('names an untitled group chat by its participants in the preview and the result', async () => {
+    const UNTITLED = '19:untitled0001@thread.v2';
+    const msgs = MSGS.map((m) => (m.imdisplayname === 'Bea Example' ? { ...m, from: 'https://x/contacts/8:orgid:bea' } : m));
+    const { chatsvc } = chatsvcWith(
+      { listConversations: vi.fn().mockResolvedValue([rawConv(UNTITLED, { at: T0 + 4 * MIN, horizon: T0 + 2 * MIN, sender: 'Bea Example' })]) },
+      msgs,
+    );
+    const { preview, data } = await markConfirmed(chatsvc, { conversation: UNTITLED });
+    const title = 'Group chat: Bea Example; Example Person';
+    const participants = ['Bea Example', 'Example Person'];
+    expect(fenced(preview?.preview?.conversation)).toEqual({ id: UNTITLED, title, kind: 'group', participants });
+    expect(payload(data).conversation).toMatchObject({ id: UNTITLED, title, participants });
+  });
+
   it('phase 1 previews the conversation, the message and the marker move, and writes nothing', async () => {
     const { chatsvc, setConsumptionHorizon } = chatsvcWith();
     const h = await harnessFor(chatsvc);

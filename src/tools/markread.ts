@@ -154,6 +154,7 @@ export async function confirmMarks(
           id: p.summary.id,
           title: p.summary.title,
           kind: p.summary.kind,
+          ...(p.summary.participants !== undefined ? { participants: p.summary.participants } : {}),
           previous_horizon_message_id: p.previous,
           up_to_message_id: p.target,
         })),
@@ -286,7 +287,12 @@ export function registerMarkReadTools(server: McpServer, { chatsvc }: Pick<Teams
           // The client time in the body is minted when the marker moves, so it is not bound.
           request: { method: 'PUT', path: horizonPath(summary.id) },
           preview: {
-            conversation: untrustedField({ id: summary.id, title: summary.title, kind: summary.kind }),
+            conversation: untrustedField({
+              id: summary.id,
+              title: summary.title,
+              kind: summary.kind,
+              ...(summary.participants !== undefined ? { participants: summary.participants } : {}),
+            }),
             up_to_message: untrustedField({
               id: to,
               sender: target.imdisplayname?.trim() || senderMri(target.from) || 'unknown',

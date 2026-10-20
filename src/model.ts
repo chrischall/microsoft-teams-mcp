@@ -60,8 +60,9 @@ export interface ConversationSummary {
   lastSender?: string;
   /**
    * An untitled group chat's distinct recent senders other than the user,
-   * most recent first — its title names the first three (see
-   * `tools/titles.ts`) — or an untitled 1:1's other person. Absent until the
+   * sorted by name — its title names the first three, so it does not move
+   * when someone else posts last (see `tools/titles.ts`) — or an untitled
+   * 1:1's other person. Absent until the
    * listing or a read of its messages found someone.
    */
   participants?: string[];

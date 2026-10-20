@@ -50,7 +50,7 @@ import {
   sinceDaysArg,
 } from './confirm.js';
 import { GROUP_TITLE_DESCRIPTION, includeHiddenArg, isUnreadCandidateFor, MATCH_REASON_DESCRIPTION } from './listing.js';
-import { enrichTitles } from './titles.js';
+import { enrichTitles, participantsOf } from './titles.js';
 import { wrapApiError } from './errors.js';
 import { untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
 import { resolveTimeZone, TIME_ZONE_DESCRIPTION, tzArg } from './timezone.js';
@@ -519,6 +519,7 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
                 more_unread_conversations: rest.map(({ summary, read }) => ({
                   id: summary.id,
                   title: summary.title,
+                  ...participantsOf(summary),
                   unread_count: read.messages.length,
                 })),
               }

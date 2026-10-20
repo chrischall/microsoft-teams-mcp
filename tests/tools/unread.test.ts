@@ -147,7 +147,7 @@ describe('teams_get_unread', () => {
     ];
     const { data } = await call(fakeChatsvc(convs, { getMessages: perConversation({ [UNTITLED]: msgs }) }));
     const [c] = data?.conversations as { conversation: { title: string; participants?: string[] } }[];
-    expect(c.conversation).toMatchObject({ title: 'Group chat: King, Greg; Alpha, Ann', participants: ['King, Greg', 'Alpha, Ann'] });
+    expect(c.conversation).toMatchObject({ title: 'Group chat: Alpha, Ann; King, Greg', participants: ['Alpha, Ann', 'King, Greg'] });
   });
 
   it('never fetches a conversation that is read up to date, or whose last message is the user\'s', async () => {
@@ -255,6 +255,25 @@ describe('teams_get_unread', () => {
     // Every candidate is confirmed, so the rest are counted too.
     expect(data?.total_unread).toBe(1 + 3 + 2 + 1);
     expect(chatsvc.getMessages).toHaveBeenCalledTimes(4);
+  });
+
+  it('names an untitled group chat in more_unread_conversations by its participants', async () => {
+    const UNTITLED = '19:untitled0001@thread.v2';
+    const convs = [
+      rawConv(GROUP, { topic: 'Project Falcon', at: T0 + 9 * MIN, horizon: T0 }),
+      rawConv(UNTITLED, { at: T0 + 4 * MIN, horizon: T0, sender: 'King, Greg' }),
+    ];
+    const msgs: Record<string, RawMessage[]> = {
+      [GROUP]: [rawMsg(T0 + 9 * MIN, { conv: GROUP })],
+      [UNTITLED]: [
+        { ...rawMsg(T0 + MIN, { conv: UNTITLED, sender: 'Alpha, Ann' }), from: 'https://x/contacts/8:orgid:ann' },
+        rawMsg(T0 + 4 * MIN, { conv: UNTITLED, sender: 'King, Greg' }),
+      ],
+    };
+    const { data } = await call(fakeChatsvc(convs, { getMessages: perConversation(msgs) }), { max_conversations: 1 });
+    expect(data?.more_unread_conversations).toEqual([
+      { id: UNTITLED, title: 'Group chat: Alpha, Ann; King, Greg', participants: ['Alpha, Ann', 'King, Greg'], unread_count: 2 },
+    ]);
   });
 
   it('never lists an unconfirmed candidate in more_unread_conversations', async () => {

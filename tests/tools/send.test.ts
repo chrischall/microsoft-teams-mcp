@@ -298,7 +298,12 @@ describe('teams_send_message — conversation', () => {
     const h = await harnessFor(chatsvc);
     try {
       const first = parseToolResult<PhaseOne>(await h.callTool('teams_send_message', { conversation: 'sam two', text: 'hi' }));
-      expect(fenced(first.preview?.conversation)).toEqual({ id: UNTITLED[1], title: 'Group chat: Bea Example; Sam Two', kind: 'group' });
+      expect(fenced(first.preview?.conversation)).toEqual({
+        id: UNTITLED[1],
+        title: 'Group chat: Bea Example; Sam Two',
+        kind: 'group',
+        participants: ['Bea Example', 'Sam Two'],
+      });
       expect(sendMessage).not.toHaveBeenCalled();
     } finally {
       await h.close();

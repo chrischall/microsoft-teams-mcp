@@ -45,7 +45,7 @@ import {
 } from '../model.js';
 import { isUnreachable } from './confirm.js';
 import { includeHiddenArg } from './listing.js';
-import { enrichTitles } from './titles.js';
+import { enrichTitles, participantsOf } from './titles.js';
 import { wrapApiError } from './errors.js';
 import { untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
 import { CURSOR_NO_CACHE_DESCRIPTION } from './cursor.js';
@@ -298,6 +298,7 @@ export function registerChangesTools(server: McpServer, { chatsvc }: Pick<TeamsD
         const more = rest.map(({ read }, i) => ({
           id: titled[shown.length + i].id,
           title: titled[shown.length + i].title,
+          ...participantsOf(titled[shown.length + i]),
           new_message_count: read.count,
           after_message_id,
         }));

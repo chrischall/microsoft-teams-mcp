@@ -122,9 +122,10 @@ export const MATCH_REASON_DESCRIPTION =
 
 /** Description text on how an untitled group chat or 1:1 is titled. */
 export const GROUP_TITLE_DESCRIPTION =
-  'A group chat with no topic is titled "Group chat: " and up to three of its recent senders other ' +
-  'than the user, most recent first ("; " between names, "+N" for more), and carries every such ' +
-  'recent sender as participants; it is "(untitled group chat)" when no one else wrote recently. ' +
+  'A group chat with no topic is titled "Group chat: " and the first three of its recent senders other ' +
+  'than the user, sorted by name ("; " between names, "+N" for more) — so it does not change when a ' +
+  'different person posts last — and carries every such recent sender, in that order, as participants; ' +
+  'it is "(untitled group chat)" when no one else wrote recently. ' +
   'A 1:1 is titled by the other person, who is its one participant; it is "(1:1 chat)" when they ' +
   'wrote nothing recently.'
 

@@ -1,7 +1,15 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { ChatServiceClient, GetMessagesOptions, RawConversation, RawMessage } from '../../src/chatsvc.js';
 import { summariseAll } from '../../src/model.js';
-import { enrichTitles, groupTitleFrom, isUntitledGroup, TITLE_FETCH_MESSAGES, TITLE_PAGE_SIZE } from '../../src/tools/titles.js';
+import {
+  byNameThenMri,
+  enrichTitles,
+  groupTitleFrom,
+  isUntitledGroup,
+  nameConversations,
+  TITLE_FETCH_MESSAGES,
+  TITLE_PAGE_SIZE,
+} from '../../src/tools/titles.js';
 import { fakeChatsvc, ME, messagesFrom, rawConv, rawMsg } from './fake-chatsvc.js';
 
 const T0 = 1_760_000_000_000;
@@ -37,20 +45,53 @@ function chatsvcWith(convs: RawConversation[], byId: Record<string, RawMessage[]
 }
 
 describe('groupTitleFrom', () => {
-  it('names up to three distinct other senders, most recent first, and counts the rest as +N', () => {
+  it('names the first three distinct other senders by name, and counts the rest as +N', () => {
     const msgs = [
-      from('Ann', T0 + 6),
-      from('Bob', T0 + 5),
-      from('Ann', T0 + 4),
+      from('Ed', T0 + 6),
+      from('Cy', T0 + 5),
+      from('Ed', T0 + 4),
       mine(T0 + 3),
-      from('Cy', T0 + 2),
+      from('Bob', T0 + 2),
       from('Di', T0 + 1),
-      from('Ed', T0),
+      from('Ann', T0),
     ];
     expect(groupTitleFrom(msgs, ME)).toEqual({
       title: 'Group chat: Ann; Bob; Cy +2',
       participants: ['Ann', 'Bob', 'Cy', 'Di', 'Ed'],
     });
+  });
+
+  it('is the same for the same people whoever wrote most recently', () => {
+    const people = ['Zhou, Li', 'Adams, Kim', 'Moss, Pat', 'Baker, Jo', 'Diaz, Al'];
+    const titles = new Set<string>();
+    for (let shift = 0; shift < people.length; shift++) {
+      const order = [...people.slice(shift), ...people.slice(0, shift)];
+      const msgs = order.map((name, i) => from(name, T0 + 10 - i));
+      const t = groupTitleFrom(msgs, ME)!;
+      titles.add(t.title);
+      expect(t.participants).toEqual(['Adams, Kim', 'Baker, Jo', 'Diaz, Al', 'Moss, Pat', 'Zhou, Li']);
+    }
+    expect([...titles]).toEqual(['Group chat: Adams, Kim; Baker, Jo; Diaz, Al +2']);
+  });
+
+  it('sorts case-insensitively and without locale rules', () => {
+    const msgs = [from('bob', T0 + 3), from('Émile', T0 + 2), from('Zed', T0 + 1), from('Ann', T0)];
+    // Code-unit order of the lower-cased names: no locale puts "é" between "b" and "z" here.
+    expect(groupTitleFrom(msgs, ME)?.participants).toEqual(['Ann', 'bob', 'Zed', 'Émile']);
+  });
+
+  it('keeps the same one of two accounts with one name, whichever wrote last', () => {
+    const a = { ...from('Ann', T0 + 2), from: FROM('8:orgid:aaa') };
+    const b = { ...from('ANN', T0 + 1), from: FROM('8:orgid:bbb') };
+    const newerB = { ...b, id: String(T0 + 3) };
+    expect(groupTitleFrom([a, b], ME)?.participants).toEqual(['Ann']);
+    expect(groupTitleFrom([newerB, a], ME)?.participants).toEqual(['Ann']);
+  });
+
+  it('names a renamed person by the name on their newest message', () => {
+    const mri = FROM('8:orgid:sam');
+    const msgs = [{ ...from('Rivera, Sam', T0 + 2), from: mri }, { ...from('Sam R', T0 + 1), from: mri }];
+    expect(groupTitleFrom(msgs, ME)).toEqual({ title: 'Group chat: Rivera, Sam', participants: ['Rivera, Sam'] });
   });
 
   it('counts two senders with the same display name once, even under different MRIs', () => {
@@ -66,6 +107,23 @@ describe('groupTitleFrom', () => {
 
   it('is undefined when nobody but the user wrote', () => {
     expect(groupTitleFrom([mine(T0 + 1), mine(T0)], ME)).toBeUndefined();
+  });
+});
+
+describe('byNameThenMri', () => {
+  it('orders by lower-cased name, then by MRI when the names match', () => {
+    const people = [
+      { name: 'ann', mri: '8:orgid:b' },
+      { name: 'Bob', mri: '8:orgid:a' },
+      { name: 'ANN', mri: '8:orgid:a' },
+      { name: 'ann', mri: '8:orgid:b' },
+    ];
+    expect([...people].sort(byNameThenMri)).toEqual([
+      { name: 'ANN', mri: '8:orgid:a' },
+      { name: 'ann', mri: '8:orgid:b' },
+      { name: 'ann', mri: '8:orgid:b' },
+      { name: 'Bob', mri: '8:orgid:a' },
+    ]);
   });
 });
 
@@ -138,7 +196,7 @@ describe('enrichTitles', () => {
     const moved = [rawConv(GROUPS[0], { at: T0 + MIN })];
     vi.mocked(chatsvc.getMessages).mockImplementation(perConversation({ [GROUPS[0]]: [from('Bob', T0 + MIN), from('Ann', T0)] }));
     const [row] = await enrichTitles(chatsvc, moved, ME, summariseAll(moved, ME));
-    expect(row.title).toBe('Group chat: Bob; Ann');
+    expect(row.title).toBe('Group chat: Ann; Bob');
     expect(chatsvc.getMessages).toHaveBeenCalledTimes(2);
   });
 
@@ -150,7 +208,7 @@ describe('enrichTitles', () => {
     await enrichTitles(chatsvc, conv, ME, summariseAll(conv, ME));
     vi.mocked(chatsvc.getMessages).mockImplementation(perConversation({ [GROUPS[0]]: [from('Bob', T0 + MIN), from('Ann', T0)] }));
     const [row] = await enrichTitles(chatsvc, conv, ME, summariseAll(conv, ME));
-    expect(row.title).toBe('Group chat: Bob; Ann');
+    expect(row.title).toBe('Group chat: Ann; Bob');
     expect(chatsvc.getMessages).toHaveBeenCalledTimes(2);
 
     const noLast: RawConversation[] = [bare];
@@ -170,6 +228,20 @@ describe('enrichTitles', () => {
     vi.mocked(chatsvc.getMessages).mockImplementation(perConversation({ [GROUPS[0]]: [from('Ann', T0)] }));
     const [again] = await enrichTitles(chatsvc, conv, ME, summariseAll(conv, ME));
     expect(again.title).toBe('Group chat: Ann');
+  });
+
+  it('keeps a chat\'s title when someone else in it posts last', async () => {
+    const conv = [rawConv(GROUPS[0], { at: T0, sender: 'Cy' })];
+    const chatsvc = chatsvcWith(conv, { [GROUPS[0]]: [from('Cy', T0), from('Ann', T0 - MIN), from('Bob', T0 - 2 * MIN)] });
+    const [first] = await enrichTitles(chatsvc, conv, ME, summariseAll(conv, ME));
+    const moved = [rawConv(GROUPS[0], { at: T0 + MIN, sender: 'Ann' })];
+    vi.mocked(chatsvc.getMessages).mockImplementation(
+      perConversation({ [GROUPS[0]]: [from('Ann', T0 + MIN), from('Cy', T0), from('Bob', T0 - 2 * MIN)] }),
+    );
+    const [second] = await enrichTitles(chatsvc, moved, ME, summariseAll(moved, ME));
+    expect(chatsvc.getMessages).toHaveBeenCalledTimes(2);
+    expect(first).toMatchObject({ title: 'Group chat: Ann; Bob; Cy', participants: ['Ann', 'Bob', 'Cy'] });
+    expect(second).toMatchObject({ title: first.title, participants: first.participants });
   });
 
   it('falls back to "(untitled group chat)" when only the user wrote', async () => {
@@ -236,5 +308,49 @@ describe('enrichTitles for 1:1 chats', () => {
     const [row] = await enrichTitles(chatsvc, conv, ME, summariseAll(conv, ME).filter((s) => s.id === DM));
     expect(row.title).toBe('Planning');
     expect(chatsvc.getMessages).not.toHaveBeenCalled();
+  });
+});
+
+describe('nameConversations', () => {
+  const MY_OID = ME.slice('8:orgid:'.length);
+  const PEER_OID = '00000000-0000-0000-0000-0000000000c3';
+  const DM = `19:${MY_OID}_${PEER_OID}@unq.gbl.spaces`;
+  const TEAM = '19:team0001@thread.tacv2';
+  const CHANNEL = '19:chan0001@thread.tacv2';
+  const convs = [
+    rawConv(GROUPS[0], { sender: 'Cy' }),
+    rawConv('19:titled@thread.v2', { topic: 'Falcon' }),
+    { ...rawConv(TEAM, { topic: 'Design Team' }), threadProperties: { topic: 'Design Team', spaceId: TEAM } },
+    rawConv(CHANNEL, { topic: 'Releases', spaceId: TEAM }),
+    rawConv(DM, { fromMe: true }),
+  ];
+  const peerSays = (at: number): RawMessage => ({ ...rawMsg(at, { sender: 'Rivera, Sam' }), from: FROM(`8:orgid:${PEER_OID}`) });
+
+  it('names each id asked: untitled group chats by participants, 1:1s by the other person, the rest by topic', async () => {
+    const chatsvc = chatsvcWith(convs, {
+      [GROUPS[0]]: [from('Cy', T0), from('Ann', T0 - MIN)],
+      [DM]: [mine(T0), peerSays(T0 - MIN)],
+    });
+    const names = await nameConversations(chatsvc, [GROUPS[0], '19:titled@thread.v2', CHANNEL, DM, '19:unknown@thread.v2']);
+    expect(names.get(GROUPS[0])).toEqual({ id: GROUPS[0], kind: 'group', title: 'Group chat: Ann; Cy', participants: ['Ann', 'Cy'] });
+    expect(names.get('19:titled@thread.v2')).toEqual({ id: '19:titled@thread.v2', kind: 'group', title: 'Falcon' });
+    expect(names.get(CHANNEL)).toEqual({ id: CHANNEL, kind: 'channel', title: 'Releases', team: 'Design Team' });
+    expect(names.get(DM)).toEqual({ id: DM, kind: 'oneOnOne', title: 'Rivera, Sam', participants: ['Rivera, Sam'] });
+    expect(names.has('19:unknown@thread.v2')).toBe(false);
+    // Only the chats asked about that need a name are read.
+    expect(chatsvc.getMessages).toHaveBeenCalledTimes(2);
+  });
+
+  it('reads nothing and lists nothing for no ids', async () => {
+    const chatsvc = chatsvcWith(convs, {});
+    expect((await nameConversations(chatsvc, [])).size).toBe(0);
+    expect(chatsvc.listConversations).not.toHaveBeenCalled();
+  });
+
+  it('never fails: a failed listing names nothing, a failed title read keeps the listing\'s title', async () => {
+    const broken = fakeChatsvc(convs, { listConversations: vi.fn().mockRejectedValue(new Error('down')) });
+    expect((await nameConversations(broken, [GROUPS[0]])).size).toBe(0);
+    const failing = chatsvcWith(convs, { [GROUPS[0]]: new Error('boom') });
+    expect((await nameConversations(failing, [GROUPS[0]])).get(GROUPS[0])).toEqual({ id: GROUPS[0], kind: 'group', title: 'Cy' });
   });
 });

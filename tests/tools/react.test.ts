@@ -227,6 +227,23 @@ describe('teams_react — confirm gate', () => {
     });
   });
 
+  it('names an untitled group chat by its participants in the preview and the result', async () => {
+    const UNTITLED = '19:untitled0001@thread.v2';
+    const { chatsvc } = fakeWith({
+      overrides: {
+        listConversations: vi.fn().mockResolvedValue([rawConv(UNTITLED, { at: T0 + 4 * MIN, sender: 'Bea Example' })]),
+        getMessages: vi.fn().mockResolvedValue([
+          rawMsg(T0 + 4 * MIN, { sender: 'Bea Example' }),
+          { ...rawMsg(T0 + MIN, { sender: 'Sam One' }), from: 'https://x/contacts/8:orgid:sam' },
+        ]),
+      },
+    });
+    const { preview, data } = await reactConfirmed(chatsvc, { conversation: UNTITLED, message_id: MSG, reaction: 'like' });
+    const named = { id: UNTITLED, title: 'Group chat: Bea Example; Sam One', kind: 'group', participants: ['Bea Example', 'Sam One'] };
+    expect(fenced(preview?.preview?.conversation)).toEqual(named);
+    expect(payload(data)).toMatchObject({ status: 'reacted', conversation: named });
+  });
+
   it('remove: DELETEs the reaction and verifies it is gone', async () => {
     const { chatsvc, setReaction, removeReaction } = fakeWith({
       emotions: [{ key: 'heart', users: [{ mri: ME, time: T0 }] }],

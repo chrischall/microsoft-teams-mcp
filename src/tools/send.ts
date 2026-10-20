@@ -73,6 +73,8 @@ export interface Target {
   id: string;
   title: string;
   kind: string;
+  /** An untitled group chat's participants (its title names the first three), or an untitled 1:1's other person. */
+  participants?: string[];
 }
 
 const mentionArg = z.object({
@@ -105,7 +107,7 @@ export async function resolveTarget(
   }
   const raw = await chatsvc.listConversations();
   const s = await resolveListed(chatsvc, raw, me, conversation, verb);
-  return { id: s.id, title: s.title, kind: s.kind };
+  return { id: s.id, title: s.title, kind: s.kind, ...(s.participants !== undefined ? { participants: s.participants } : {}) };
 }
 
 /** Who has written in the conversation lately, by MRI → display name. */

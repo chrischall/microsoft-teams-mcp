@@ -4,7 +4,7 @@ import { McpToolError } from '@chrischall/mcp-utils';
 import { registerAttachmentTools } from '../../src/tools/attachment.js';
 import type { ChatServiceClient, GetMessagesOptions, RawMessage } from '../../src/chatsvc.js';
 import type { SharePointClient } from '../../src/sharepoint.js';
-import { fakeChatsvc, messagesFrom, rawMsg } from './fake-chatsvc.js';
+import { fakeChatsvc, messagesFrom, rawConv, rawMsg } from './fake-chatsvc.js';
 
 const T0 = 1_760_000_000_000;
 const MIN = 60_000;
@@ -94,6 +94,31 @@ describe('teams_get_attachment', () => {
     expect(JSON.stringify(caption)).toContain(IMAGE_REF);
     expect(chatsvc.fetchImage).toHaveBeenCalledWith(IMAGE_URL);
     expect(chatsvc.getMessages).toHaveBeenCalledWith(GROUP, expect.anything());
+  });
+
+  describe('names the conversation in its caption, as the listing tools do', () => {
+    const listed = () => [rawConv(GROUP, { sender: 'Example Person' })];
+
+    it('titles an untitled group chat by its participants, beside its id', async () => {
+      const chatsvc = chatsvcWith(MSGS, { listConversations: vi.fn().mockResolvedValue(listed()) });
+      const image = await call(chatsvc, { conversation: GROUP, message_id: String(TARGET), ref: IMAGE_REF });
+      const imageCaption = JSON.parse((image.content as Block[])[1].text!) as Record<string, unknown>;
+      expect(imageCaption).toMatchObject({ conversation: GROUP, title: 'Group chat: Example Person', participants: ['Example Person'] });
+
+      const downloadFile = vi.fn().mockResolvedValue({ mimeType: DOCX_MIME, data: Buffer.from('x'), size: 1 });
+      const file = await call(chatsvc, { conversation: GROUP, message_id: String(TARGET), ref: FILE_NAME }, fakeSharepoint(downloadFile));
+      const fileCaption = JSON.parse((file.content as Block[])[1].text!) as Record<string, unknown>;
+      expect(fileCaption).toMatchObject({ conversation: GROUP, title: 'Group chat: Example Person', participants: ['Example Person'] });
+    });
+
+    it('still returns the attachment when the conversation cannot be named', async () => {
+      const chatsvc = chatsvcWith(MSGS, { listConversations: vi.fn().mockRejectedValue(new Error('down')) });
+      const result = await call(chatsvc, { conversation: GROUP, message_id: String(TARGET), ref: IMAGE_REF });
+      expect(result.isError).toBeFalsy();
+      const caption = JSON.parse((result.content as Block[])[1].text!) as Record<string, unknown>;
+      expect(caption.conversation).toBe(GROUP);
+      expect(caption).not.toHaveProperty('title');
+    });
   });
 
   it('stops paging once it is past the message, so an old message does not read the whole history', async () => {
