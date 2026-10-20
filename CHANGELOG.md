@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.7.0](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.6.2...v0.7.0) (2026-10-20)
+
+
+### ⚠ BREAKING CHANGES
+
+* **tools:** rename tools to the list/get naming rule ([#82](https://github.com/chrischall/microsoft-teams-mcp/issues/82))
+
+### Features
+
+* **export:** bulk-export Teams chats and channels to local files or a download link ([#83](https://github.com/chrischall/microsoft-teams-mcp/issues/83)) ([1043612](https://github.com/chrischall/microsoft-teams-mcp/commit/10436124da6c40a63f54695ddfd96136c4617e1f))
+* **titles:** name every conversation in results; untitled group chats get a stable participant name ([#81](https://github.com/chrischall/microsoft-teams-mcp/issues/81)) ([21457d6](https://github.com/chrischall/microsoft-teams-mcp/commit/21457d67fd29c314ad5036f4f990ed7364f88129))
+* **tools:** rename tools to the list/get naming rule ([#82](https://github.com/chrischall/microsoft-teams-mcp/issues/82)) ([c7df133](https://github.com/chrischall/microsoft-teams-mcp/commit/c7df133b0faddfe22d719d6ed9eb62be37817671))
+
+
+### Bug Fixes
+
+* **deps:** bump dotenv from 18.0.7 to 18.0.8 in the production-dependencies group ([#78](https://github.com/chrischall/microsoft-teams-mcp/issues/78)) ([3467bb1](https://github.com/chrischall/microsoft-teams-mcp/commit/3467bb15304ac4ae2cb7387778d73641b6d2e662))
+
+
+### Documentation
+
+* **mint:** add sample prompts for the public catalog ([#80](https://github.com/chrischall/microsoft-teams-mcp/issues/80)) ([9f3d282](https://github.com/chrischall/microsoft-teams-mcp/commit/9f3d282f9948bebecbd6b3fdb83b60d66ab44e78))
+
 ## [0.6.2](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.6.1...v0.6.2) (2026-10-17)
 
 
