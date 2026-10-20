@@ -489,7 +489,15 @@ Everything is optional — by default the token is captured from your browser.
   `~/Downloads/microsoft-teams-mcp` and returns **absolute local paths**; a
   hosted install (mcp-host sets `MCP_BLOB_BASE_URL` and
   `MCP_BLOB_SIGNING_KEY`) uploads one zip per call and returns a signed
-  download link that expires after an hour (`url_expires_at`). Never marks
+  download link that expires after an hour (`url_expires_at`). With
+  `attachments: true` it also saves each message's inline images and shared
+  files (SharePoint, up to 25 MB each; four downloads at a time) under
+  `attachments/<8-char conversation hash>/<message id>-<name>` in the same
+  folder or zip, and each message's record lists them by that relative path
+  (Markdown transcripts link them); an attachment that cannot be fetched — a
+  file your account cannot open, a SharePoint host with no token yet, one too
+  large — is listed with `skipped` and the reason instead, and never fails the
+  export (`counts.attachments` / `counts.attachments_skipped`). Never marks
   anything read.
 - `teams_healthcheck` — resolves the token the way every tool does
   (capturing one on a cold start) and probes the chat service with one

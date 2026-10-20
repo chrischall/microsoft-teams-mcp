@@ -9,7 +9,7 @@
  * carries {@link EXPORT_UNTRUSTED_NOTE}: the files are other people's words.
  */
 import { jsonlLine } from '@chrischall/mcp-utils/export';
-import type { NormalisedMessage } from '../model.js';
+import type { ExportMessage } from './export-attachments.js';
 import type { ConversationName } from './titles.js';
 import { groupThreads } from './format.js';
 
@@ -40,7 +40,7 @@ export interface ExportHeader {
 }
 
 /** A conversation's messages (oldest first) as JSONL: the header record, then one line per message. */
-export function renderJsonl(header: ExportHeader, conversation: ExportConversation, messages: readonly NormalisedMessage[]): string {
+export function renderJsonl(header: ExportHeader, conversation: ExportConversation, messages: readonly ExportMessage[]): string {
   let out = jsonlLine({
     _export: { ...header, note: EXPORT_UNTRUSTED_NOTE, conversation, records: messages.length },
   });
@@ -48,18 +48,23 @@ export function renderJsonl(header: ExportHeader, conversation: ExportConversati
   return out;
 }
 
-const when = (m: NormalisedMessage): string => m.time_local ?? m.time;
+const when = (m: ExportMessage): string => m.time_local ?? m.time;
 
-function attachmentsLine(m: NormalisedMessage): string | undefined {
-  const files = m.attachments.files.map((f) => f.name);
-  const images = m.attachments.images.length;
-  if (files.length === 0 && images === 0) return undefined;
-  const parts = [...(files.length > 0 ? [`files: ${files.join(', ')}`] : []), ...(images > 0 ? [`${images} image(s)`] : [])];
+/** A Markdown link target: the relative path with spaces and parentheses escaped. */
+const linkTarget = (path: string): string => path.replace(/[ ()]/g, (c) => encodeURIComponent(c));
+
+function attachmentsLine(m: ExportMessage): string | undefined {
+  const { files, images } = m.attachments;
+  if (files.length === 0 && images.length === 0) return undefined;
+  const fileNames = files.map((f) => (f.path !== undefined ? `[${f.name}](${linkTarget(f.path)})` : f.name));
+  const saved = images.filter((i) => i.path !== undefined).map((i, n) => `[image ${n + 1}](${linkTarget(i.path!)})`);
+  const imagePart = saved.length > 0 ? `images: ${saved.join(', ')}` : `${images.length} image(s)`;
+  const parts = [...(files.length > 0 ? [`files: ${fileNames.join(', ')}`] : []), ...(images.length > 0 ? [imagePart] : [])];
   return `_Attachments — ${parts.join('; ')}_`;
 }
 
 /** One message as Markdown under a heading of `level` (`###`, `####`). */
-function messageMd(m: NormalisedMessage, level: string): string {
+function messageMd(m: ExportMessage, level: string): string {
   const flags = [m.edited ? 'edited' : undefined, m.deleted ? 'deleted' : undefined].filter(Boolean);
   const lines = [`${level} ${when(m)} — ${m.sender}${flags.length > 0 ? ` (${flags.join(', ')})` : ''}`, ''];
   if (m.subject !== undefined) lines.push(`**Subject:** ${m.subject}`, '');
@@ -70,7 +75,7 @@ function messageMd(m: NormalisedMessage, level: string): string {
 }
 
 /** The first line of a root post, as a thread heading. */
-function threadName(root: NormalisedMessage): string {
+function threadName(root: ExportMessage): string {
   if (root.subject !== undefined) return root.subject;
   const first = root.text.split('\n').find((l) => l.trim() !== '')?.trim() ?? '';
   return first.length > 80 ? `${first.slice(0, 79)}…` : first || '(no text)';
@@ -81,7 +86,7 @@ function threadName(root: NormalisedMessage): string {
  * preamble naming the conversation, carrying the untrusted note, then each
  * message — a channel's grouped as threads, each root post with its replies.
  */
-export function renderMarkdown(header: ExportHeader, conversation: ExportConversation, messages: readonly NormalisedMessage[]): string {
+export function renderMarkdown(header: ExportHeader, conversation: ExportConversation, messages: readonly ExportMessage[]): string {
   const c = conversation;
   const pre = [
     `# ${c.title}`,
@@ -103,7 +108,7 @@ export function renderMarkdown(header: ExportHeader, conversation: ExportConvers
       if ('missing' in root) {
         body.push(`## Thread ${root.id} (root post not in this export)`, '');
       } else {
-        body.push(`## Thread: ${threadName(root as NormalisedMessage)}`, '', messageMd(root as NormalisedMessage, '###'));
+        body.push(`## Thread: ${threadName(root as ExportMessage)}`, '', messageMd(root as ExportMessage, '###'));
       }
       for (const r of replies) body.push(messageMd(r, '#### ↳'));
     }
@@ -118,7 +123,7 @@ export function renderConversation(
   format: ExportFormat,
   header: ExportHeader,
   conversation: ExportConversation,
-  messages: readonly NormalisedMessage[],
+  messages: readonly ExportMessage[],
 ): string {
   return format === 'markdown' ? renderMarkdown(header, conversation, messages) : renderJsonl(header, conversation, messages);
 }

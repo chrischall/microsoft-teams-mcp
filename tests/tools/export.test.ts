@@ -7,6 +7,7 @@ import { createTestHarness, parseToolResult } from '@chrischall/mcp-utils/test';
 import { decodeExportCursor, encodeExportCursor } from '@chrischall/mcp-utils/export';
 import { McpToolError, surfaceToolHints } from '@chrischall/mcp-utils';
 import type { ChatServiceClient, GetMessagesOptions, RawConversation, RawMessage } from '../../src/chatsvc.js';
+import type { SharePointClient } from '../../src/sharepoint.js';
 import { registerExportTools, type ExportToolOptions } from '../../src/tools/export.js';
 import { fakeChatsvc, messagesFrom, rawConv, rawMsg } from './fake-chatsvc.js';
 
@@ -85,8 +86,20 @@ afterEach(() => {
 
 const noSleep: ExportToolOptions = { sleep: async () => {} };
 
-async function call(chatsvc: ChatServiceClient, args: Record<string, unknown> = {}, opts: ExportToolOptions = noSleep) {
-  const harness = await createTestHarness((server) => registerExportTools(server, { chatsvc }, opts));
+/** A stub `SharePointClient`: the export only ever calls `downloadFile`; by default it has no token. */
+function fakeSharepoint(
+  downloadFile: SharePointClient['downloadFile'] = vi.fn().mockRejectedValue(new Error('no token in tests')),
+): SharePointClient {
+  return { downloadFile } as unknown as SharePointClient;
+}
+
+async function call(
+  chatsvc: ChatServiceClient,
+  args: Record<string, unknown> = {},
+  opts: ExportToolOptions = noSleep,
+  sharepoint: SharePointClient = fakeSharepoint(),
+) {
+  const harness = await createTestHarness((server) => registerExportTools(server, { chatsvc, sharepoint }, opts));
   try {
     const result = await harness.callTool('teams_export_messages', args);
     const text = (result.content as { type: string; text: string }[])[0]?.text ?? '';
@@ -111,7 +124,7 @@ const payload = (data: Record<string, any>) => (data.data ?? data) as Record<str
 
 describe('teams_export_messages registration', () => {
   it('is published read-only and open-world, and says no message content comes back', async () => {
-    const harness = await createTestHarness((server) => registerExportTools(server, { chatsvc: chatsvcWith() }));
+    const harness = await createTestHarness((server) => registerExportTools(server, { chatsvc: chatsvcWith(), sharepoint: fakeSharepoint() }));
     try {
       const tool = (await harness.client.listTools()).tools.find((t) => t.name === 'teams_export_messages');
       expect(tool?.annotations).toMatchObject({ readOnlyHint: true, openWorldHint: true });
@@ -382,7 +395,7 @@ describe('teams_export_messages budgets and resume', () => {
     // surfaceToolHints is what makes the caller's progress token ambient, as the real server does.
     const harness = await createTestHarness((server) => {
       surfaceToolHints(server);
-      registerExportTools(server, { chatsvc }, noSleep);
+      registerExportTools(server, { chatsvc, sharepoint: fakeSharepoint() }, noSleep);
     });
     const messages: string[] = [];
     try {
@@ -516,5 +529,151 @@ describe('teams_export_messages cursor size', () => {
     const b = lines(second.files[0].path)[0]._export.conversation.id;
     expect(a).not.toBe(b);
     expect([a, b].sort()).toEqual([...many].sort().slice(0, 2));
+  });
+});
+
+describe('teams_export_messages attachments', () => {
+  const ATT = '19:attach001@thread.v2';
+  const imageRef = (n: number) => `0-eus-d1-${String(n).padStart(32, '0')}`;
+  const imageUrl = (n: number) => `https://us-api.asm.skype.com/v1/objects/${imageRef(n)}/views/imgo`;
+  const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  const FILE_URL = 'https://example.sharepoint.com/sites/demo/Shared%20Documents/Plan.docx';
+  const MAX_FILE_BYTES = 25 * 1024 * 1024;
+
+  /** A message carrying `images` inline images and the given shared files. */
+  function withAttachments(at: number, images: number[], files: Record<string, unknown>[] = []): RawMessage {
+    const imgs = images.map((n) => `<img src="${imageUrl(n)}" alt="image">`).join('');
+    return {
+      ...said('Lee, Pat', at, ATT, { text: `<p>see attached</p>${imgs}` }),
+      messagetype: 'RichText/Html',
+      ...(files.length > 0 ? { properties: { files: JSON.stringify(files) } } : {}),
+    };
+  }
+  const PLAN = { fileName: 'Plan.docx', fileType: 'docx', openUrl: 'https://example.sharepoint.com/:w:/r/Plan.docx', objectUrl: FILE_URL };
+  const CONV = [rawConv(ATT, { topic: 'Attachments', at: T0 + 5 * MIN })];
+  const MSGS = [withAttachments(T0, [1], [PLAN]), said('Kim, Jo', T0 + MIN, ATT, { text: 'plain' })];
+
+  function attChatsvc(messages: RawMessage[] = MSGS, fetchImage: unknown = vi.fn().mockResolvedValue({ mimeType: 'image/png', data: PNG })) {
+    return fakeChatsvc(CONV, {
+      getMessages: perConversation({ [ATT]: messages }),
+      meDisplayName: vi.fn().mockResolvedValue('Me Myself'),
+      fetchImage,
+    });
+  }
+  const okDownload = () => vi.fn().mockResolvedValue({ mimeType: DOCX_MIME, data: Buffer.from('docx bytes'), size: 10 });
+
+  it('leaves attachments alone unless asked', async () => {
+    const chatsvc = attChatsvc();
+    const downloadFile = okDownload();
+    const out = payload((await call(chatsvc, { conversations: ATT }, noSleep, fakeSharepoint(downloadFile))).data!);
+    expect(out.counts).toMatchObject({ attachments: 0, attachments_skipped: 0 });
+    expect(chatsvc.fetchImage).not.toHaveBeenCalled();
+    expect(downloadFile).not.toHaveBeenCalled();
+    const [, first] = lines(out.files[0].path);
+    expect(first.attachments.files[0].path).toBeUndefined();
+  });
+
+  it('writes inline images and shared files under attachments/<conv>/<msgid>-<name> and lists their relative paths', async () => {
+    const chatsvc = attChatsvc();
+    const downloadFile = okDownload();
+    const out = payload((await call(chatsvc, { conversations: ATT, attachments: true }, noSleep, fakeSharepoint(downloadFile))).data!);
+    expect(out.counts).toMatchObject({ messages: 2, attachments: 2, attachments_skipped: 0 });
+    expect(chatsvc.fetchImage).toHaveBeenCalledWith(imageUrl(1));
+    expect(downloadFile).toHaveBeenCalledWith(FILE_URL, MAX_FILE_BYTES);
+
+    const [, first, second] = lines(out.files[0].path);
+    const filePath = `attachments/${short(ATT)}/${T0}-Plan.docx`;
+    expect(first.attachments.files[0]).toMatchObject({ name: 'Plan.docx', path: filePath, bytes: 10 });
+    expect(first.attachments.images[0]).toMatchObject({ ref: imageRef(1), path: expect.stringMatching(new RegExp(`^attachments/${short(ATT)}/${T0}-`)) });
+    expect(first.attachments.images[0].path).toMatch(/\.png$/);
+    expect(second.attachments).toEqual({ files: [], images: [] });
+    expect(readFileSync(join(out.location, filePath), 'utf8')).toBe('docx bytes');
+    expect(readFileSync(join(out.location, first.attachments.images[0].path))).toEqual(PNG);
+    // The manifest lists every attachment written.
+    const manifest = JSON.parse(readFileSync(join(out.location, 'manifest.json'), 'utf8'));
+    expect(manifest.counts).toMatchObject({ attachments: 2 });
+    expect(manifest.attachments.map((a: any) => a.name).sort()).toEqual([filePath, first.attachments.images[0].path].sort());
+  });
+
+  it('records an attachment that cannot be fetched with the reason, never failing the export', async () => {
+    const forbidden = new McpToolError('SharePoint returned HTTP 403.', { status: 403, kind: 'http' });
+    const noLink = { fileName: 'Loose.txt', fileType: 'txt' };
+    const fetchImage = vi.fn().mockRejectedValue(new McpToolError('The image store returned HTTP 404.', { status: 404, kind: 'http' }));
+    const chatsvc = attChatsvc([withAttachments(T0, [1], [PLAN, noLink])], fetchImage);
+    const out = payload(
+      (await call(chatsvc, { conversations: ATT, attachments: true }, noSleep, fakeSharepoint(vi.fn().mockRejectedValue(forbidden)))).data!,
+    );
+    expect(out.has_more).toBe(false);
+    expect(out.counts).toMatchObject({ messages: 1, attachments: 0, attachments_skipped: 3 });
+    const [, rec] = lines(out.files[0].path);
+    // The file the account cannot open carries the same hint teams_get_attachment gives.
+    expect(rec.attachments.files[0].skipped).toMatch(/cannot open this file.*example\.sharepoint\.com/);
+    expect(rec.attachments.files[1].skipped).toMatch(/no download link/i);
+    expect(rec.attachments.images[0].skipped).toMatch(/404/);
+    expect(rec.attachments.files[0].path).toBeUndefined();
+  });
+
+  it('skips what the image store returns that is not an image', async () => {
+    const fetchImage = vi.fn().mockResolvedValue({ mimeType: 'text/html', data: Buffer.from('<html>') });
+    const chatsvc = attChatsvc([withAttachments(T0, [1])], fetchImage);
+    const out = payload((await call(chatsvc, { conversations: ATT, attachments: true })).data!);
+    const [, rec] = lines(out.files[0].path);
+    expect(rec.attachments.images[0].skipped).toMatch(/not an image/i);
+    expect(out.counts.attachments_skipped).toBe(1);
+  });
+
+  it('downloads at most four at a time', async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const fetchImage = vi.fn(async () => {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      await new Promise((r) => setTimeout(r, 5));
+      inFlight--;
+      return { mimeType: 'image/png', data: PNG };
+    });
+    const ten = Array.from({ length: 10 }, (_, i) => i + 1);
+    const chatsvc = attChatsvc([withAttachments(T0, ten.slice(0, 5)), withAttachments(T0 + MIN, ten.slice(5))], fetchImage);
+    const out = payload((await call(chatsvc, { conversations: ATT, attachments: true })).data!);
+    expect(out.counts.attachments).toBe(10);
+    expect(fetchImage).toHaveBeenCalledTimes(10);
+    expect(peak).toBeGreaterThan(1);
+    expect(peak).toBeLessThanOrEqual(4);
+  });
+
+  it('keeps fetching attachments when an export is resumed', async () => {
+    const chatsvc = attChatsvc([withAttachments(T0, [1]), withAttachments(T0 + MIN, [2])]);
+    const first = payload((await call(chatsvc, { conversations: ATT, attachments: true, max_items: 1 })).data!);
+    expect(first.has_more).toBe(true);
+    const second = payload((await call(chatsvc, { cursor: first.cursor })).data!);
+    expect(second.counts.attachments).toBe(1);
+    expect(chatsvc.fetchImage).toHaveBeenLastCalledWith(imageUrl(2));
+    const [, rec] = lines(second.files[0].path);
+    expect(rec.attachments.images[0].path).toMatch(new RegExp(`^attachments/${short(ATT)}/${T0 + MIN}-`));
+  });
+
+  it('links attachment paths in a Markdown transcript', async () => {
+    const out = payload(
+      (await call(attChatsvc(), { conversations: ATT, attachments: true, format: 'markdown' }, noSleep, fakeSharepoint(okDownload()))).data!,
+    );
+    const md = readFileSync(out.files[0].path, 'utf8');
+    expect(md).toContain(`[Plan.docx](attachments/${short(ATT)}/${T0}-Plan.docx)`);
+  });
+
+  it('puts attachments in the hosted zip', async () => {
+    vi.stubEnv('MCP_BLOB_BASE_URL', 'https://host.example/b/reg123');
+    vi.stubEnv('MCP_BLOB_SIGNING_KEY', 'k'.repeat(32));
+    const bodies: Uint8Array[] = [];
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      bodies.push(init?.body as Uint8Array);
+      return new Response(null, { status: 201 });
+    }) as unknown as typeof fetch;
+    const out = payload(
+      (await call(attChatsvc(), { conversations: ATT, attachments: true }, { ...noSleep, fetchImpl }, fakeSharepoint(okDownload()))).data!,
+    );
+    expect(out.mode).toBe('blob');
+    expect(out.counts.attachments).toBe(2);
+    expect(Buffer.from(bodies[0]).includes(Buffer.from(`attachments/${short(ATT)}/${T0}-Plan.docx`))).toBe(true);
   });
 });

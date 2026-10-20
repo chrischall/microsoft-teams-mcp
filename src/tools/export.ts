@@ -32,6 +32,10 @@
  * CHANGE first, so the read stops at the first message whose last change is
  * before `since` (or the resume position), and messages are then taken by
  * arrival, oldest first (`takePage`).
+ *
+ * With `attachments: true` each conversation's inline images and shared files
+ * are written beside it before its file is rendered, so every record carries
+ * their export paths (or why one was skipped) — see `export-attachments.ts`.
  */
 import { createHash } from 'node:crypto';
 import type { McpServer } from '@modelcontextprotocol/server';
@@ -74,6 +78,7 @@ import {
   type ExportFormat,
   type ExportHeader,
 } from './export-format.js';
+import { exportAttachments, type ExportMessage, type WrittenAttachment } from './export-attachments.js';
 import { takePage, type FromPosition } from './from.js';
 import { conversationName, enrichTitles } from './titles.js';
 import { resolveTimeZone, tzArg } from './timezone.js';
@@ -142,6 +147,7 @@ const storedArgs = z
     since: isoTimeArg('since'),
     until: isoTimeArg('until'),
     format: z.enum(EXPORT_FORMATS),
+    attachments: z.boolean().optional(),
     tz: tzArg,
   })
   .strict();
@@ -283,6 +289,7 @@ interface ExportInput {
   since?: string;
   until?: string;
   format?: ExportFormat;
+  attachments?: boolean;
   dest?: string;
   cursor?: string;
   max_items?: number;
@@ -291,9 +298,13 @@ interface ExportInput {
 }
 
 /** Arguments that start an export, which a cursor already carries. */
-const STARTING_ARGS = ['conversations', 'kinds', 'since', 'until', 'format', 'dest', 'tz'] as const;
+const STARTING_ARGS = ['conversations', 'kinds', 'since', 'until', 'format', 'attachments', 'dest', 'tz'] as const;
 
-async function runExport(chatsvc: ChatServiceClient, input: ExportInput, opts: ExportToolOptions) {
+async function runExport(
+  { chatsvc, sharepoint }: Pick<TeamsDeps, 'chatsvc' | 'sharepoint'>,
+  input: ExportInput,
+  opts: ExportToolOptions,
+) {
   const clock = opts.now ?? Date.now;
   const sleep = opts.sleep ?? realSleep;
   const started = clock();
@@ -314,6 +325,7 @@ async function runExport(chatsvc: ChatServiceClient, input: ExportInput, opts: E
     ...(input.since !== undefined ? { since: input.since } : {}),
     ...(input.until !== undefined ? { until: input.until } : {}),
     format: input.format ?? 'jsonl',
+    ...(input.attachments === true ? { attachments: true } : {}),
     ...(input.tz !== undefined ? { tz: input.tz } : {}),
   };
   const since = args.since !== undefined ? parseIsoTime(args.since) : undefined;
@@ -376,6 +388,8 @@ async function runExport(chatsvc: ChatServiceClient, input: ExportInput, opts: E
   const summaries = new Map(summariseAll(raw, me).map((s) => [s.id, s]));
   const files: WrittenFile[] = [];
   const errors: ExportError[] = [];
+  const attachmentsWritten: WrittenAttachment[] = [];
+  let attachmentsSkipped = 0;
   let written = 0;
   let oldest: string | undefined;
   let newest: string | undefined;
@@ -462,11 +476,18 @@ async function runExport(chatsvc: ChatServiceClient, input: ExportInput, opts: E
       });
     }
     if (page.length > 0) {
-      const messages = page.map((m) => normaliseMessage(m, me, { timeZone }));
+      const normalised = page.map((m) => normaliseMessage(m, me, { timeZone }));
+      let messages: ExportMessage[] = normalised;
+      if (args.attachments === true) {
+        const got = await exportAttachments({ chatsvc, sharepoint }, sink, shortId(id), id, normalised);
+        messages = got.messages;
+        attachmentsWritten.push(...got.written);
+        attachmentsSkipped += got.skipped;
+      }
       const { participants: _named, ...named } = conversationName(titled);
       const conversation: ExportConversation = {
         ...named,
-        ...(titled.kind !== 'channel' ? { participants: chatParticipants(titled, messages) } : {}),
+        ...(titled.kind !== 'channel' ? { participants: chatParticipants(titled, normalised) } : {}),
       };
       const ext = EXPORT_EXT[args.format];
       const stem = `${sanitizeExportFileName(titled.title, 80)}-${shortId(id)}`;
@@ -496,7 +517,12 @@ async function runExport(chatsvc: ChatServiceClient, input: ExportInput, opts: E
     await reportProgress(done, total, `${done}/${total} conversations`);
   }
 
-  const counts = { conversations: files.length, messages: written, attachments: 0, attachments_skipped: 0 };
+  const counts = {
+    conversations: files.length,
+    messages: written,
+    attachments: attachmentsWritten.length,
+    attachments_skipped: attachmentsSkipped,
+  };
   const span = oldest !== undefined && newest !== undefined ? { oldest, newest } : undefined;
   let cursor: string | undefined;
   if (hasMore && queue.length > 0) {
@@ -525,6 +551,7 @@ async function runExport(chatsvc: ChatServiceClient, input: ExportInput, opts: E
         ...header,
         note: EXPORT_UNTRUSTED_NOTE,
         files: files.map(({ path: _p, ...f }) => f),
+        ...(attachmentsWritten.length > 0 ? { attachments: attachmentsWritten } : {}),
         counts,
         ...(span !== undefined ? { span } : {}),
         has_more: hasMore,
@@ -558,7 +585,7 @@ async function runExport(chatsvc: ChatServiceClient, input: ExportInput, opts: E
 
 export function registerExportTools(
   server: McpServer,
-  { chatsvc }: Pick<TeamsDeps, 'chatsvc'>,
+  deps: Pick<TeamsDeps, 'chatsvc' | 'sharepoint'>,
   opts: ExportToolOptions = {},
 ): void {
   server.registerTool(
@@ -585,7 +612,11 @@ export function registerExportTools(
         'per part). A cursor too long to list every remaining conversation resumes from an id instead, so a ' +
         'conversation that first appears between parts may be left out. A rejected credential or persistent rate limiting stops early with a cursor and keeps what ' +
         'was written; a conversation that cannot be read is listed in errors and skipped. Never marks anything ' +
-        'read. A name matching several conversations returns {ambiguous: true, candidates} and writes nothing.' +
+        'read. A name matching several conversations returns {ambiguous: true, candidates} and writes nothing. ' +
+        'With attachments true, inline images and shared files (up to 25 MB) are saved under ' +
+        'attachments/<conversation>/<message id>-<name> and each message\'s record lists them by that path ' +
+        'relative to the export folder; one that cannot be fetched (a SharePoint file the account cannot ' +
+        'open, no token yet, too large) is listed as skipped with the reason, never failing the export.' +
         UNTRUSTED_DESCRIPTION_SUFFIX,
       annotations: toolAnnotations({ readOnly: true, openWorld: true }),
       inputSchema: {
@@ -607,6 +638,14 @@ export function registerExportTools(
           .enum(EXPORT_FORMATS)
           .optional()
           .describe('jsonl (default: one JSON record per message) or markdown (readable transcripts).'),
+        attachments: z
+          .boolean()
+          .optional()
+          .describe(
+            'Also download each message\'s inline images and shared files (up to 25 MB each) into ' +
+              'attachments/<conversation>/<message id>-<name>; each record lists them with that relative path, ' +
+              'or skipped and why. Default false.',
+          ),
         dest: z
           .string()
           .min(1)
@@ -640,6 +679,6 @@ export function registerExportTools(
         tz: tzArg,
       },
     },
-    async (input) => runExport(chatsvc, input, opts),
+    async (input) => runExport(deps, input, opts),
   );
 }
