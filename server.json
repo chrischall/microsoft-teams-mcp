@@ -109,7 +109,7 @@
         },
         {
           "name": "TEAMS_OUTPUT_DIR",
-          "description": "Folder teams_export writes exports into. Unset means ~/Downloads/microsoft-teams-mcp.",
+          "description": "Folder teams_export_messages writes exports into. Unset means ~/Downloads/microsoft-teams-mcp.",
           "isRequired": false,
           "format": "string",
           "isSecret": false

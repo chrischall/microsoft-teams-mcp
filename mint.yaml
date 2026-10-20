@@ -75,7 +75,7 @@ env:
   - name: TEAMS_OUTPUT_DIR
     required: false
     help: >-
-      Folder teams_export writes exports into (each export gets its own
+      Folder teams_export_messages writes exports into (each export gets its own
       subfolder). Unset means ~/Downloads/microsoft-teams-mcp.
   - name: TEAMS_SUBSTRATE_TOKEN_FILE
     required: false

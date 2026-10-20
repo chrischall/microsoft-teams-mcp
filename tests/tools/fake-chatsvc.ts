@@ -107,12 +107,14 @@ export function rawMsg(
  * `version` when it has one, else its arrival): it stops BEFORE the first
  * message `stopAt` accepts, or once `max` are collected (reporting `onCapped`).
  */
-export function messagesFrom(messages: RawMessage[]) {
+export function messagesFrom(messages: RawMessage[], pageSize = Infinity) {
   const changed = (m: RawMessage) => Math.max(Number(m.version ?? 0) || 0, Number(m.id));
   const newestFirst = [...messages].sort((a, b) => changed(b) - changed(a));
   return vi.fn(async (_id: string, opts: GetMessagesOptions) => {
     const out: RawMessage[] = [];
-    for (const m of newestFirst) {
+    for (const [i, m] of newestFirst.entries()) {
+      // Like the real client: onPage runs between pages, before the next one is requested.
+      if (i > 0 && i % pageSize === 0) await opts.onPage?.(i / pageSize, out.length);
       if (opts.stopAt?.(m)) return out;
       out.push(m);
       if (out.length >= opts.max) {

@@ -1,5 +1,5 @@
 /**
- * What `teams_export` writes into each conversation's file: JSONL (a header
+ * What `teams_export_messages` writes into each conversation's file: JSONL (a header
  * record, then one record per message) or a readable Markdown transcript.
  *
  * Every record carries the conversation it came from — id, kind, title (an

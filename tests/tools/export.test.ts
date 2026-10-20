@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { createTestHarness, parseToolResult } from '@chrischall/mcp-utils/test';
 import { decodeExportCursor, encodeExportCursor } from '@chrischall/mcp-utils/export';
-import { McpToolError } from '@chrischall/mcp-utils';
+import { McpToolError, surfaceToolHints } from '@chrischall/mcp-utils';
 import type { ChatServiceClient, GetMessagesOptions, RawConversation, RawMessage } from '../../src/chatsvc.js';
 import { registerExportTools, type ExportToolOptions } from '../../src/tools/export.js';
 import { fakeChatsvc, messagesFrom, rawConv, rawMsg } from './fake-chatsvc.js';
@@ -88,7 +88,7 @@ const noSleep: ExportToolOptions = { sleep: async () => {} };
 async function call(chatsvc: ChatServiceClient, args: Record<string, unknown> = {}, opts: ExportToolOptions = noSleep) {
   const harness = await createTestHarness((server) => registerExportTools(server, { chatsvc }, opts));
   try {
-    const result = await harness.callTool('teams_export', args);
+    const result = await harness.callTool('teams_export_messages', args);
     const text = (result.content as { type: string; text: string }[])[0]?.text ?? '';
     return {
       result,
@@ -109,11 +109,11 @@ const lines = (path: string) =>
 /** The export's payload, inside the untrusted envelope when it has one. */
 const payload = (data: Record<string, any>) => (data.data ?? data) as Record<string, any>;
 
-describe('teams_export registration', () => {
+describe('teams_export_messages registration', () => {
   it('is published read-only and open-world, and says no message content comes back', async () => {
     const harness = await createTestHarness((server) => registerExportTools(server, { chatsvc: chatsvcWith() }));
     try {
-      const tool = (await harness.client.listTools()).tools.find((t) => t.name === 'teams_export');
+      const tool = (await harness.client.listTools()).tools.find((t) => t.name === 'teams_export_messages');
       expect(tool?.annotations).toMatchObject({ readOnlyHint: true, openWorldHint: true });
       expect(tool?.description).toMatch(/no message (text|content)/i);
       expect(tool?.description).toMatch(/jq/);
@@ -124,7 +124,7 @@ describe('teams_export registration', () => {
   });
 });
 
-describe('teams_export to disk (JSONL)', () => {
+describe('teams_export_messages to disk (JSONL)', () => {
   it('writes one file per conversation with messages, oldest first, and returns only a manifest', async () => {
     const { data, text } = await call(chatsvcWith());
     const out = payload(data!);
@@ -246,7 +246,7 @@ describe('teams_export to disk (JSONL)', () => {
   });
 });
 
-describe('teams_export to disk (Markdown)', () => {
+describe('teams_export_messages to disk (Markdown)', () => {
   it('writes a readable transcript per conversation with the untrusted note, channels threaded', async () => {
     const { data } = await call(chatsvcWith(), { format: 'markdown', conversations: [ALPHA, CHANNEL] });
     const out = payload(data!);
@@ -271,7 +271,7 @@ describe('teams_export to disk (Markdown)', () => {
   });
 });
 
-describe('teams_export budgets and resume', () => {
+describe('teams_export_messages budgets and resume', () => {
   it('stops at max_items with a cursor, and the cursor finishes the same export with no gap or repeat', async () => {
     const chatsvc = chatsvcWith();
     const first = payload((await call(chatsvc, { conversations: [ALPHA, UNTITLED, CHANNEL], max_items: 2 })).data!);
@@ -322,6 +322,80 @@ describe('teams_export budgets and resume', () => {
     expect(out.cursor).toBeDefined();
   });
 
+  it('stops inside a long read once budget_seconds is spent, and the cursor re-reads that conversation', async () => {
+    let now = T0;
+    // The channel arrives a page (one message) at a time, and each page takes 61s.
+    const paged = messagesFrom(MESSAGES[CHANNEL], 1);
+    const getMessages = vi.fn(async (id: string, opts: GetMessagesOptions) =>
+      id === CHANNEL
+        ? paged(id, {
+            ...opts,
+            onPage: async (n, m) => {
+              now += 61_000;
+              await opts.onPage?.(n, m);
+            },
+          })
+        : messagesFrom(MESSAGES[id] ?? [])(id, opts),
+    );
+    const chatsvc = fakeChatsvc(CONVS, { getMessages, meDisplayName: vi.fn().mockResolvedValue('Me Myself') });
+    const first = payload(
+      (await call(chatsvc, { conversations: [ALPHA, CHANNEL], budget_seconds: 60 }, { ...noSleep, now: () => now })).data!,
+    );
+    expect(first.has_more).toBe(true);
+    expect(first.files.map((f: any) => f.path)).toEqual([expect.stringContaining(short(ALPHA))]);
+    expect(first.errors ?? []).toEqual([]);
+    // Only one 61s page went by before the read was cut, not all three.
+    expect(now).toBe(T0 + 61_000);
+
+    const next = payload((await call(chatsvc, { cursor: first.cursor })).data!);
+    expect(next.has_more).toBe(false);
+    expect(next.files.map((f: any) => f.path)).toEqual([expect.stringContaining(short(CHANNEL))]);
+    expect(next.counts.messages).toBe(3);
+  });
+
+  it('never cuts the first conversation of a call, so every call makes progress', async () => {
+    let now = T0;
+    const paged = messagesFrom(MESSAGES[CHANNEL], 1);
+    const getMessages = vi.fn(async (id: string, opts: GetMessagesOptions) =>
+      paged(id, {
+        ...opts,
+        onPage: async (n, m) => {
+          now += 61_000;
+          await opts.onPage?.(n, m);
+        },
+      }),
+    );
+    const chatsvc = fakeChatsvc(CONVS, { getMessages, meDisplayName: vi.fn().mockResolvedValue('Me Myself') });
+    const out = payload(
+      (await call(chatsvc, { conversations: [CHANNEL], budget_seconds: 60 }, { ...noSleep, now: () => now })).data!,
+    );
+    expect(out.has_more).toBe(false);
+    expect(out.counts.messages).toBe(3);
+  });
+
+  it('reports progress per page of a long read, not only per conversation', async () => {
+    const paged = messagesFrom(MESSAGES[CHANNEL], 1);
+    const chatsvc = fakeChatsvc(CONVS, {
+      getMessages: vi.fn(async (id: string, opts: GetMessagesOptions) => paged(id, opts)),
+      meDisplayName: vi.fn().mockResolvedValue('Me Myself'),
+    });
+    // surfaceToolHints is what makes the caller's progress token ambient, as the real server does.
+    const harness = await createTestHarness((server) => {
+      surfaceToolHints(server);
+      registerExportTools(server, { chatsvc }, noSleep);
+    });
+    const messages: string[] = [];
+    try {
+      await harness.client.callTool({ name: 'teams_export_messages', arguments: { conversations: [CHANNEL] } }, {
+        onprogress: (p) => messages.push(p.message ?? ''),
+      });
+    } finally {
+      await harness.close();
+    }
+    expect(messages.filter((m) => /page/.test(m))).toHaveLength(2);
+    expect(messages.at(-1)).toMatch(/1\/1 conversations/);
+  });
+
   it('refuses other arguments beside a cursor', async () => {
     const first = payload((await call(chatsvcWith(), { max_items: 1 })).data!);
     const { result } = await call(chatsvcWith(), { cursor: first.cursor, kinds: ['channel'] });
@@ -343,7 +417,7 @@ describe('teams_export budgets and resume', () => {
   });
 });
 
-describe('teams_export failures', () => {
+describe('teams_export_messages failures', () => {
   it('records a conversation that cannot be read and exports the rest', async () => {
     const forbidden = new McpToolError('Teams chat service returned HTTP 403.', { status: 403, kind: 'http' });
     const { data } = await call(chatsvcWith(CONVS, { ...MESSAGES, [ALPHA]: forbidden }));
@@ -400,7 +474,7 @@ describe('teams_export failures', () => {
   });
 });
 
-describe('teams_export to the hosted blob store', () => {
+describe('teams_export_messages to the hosted blob store', () => {
   it('uploads one zip and returns a signed link', async () => {
     vi.stubEnv('MCP_BLOB_BASE_URL', 'https://host.example/b/reg123');
     vi.stubEnv('MCP_BLOB_SIGNING_KEY', 'k'.repeat(32));
@@ -428,7 +502,7 @@ describe('teams_export to the hosted blob store', () => {
   });
 });
 
-describe('teams_export cursor size', () => {
+describe('teams_export_messages cursor size', () => {
   it('keeps the cursor within the codec limit however many conversations remain', async () => {
     const many = Array.from({ length: 600 }, (_, i) => `19:${'x'.repeat(40)}${String(i).padStart(4, '0')}@thread.v2`);
     const convs = many.map((id, i) => rawConv(id, { topic: `Chat ${i}`, at: T0 + i }));

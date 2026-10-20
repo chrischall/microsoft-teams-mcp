@@ -1,5 +1,5 @@
 /**
- * `teams_export` — bulk-export chats and channels to files, so thousands of
+ * `teams_export_messages` — bulk-export chats and channels to files, so thousands of
  * messages can be kept, searched or handed on without any of them entering
  * the model's context.
  *
@@ -18,8 +18,12 @@
  * directory on disk, the next `part-NNNN.zip` in the blob store). The cursor
  * carries the original arguments, the conversations still to do (or, when
  * that list is too long for a cursor, the id to go on from — conversations
- * are exported in id order), and where in the current conversation it
- * stopped, as a `from.ts` position. A rejected credential, persistent rate
+ * are exported in id order; a conversation new since the first part with an
+ * id before that point is then not exported), and where in the current
+ * conversation it stopped, as a `from.ts` position. The budget is checked
+ * between conversations and between pages of a read; a read cut by it is
+ * redone whole by the next part, except the first conversation of a call,
+ * which always finishes so every part makes progress. A rejected credential, persistent rate
  * limiting or a Teams-side failure stops the run the same way, keeping what
  * was written; any other failure to read one conversation is recorded in
  * `errors` and the export moves on.
@@ -86,7 +90,11 @@ export const MAX_NAMED_CONVERSATIONS = 200;
 /** Raw messages read per conversation (250 pages of 200) before the oldest are reported as not exported. */
 export const EXPORT_MAX_RAW = 50_000;
 export const EXPORT_MAX_PAGES = 250;
-/** Waits before each retry of a rate-limited read; after the last, the export stops with a cursor. */
+/**
+ * Waits before each retry of a rate-limited read; after the last, the export stops with a cursor.
+ * Fixed rather than Retry-After driven: chatsvc's 429 McpToolError carries the status but not the
+ * header, so there is no server-given wait to honour.
+ */
 export const RATE_LIMIT_RETRY_MS = [2_000, 4_000, 8_000] as const;
 /** Files listed in the result; the manifest file lists them all. */
 const RESULT_FILES_CAP = 50;
@@ -189,6 +197,9 @@ function stopsExport(err: unknown): boolean {
   if (err.status === 401 || err.status === 429 || (err.status !== undefined && err.status >= 500)) return true;
   return ['no_credential', 'credential_rejected', 'session_expired', 'transport', 'timeout'].includes(err.kind ?? '');
 }
+
+/** Thrown from between pages of a read when the call's time budget is spent; the read is redone next part. */
+class BudgetSpent extends Error {}
 
 const isRateLimited = (err: unknown): boolean => err instanceof McpToolError && err.status === 429;
 
@@ -373,9 +384,10 @@ async function runExport(chatsvc: ChatServiceClient, input: ExportInput, opts: E
   let stopPos: ResumeState['pos'];
   const total = queue.length;
   let done = 0;
+  const overBudget = () => clock() - started >= budgetMs;
 
   while (queue.length > 0) {
-    if (written >= maxItems || clock() - started >= budgetMs) {
+    if (written >= maxItems || overBudget()) {
       hasMore = true;
       break;
     }
@@ -386,6 +398,9 @@ async function runExport(chatsvc: ChatServiceClient, input: ExportInput, opts: E
     const summary = summaries.get(id) ?? conversationSummary({ id }, me);
     const [titled] = await enrichTitles(chatsvc, raw, me, [summary]);
     const start: FromPosition = resumed !== undefined ? { t: resumed.t, seen: resumed.s ?? [] } : { t: since ?? 0, seen: [] };
+    // The first conversation of a call always reads to the end, so every part makes progress;
+    // a later one is cut between pages once the budget is spent and re-read by the next part.
+    const cuttable = done > 0;
 
     let fetched: RawMessage[];
     let capped = false;
@@ -400,11 +415,21 @@ async function runExport(chatsvc: ChatServiceClient, input: ExportInput, opts: E
             max: EXPORT_MAX_RAW,
             maxPages: EXPORT_MAX_PAGES,
             onCapped: () => (capped = true),
+            onPage: async (pages, messages) => {
+              throwIfCancelled();
+              if (cuttable && overBudget()) throw new BudgetSpent();
+              await reportProgress(done, total, `${done}/${total} conversations; reading page ${pages + 1} (${messages} messages so far)`);
+            },
           }),
         sleep,
       );
     } catch (err) {
       if (currentCallSignal()?.aborted) throw err;
+      if (err instanceof BudgetSpent) {
+        hasMore = true;
+        stopPos = resumed;
+        break;
+      }
       const e = wrapApiError(err, 'read this conversation');
       errors.push({
         conversation: { id, title: titled.title },
@@ -537,7 +562,7 @@ export function registerExportTools(
   opts: ExportToolOptions = {},
 ): void {
   server.registerTool(
-    'teams_export',
+    'teams_export_messages',
     {
       title: 'Export Teams chats and channels to files',
       description:
@@ -557,7 +582,8 @@ export function registerExportTools(
         `(default ${DEFAULT_MAX_ITEMS}, max ${MAX_ITEMS}) or budget_seconds (default ${DEFAULT_BUDGET_SECONDS}, ` +
         `max ${MAX_BUDGET_SECONDS}); when has_more is true pass cursor back (alone, or with max_items / ` +
         'budget_seconds) to continue the same export into the same folder (a hosted install returns a new link ' +
-        'per part). A rejected credential or persistent rate limiting stops early with a cursor and keeps what ' +
+        'per part). A cursor too long to list every remaining conversation resumes from an id instead, so a ' +
+        'conversation that first appears between parts may be left out. A rejected credential or persistent rate limiting stops early with a cursor and keeps what ' +
         'was written; a conversation that cannot be read is listed in errors and skipped. Never marks anything ' +
         'read. A name matching several conversations returns {ambiguous: true, candidates} and writes nothing.' +
         UNTRUSTED_DESCRIPTION_SUFFIX,

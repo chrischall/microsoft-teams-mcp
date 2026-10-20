@@ -75,6 +75,7 @@ describe('built server boots', () => {
       writeFileSync(join(dir, 'package.json'), '{"type":"module"}');
       const tools = await handshake(join(dir, 'bundle.js'), dir);
       expect(tools).toEqual([
+        'teams_export_messages',
         'teams_get_attachment',
         'teams_healthcheck',
         'teams_list_activity',

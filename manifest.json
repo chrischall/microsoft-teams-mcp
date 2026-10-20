@@ -137,7 +137,7 @@
     "output_dir": {
       "type": "string",
       "title": "Export folder (optional)",
-      "description": "Optional. Folder teams_export writes exports into (each export gets its own subfolder); a per-call dest must then lie inside it. Leave blank for ~/Downloads/microsoft-teams-mcp.",
+      "description": "Optional. Folder teams_export_messages writes exports into (each export gets its own subfolder); a per-call dest must then lie inside it. Leave blank for ~/Downloads/microsoft-teams-mcp.",
       "required": false
     },
     "confirm_mode": {
@@ -212,7 +212,7 @@
       "description": "Read the Activity feed — mentions, reactions, replies, meeting notices and missed calls across every chat and channel, without opening it"
     },
     {
-      "name": "teams_export",
+      "name": "teams_export_messages",
       "description": "Bulk-export chats and channels to JSONL or Markdown files (local paths, or a download link when hosted) without the messages entering the conversation; resumable"
     },
     {
