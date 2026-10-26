@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.7.0...v0.7.1) (2026-10-26)
+
+
+### Bug Fixes
+
+* **deps:** bump the production-dependencies group with 3 updates ([#84](https://github.com/chrischall/microsoft-teams-mcp/issues/84)) ([7708b15](https://github.com/chrischall/microsoft-teams-mcp/commit/7708b15363f71e6d30c09c9f2fe714f915f443e0))
+
 ## [0.7.0](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.6.2...v0.7.0) (2026-10-20)
 
 
