@@ -29,6 +29,7 @@
 import { captureBearerHeader, createFetchproxyTransport, type CaptureTransport } from '@chrischall/mcp-utils/fetchproxy';
 import { readPortEnv } from '@chrischall/mcp-utils';
 import { captureWindowMs } from './capture-window.js';
+import { BRIDGE_TRUST_DOMAINS, CAPTURE_DECL, withBridgeScope } from './bridge-scope.js';
 import { PACKAGE_NAME, VERSION } from './version.js';
 
 export { stripBearer } from '@chrischall/mcp-utils/fetchproxy';
@@ -46,28 +47,17 @@ export function getWsPort(): number {
 /**
  * The one request we capture from: any chat-service call on the New Teams
  * host. An idle tab may make none — opening a chat is what makes the worker
- * issue one, hence the guidance in the capture error below.
+ * issue one, hence the guidance in the capture error below. Defined in
+ * `bridge-scope.ts`, beside the other captures it is declared with.
  */
-export const CAPTURE_DECL = {
-  host: 'teams.cloud.microsoft',
-  path: '/api/chatsvc/*',
-  headerName: 'authorization',
-} as const;
+export { CAPTURE_DECL } from './bridge-scope.js';
 
 /**
- * The extension's trust boundary for the chat-service path: exactly the host we
- * capture from. Every API call afterwards is a plain server-side `fetch` the
- * bridge never sees, so nothing wider is needed here.
- *
- * Shared-file download adds a SECOND, independent trust scope —
- * `SHAREPOINT_TRUST_DOMAINS = ['sharepoint.com']` in `sharepoint-auth.ts` — used
- * only when a file is opened. It is additive: the SharePoint capture declares
- * `sharepoint.com` on its own transport and does NOT widen this chat-service
- * capture decl, which stays `teams.cloud.microsoft` alone. Granting the broader
- * SharePoint scope takes a one-time re-pair of `microsoft-teams-mcp` in the
- * ContextMint Bridge popup; until then shared files degrade to metadata + link.
+ * The domains every capture of this server trusts — see `bridge-scope.ts` for
+ * why the chat-service capture declares the SharePoint and Substrate domains
+ * too, and every capture header beside its own.
  */
-export const TRUST_DOMAINS = [CAPTURE_DECL.host];
+export const TRUST_DOMAINS = [...BRIDGE_TRUST_DOMAINS];
 
 /**
  * Build the capture transport through this module's import binding, so a
@@ -78,20 +68,30 @@ export const createCaptureTransport = (opts: Parameters<typeof createFetchproxyT
   createFetchproxyTransport<CaptureTransport>(opts);
 
 /**
+ * A capture transport factory that declares the one bridge scope
+ * (`withBridgeScope`), whichever single header the capture reads.
+ * `sharePointHost` is the host a SharePoint capture is about to try.
+ */
+export const bridgeScopedTransport =
+  (env: NodeJS.ProcessEnv, sharePointHost?: string) =>
+  (opts: Parameters<typeof createFetchproxyTransport>[0]): CaptureTransport =>
+    createCaptureTransport(withBridgeScope(opts, env, sharePointHost));
+
+/**
  * Capture a chat-service access token from the user's signed-in Teams tab.
  * Returns the bare token (no `Bearer ` prefix).
  *
  * `captureBearerHeader` declares only `capture_request_header` (beside the
- * `fetch` base verb mcp-utils always keeps) — the same set as before the
- * Activity feed left the page, so an existing pairing needs no re-approval —
- * sets the bridge deadline to the capture window + 15 s, starts the transport
+ * `fetch` base verb mcp-utils always keeps), widened to the one bridge scope
+ * (`bridge-scope.ts`) so this capture never re-pairs a grant the search or
+ * SharePoint capture made — sets the bridge deadline to the capture window + 15 s, starts the transport
  * (skipping `start()` makes the first verb throw "ensureConnected called before
  * listen()", which reads exactly like a pairing problem), guards against a
  * header too short to be a token, and closes the transport whatever happened.
  */
 export async function captureTokenViaFetchproxy(env: NodeJS.ProcessEnv = process.env): Promise<string> {
   return captureBearerHeader({
-    captures: [CAPTURE_DECL],
+    captures: [{ ...CAPTURE_DECL }],
     domains: TRUST_DOMAINS,
     // Read per capture, not at import: see `capture-window.ts`.
     windowMs: captureWindowMs(env),
@@ -103,6 +103,6 @@ export async function captureTokenViaFetchproxy(env: NodeJS.ProcessEnv = process
       'Open a signed-in teams.cloud.microsoft tab and click into any chat — ' +
       'that is what makes the page call the chat service; an idle tab never ' +
       'does — then retry.',
-    createTransport: createCaptureTransport,
+    createTransport: bridgeScopedTransport(env),
   });
 }

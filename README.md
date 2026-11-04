@@ -40,6 +40,29 @@ for it: `teams_mark_read`, or `mark_read: true` on `teams_list_messages`
 chat-service API and change nothing until you confirm (see
 [Writes](#writes)).
 
+## Pairing
+
+The bridge remembers a pairing only for the exact set of domains it approved,
+and approving a grant replaces the stored list of header captures. So all of
+this server's captures (chat service, SharePoint, Substrate search) declare the
+**same** scope: the three domains `teams.cloud.microsoft`, `sharepoint.com` and
+`substrate.office.com`, plus the chat-service and search captures and one
+capture per SharePoint host the server has already captured from. Each capture
+still reads only the one header it needs. The SharePoint hosts are remembered
+in `~/.microsoft-teams-mcp/bridge-scope.json` (beside the SharePoint token
+cache; not written with `TEAMS_TOKEN_CACHE=false`) once a capture from them
+succeeds.
+
+Up to 0.7, each capture declared only its own domain, so the bridge asked to
+pair again (or to update its grants) whenever the server moved between chats,
+search and files. Upgrading from 0.7 asks to pair **once** more, for the
+combined scope; after that it stays paired.
+
+If you run the bridge in more than one browser or browser profile, each one is a
+different extension identity, and the server trusts only the one it paired
+with. Keep the bridge enabled in the browser you pair with (or re-pair
+deliberately with `FETCHPROXY_TRUST_NEW_EXTENSION=1` after switching browsers).
+
 ## SharePoint file download
 
 A **shared file** in a chat or channel is not in Teams' own object store
@@ -48,15 +71,15 @@ chat-service token. So `teams_get_attachment` captures a **separate SharePoint
 token** and fetches the file through SharePoint's `v2.1` shares API, then
 downloads the pre-signed link it returns (with no token attached).
 
-Two things follow from that, both one-time and additive — they do **not** change
-how the chat-service token is captured:
+Two things follow from that:
 
-- **A one-time re-pair.** The SharePoint path declares a second trust scope,
-  `sharepoint.com`, so the ContextMint Bridge grant has to cover it. If you
-  paired `microsoft-teams-mcp` before this feature, revoke and re-pair it in the
-  bridge popup once to add the SharePoint scope (a `not in declared set` error
-  on a file download is this, nothing more). The chat-service capture is
-  untouched — it still trusts only `teams.cloud.microsoft`.
+- **One pairing covers it.** Every capture this server makes — chat service,
+  SharePoint and search — declares the same ContextMint Bridge scope: the domains
+  `teams.cloud.microsoft`, `sharepoint.com` and `substrate.office.com`, and the
+  same list of header captures. So approving `microsoft-teams-mcp` once covers
+  all three, and moving between chats, files and search never asks again (see
+  [Pairing](#pairing)). The first file from a new SharePoint host asks once to
+  grant that host's capture.
 - **Open the file once per SharePoint host.** The SharePoint token is captured
   from the browser's own request to the file's SharePoint host, is short-lived
   (~53 minutes), and is scoped to one host family. So the first file from a
@@ -76,10 +99,8 @@ Substrate does not accept the chat-service token either, so search captures a
 in `~/.microsoft-teams-mcp/substrate-token.json`. As with the other two, it is
 read only from the request header, never from page storage.
 
-- **A one-time re-pair.** The search path declares its own trust scope,
-  `substrate.office.com`, which the ContextMint Bridge grant has to cover. If you
-  paired `microsoft-teams-mcp` before this feature, revoke and re-pair it in the
-  bridge popup once. The chat-service and SharePoint captures are untouched.
+- **No separate pairing.** Search is part of the one bridge scope every capture
+  declares (see [Pairing](#pairing)), so the pairing that reads chats covers it.
 - **Run a search in Teams once.** The token is read off the Teams tab's own
   search request, so the first search may need you to type anything into the
   Teams search box and press Enter while the capture waits
@@ -725,8 +746,8 @@ instead.
   separate SharePoint token and fetches the file through SharePoint's v2.1
   shares API — see below.
 - **Scope grows quietly.** If you see a `not in declared set` error, the
-  extension's approved scope is behind the server's declared one — revoke
-  and re-pair `microsoft-teams-mcp` in the ContextMint Bridge popup.
+  extension's approved scope is behind the server's declared one — approve
+  `microsoft-teams-mcp` in the ContextMint Bridge popup.
 
 ## Upgrading from 0.4
 

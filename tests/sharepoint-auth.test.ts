@@ -21,6 +21,8 @@ const {
   SHAREPOINT_TRUST_DOMAINS,
 } = await import('../src/sharepoint-auth.js');
 
+const { bridgeCaptureDecls } = await import('../src/bridge-scope.js');
+
 // Opaque filler: long enough to pass the length guard, never a real token.
 const FAKE_TOKEN = 'x'.repeat(200);
 
@@ -75,7 +77,7 @@ describe('captureHostFor', () => {
 
 describe('trust scope', () => {
   it('trusts the broad sharepoint.com domain (covers every tenant host)', () => {
-    expect(SHAREPOINT_TRUST_DOMAINS).toEqual(['sharepoint.com']);
+    expect(SHAREPOINT_TRUST_DOMAINS).toEqual(['teams.cloud.microsoft', 'sharepoint.com', 'substrate.office.com']);
   });
 });
 
@@ -103,10 +105,11 @@ describe('captureSharePointTokenViaFetchproxy', () => {
     };
     // The trust scope is the broad family domain, but the capture decl is the
     // concrete host (HOSTNAME_RE rejects a wildcard capture host).
-    expect(opts.domains).toEqual(['sharepoint.com']);
+    expect(opts.domains).toEqual(['teams.cloud.microsoft', 'sharepoint.com', 'substrate.office.com']);
     expect(opts.port).toBe(37_149);
     expect([...opts.capabilities].sort()).toEqual(['capture_request_header', 'fetch']);
-    expect(opts.captureHeaders).toEqual([{ host: HOST, path: '/*', headerName: 'authorization' }]);
+    // The whole bridge scope plus the host about to be captured (bridge-scope.ts).
+    expect(opts.captureHeaders).toEqual(bridgeCaptureDecls([HOST]));
     expect(close).toHaveBeenCalledTimes(1);
   });
 

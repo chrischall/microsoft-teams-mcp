@@ -21,6 +21,8 @@ const {
   TRUST_DOMAINS,
 } = await import('../src/auth-fetchproxy.js');
 
+const { bridgeCaptureDecls } = await import('../src/bridge-scope.js');
+
 // Opaque filler: long enough to pass the length guard, never a real token.
 const FAKE_TOKEN = 'x'.repeat(200);
 
@@ -46,7 +48,7 @@ describe('capture declaration', () => {
       path: '/api/chatsvc/*',
       headerName: 'authorization',
     });
-    expect(TRUST_DOMAINS).toEqual(['teams.cloud.microsoft']);
+    expect(TRUST_DOMAINS).toEqual(['teams.cloud.microsoft', 'sharepoint.com', 'substrate.office.com']);
   });
 });
 
@@ -72,12 +74,13 @@ describe('captureTokenViaFetchproxy', () => {
       capabilities: string[];
       captureHeaders: unknown[];
     };
-    expect(opts.domains).toEqual(['teams.cloud.microsoft']);
+    expect(opts.domains).toEqual(['teams.cloud.microsoft', 'sharepoint.com', 'substrate.office.com']);
     expect(opts.port).toBe(37_149);
     // The header capture beside mcp-utils' always-on fetch verb — and no DOM
     // read: the Activity feed comes from the chat service, not the page.
     expect([...opts.capabilities].sort()).toEqual(['capture_request_header', 'fetch']);
-    expect(opts.captureHeaders).toEqual([CAPTURE_DECL]);
+    // Declares the whole bridge scope (bridge-scope.ts); reads only its own header.
+    expect(opts.captureHeaders).toEqual(bridgeCaptureDecls([]));
     expect(close).toHaveBeenCalledTimes(1);
   });
 

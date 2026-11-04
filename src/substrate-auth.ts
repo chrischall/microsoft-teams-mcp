@@ -30,24 +30,19 @@
  */
 import { captureBearerHeader } from '@chrischall/mcp-utils/fetchproxy';
 import { captureWindowMs } from './capture-window.js';
-import { createCaptureTransport, getWsPort } from './auth-fetchproxy.js';
+import { bridgeScopedTransport, getWsPort } from './auth-fetchproxy.js';
+import { BRIDGE_TRUST_DOMAINS, SUBSTRATE_CAPTURE_DECL } from './bridge-scope.js';
 import { PACKAGE_NAME, VERSION } from './version.js';
 
-/** The one request we capture from: a search-service call the Teams tab makes. */
-export const SUBSTRATE_CAPTURE_DECL = {
-  host: 'substrate.office.com',
-  path: '/searchservice/*',
-  headerName: 'authorization',
-} as const;
+/** The one request we capture from: a search-service call the Teams tab makes (see `bridge-scope.ts`). */
+export { SUBSTRATE_CAPTURE_DECL } from './bridge-scope.js';
 
 /**
- * The extension's trust boundary for search: exactly the host we capture from.
- * A third, independent scope beside `teams.cloud.microsoft` and
- * `sharepoint.com` — granting it takes a one-time re-pair of
- * `microsoft-teams-mcp` in the ContextMint Bridge popup; until then search falls
- * back to the client-side scan.
+ * The domains this capture trusts: the one bridge scope every capture of this
+ * server declares (`bridge-scope.ts`), not `substrate.office.com` alone — a
+ * search-only domain set made the bridge re-pair on the next chat capture.
  */
-export const SUBSTRATE_TRUST_DOMAINS = [SUBSTRATE_CAPTURE_DECL.host] as const;
+export const SUBSTRATE_TRUST_DOMAINS = [...BRIDGE_TRUST_DOMAINS];
 
 /**
  * Capture a Substrate search token from the user's signed-in Teams tab.
@@ -55,9 +50,9 @@ export const SUBSTRATE_TRUST_DOMAINS = [SUBSTRATE_CAPTURE_DECL.host] as const;
  */
 export async function captureSubstrateTokenViaFetchproxy(env: NodeJS.ProcessEnv = process.env): Promise<string> {
   return captureBearerHeader({
-    // Same verb set as the other two captures (`capture_request_header` beside
-    // the always-on `fetch`); only the trusted domain differs.
-    captures: [SUBSTRATE_CAPTURE_DECL],
+    // Same verb set and, through `bridgeScopedTransport`, the same declared
+    // scope as the other two captures; only the header read differs.
+    captures: [{ ...SUBSTRATE_CAPTURE_DECL }],
     domains: SUBSTRATE_TRUST_DOMAINS,
     // Read per capture, not at import: see `capture-window.ts`.
     windowMs: captureWindowMs(env),
@@ -69,7 +64,7 @@ export async function captureSubstrateTokenViaFetchproxy(env: NodeJS.ProcessEnv 
       'In a signed-in teams.cloud.microsoft tab, type anything into the search box at the top ' +
       'and press Enter — that is what makes Teams call substrate.office.com, where the token ' +
       'is read from — then retry. A "not in declared set" error means the ContextMint Bridge ' +
-      'pairing does not trust substrate.office.com yet: re-pair microsoft-teams-mcp once.',
-    createTransport: createCaptureTransport,
+      'pairing does not trust substrate.office.com yet: approve microsoft-teams-mcp in the bridge popup once.',
+    createTransport: bridgeScopedTransport(env),
   });
 }
