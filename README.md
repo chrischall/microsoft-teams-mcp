@@ -392,9 +392,11 @@ Everything is optional — by default the token is captured from your browser.
   `after_message_id` — **not** `next_cursor`, which is a time token that only
   `teams_list_changed_conversations` accepts (`teams_list_messages` rejects it, and
   `teams_list_changed_conversations` rejects a message id). `view: "brief"`
-  answers plain text instead, one line per changed conversation —
-  `title — <newest ISO time | no date> — <n> new, <m> from others` (or
-  `could not read`), at most 120 characters — the shape mcp-host's context
+  answers lines instead, inside the untrusted-data envelope as
+  `data: string[]`, one per changed conversation —
+  `title — <newest ISO time | no date> — <n> new, <m> from others`, at most
+  120 characters, plus `-- none` when nothing is new and `-- error: …` when
+  some conversations could not be read — the shape mcp-host's context
   groups read (this is the work group's canonical *what's new*):
 
   ```jsonc

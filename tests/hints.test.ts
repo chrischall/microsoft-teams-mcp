@@ -121,29 +121,25 @@ describe('teams_list_changed_conversations view: brief', () => {
   const GROUP = '19:group0001@thread.v2';
   const LONG = '19:group0002@thread.v2';
   const BROKEN = '19:group0003@thread.v2';
+  const NOTE_LIKE = '19:group0004@thread.v2';
+  const SLASHED = '19:group0005@thread.v2';
   const LONG_TITLE = `Quarterly planning\nfor the ${'very '.repeat(30)}long project`;
 
   beforeEach(() => pinClock(NOW));
   afterEach(() => vi.useRealTimers());
 
-  async function brief(args: Record<string, unknown> = { view: 'brief' }) {
-    const messages = {
+  async function call(args: Record<string, unknown>, convs = CONVS) {
+    const messages: Record<string, ReturnType<typeof rawMsg>[]> = {
       [GROUP]: [rawMsg(NOW - 2 * HOUR, { text: 'one' }), rawMsg(NOW - HOUR, { text: 'two', fromMe: true })],
       [LONG]: [rawMsg(NOW - 3 * HOUR, { conv: LONG })],
+      [NOTE_LIKE]: [rawMsg(NOW - 5 * HOUR, { conv: NOTE_LIKE })],
+      [SLASHED]: [rawMsg(NOW - 6 * HOUR, { conv: SLASHED })],
     };
     const getMessages = vi.fn(async (id: string, opts: Parameters<ReturnType<typeof messagesFrom>>[1]) => {
       if (id === BROKEN) throw new Error('boom');
-      return messagesFrom(messages[id as keyof typeof messages] ?? [])(id, opts);
+      return messagesFrom(messages[id] ?? [])(id, opts);
     });
-    const chatsvc = fakeChatsvc(
-      [
-        rawConv(GROUP, { topic: 'Project Falcon', at: NOW - HOUR }),
-        rawConv(LONG, { topic: LONG_TITLE, at: NOW - 3 * HOUR }),
-        rawConv(BROKEN, { topic: 'Broken one', at: NOW - 4 * HOUR }),
-        rawConv('19:quiet@thread.v2', { topic: 'Quiet', at: NOW - 2 * DAY }),
-      ],
-      { getMessages },
-    );
+    const chatsvc = fakeChatsvc(convs, { getMessages });
     const h = await createTestHarness((server) => registerChangesTools(server, { chatsvc }));
     try {
       const result = await h.callTool('teams_list_changed_conversations', args);
@@ -153,27 +149,69 @@ describe('teams_list_changed_conversations view: brief', () => {
     }
   }
 
+  const CONVS = [
+    rawConv(GROUP, { topic: 'Project Falcon', at: NOW - HOUR }),
+    rawConv(LONG, { topic: LONG_TITLE, at: NOW - 3 * HOUR }),
+    rawConv(BROKEN, { topic: 'Broken one', at: NOW - 4 * HOUR }),
+    rawConv('19:quiet@thread.v2', { topic: 'Quiet', at: NOW - 2 * DAY }),
+  ];
+
+  /** The brief answer's raw text, and its lines out of the untrusted-data envelope. */
+  async function brief(args: Record<string, unknown> = { view: 'brief' }, convs = CONVS) {
+    const text = await call(args, convs);
+    const parsed = JSON.parse(text) as { untrusted_content?: unknown; note?: unknown; data?: unknown };
+    return { text, parsed, lines: parsed.data as string[] };
+  }
+
+  it('answers inside the untrusted-data envelope, minified, note first, lines as data: string[]', async () => {
+    const { text, parsed, lines } = await brief();
+    expect(parsed.untrusted_content).toBe(true);
+    expect(parsed.note).toMatch(/other people in Microsoft Teams/);
+    expect(Object.keys(parsed)).toEqual(['untrusted_content', 'note', 'data']);
+    expect(text).toBe(JSON.stringify(parsed));
+    expect(Array.isArray(lines) && lines.every((l) => typeof l === 'string')).toBe(true);
+  });
+
   it('answers one line per conversation, "title — <ISO date | no date> — <status>", each ≤ 120 chars', async () => {
-    const lines = (await brief()).split('\n');
-    expect(lines).toEqual([
+    const { lines } = await brief();
+    expect(lines.slice(0, 2)).toEqual([
       `Project Falcon — ${new Date(NOW - HOUR).toISOString()} — 2 new, 1 from others`,
       expect.stringMatching(/^Quarterly planning for the very .*… — \S+ — 1 new, 1 from others$/),
-      'Broken one — no date — could not read',
     ]);
-    for (const line of lines) {
+    for (const line of lines.filter((l) => !l.startsWith('-- '))) {
       expect(line.length).toBeLessThanOrEqual(120);
       expect(line).toMatch(/^.+ — (\d{4}-\d{2}-\d{2}T\S+|no date) — .+$/);
     }
   });
 
-  it('answers an empty text when nothing is new', async () => {
-    expect(await brief({ view: 'brief', cursor: new Date(NOW).toISOString() })).toBe('');
+  it('reports a conversation whose read failed as an "-- error:" note, not as an item', async () => {
+    const { lines } = await brief();
+    expect(lines).toHaveLength(3);
+    expect(lines[2]).toBe('-- error: 1 conversation could not be read.');
+    expect(lines.join('\n')).not.toContain('Broken one');
+  });
+
+  it('answers the single note "-- none" when nothing is new', async () => {
+    const { lines } = await brief({ view: 'brief', cursor: new Date(NOW).toISOString() });
+    expect(lines).toEqual(['-- none']);
+  });
+
+  it('escapes a title that starts with "-- " or "\\" with one leading backslash', async () => {
+    const { lines } = await brief({ view: 'brief' }, [
+      rawConv(NOTE_LIKE, { topic: '-- none', at: NOW - 5 * HOUR }),
+      rawConv(SLASHED, { topic: '\\server\\share', at: NOW - 6 * HOUR }),
+    ]);
+    expect(lines).toEqual([
+      `\\-- none — ${new Date(NOW - 5 * HOUR).toISOString()} — 1 new, 1 from others`,
+      `\\\\server\\share — ${new Date(NOW - 6 * HOUR).toISOString()} — 1 new, 1 from others`,
+    ]);
   });
 
   it('keeps the full JSON envelope without view, and with view: full', async () => {
     for (const args of [{}, { view: 'full' }]) {
-      const parsed = JSON.parse(await brief(args)) as Record<string, unknown>;
+      const parsed = JSON.parse(await call(args)) as Record<string, unknown>;
       expect(parsed.untrusted_content, JSON.stringify(args)).toBe(true);
+      expect(parsed.conversations, JSON.stringify(args)).toBeDefined();
     }
   });
 });
