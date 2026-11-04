@@ -170,7 +170,7 @@ Everything is optional — by default the token is captured from your browser.
 | `TEAMS_SUBSTRATE_TOKEN_FILE` | Where the captured Substrate search token is cached. Defaults to `~/.microsoft-teams-mcp/substrate-token.json`. `TEAMS_TOKEN_CACHE=false` keeps it in memory too. |
 | `TEAMS_SHAREPOINT_TOKEN_FILE` | Where the captured SharePoint tokens (one per host, used to download shared files) are cached. Defaults to `~/.microsoft-teams-mcp/sharepoint-tokens.json`. `TEAMS_TOKEN_CACHE=false` keeps them in memory too. |
 | `TEAMS_TIME_ZONE` | Default IANA time zone (e.g. `America/New_York`) for the `tz` argument of `teams_list_messages` and `teams_list_unread_messages`: each message then carries `time_local` (ISO 8601 with offset) next to its UTC `time`. Unset means no `time_local` unless `tz` is passed; a name `Intl` does not know is reported as an error. |
-| `TEAMS_OUTPUT_DIR` | Folder `teams_export_messages` writes exports into (each export gets its own timestamped subfolder). Defaults to `~/Downloads/microsoft-teams-mcp`. When set, a per-call `dest` must lie inside it; when unset, `dest` must be under `~/Downloads`, `~/Documents` or `~/Desktop`. |
+| `TEAMS_OUTPUT_DIR` | Folder `teams_export_messages` (and `teams_get_transcript` with `save`) writes into (each export gets its own timestamped subfolder). Defaults to `~/Downloads/microsoft-teams-mcp`. When set, a per-call `dest` must lie inside it; when unset, `dest` must be under `~/Downloads`, `~/Documents` or `~/Desktop`. |
 | `TEAMS_WS_PORT` | fetchproxy concentrator port. Defaults to `37149`, the fleet-wide shared port. |
 | `FETCHPROXY_WS_HOST` | Bind interface for the bridge (default `127.0.0.1`; a literal IP only, anything else is ignored). Keep on loopback — it exists for ONE topology: a hosted child in its own network namespace. |
 | `FETCHPROXY_IDENTITY_DIR` | Where to store the long-term fetchproxy identity keypair (default `~/.fetchproxy/identity/`; an absolute path only, anything else is ignored). Exists for a host that runs a separate child per caller, so they can share one identity. |
@@ -456,6 +456,25 @@ Everything is optional — by default the token is captured from your browser.
   (default 50, max 200). Read from the chat service, so the Activity view
   does not need to be open; it never marks anything read (`teams_mark_read`
   marks chats and channels read, not the Activity feed).
+- `teams_get_transcript` — the transcript of a recorded Teams meeting, read from
+  its meeting chat (`conversation`: the chat's id or a substring of its title).
+  It reads **Teams' own copy** of the transcript — the one the meeting's Recap
+  tab shows — from Teams' object store with the chat-service token, so it works
+  **even when the organizer turned transcript download off** (only the
+  OneDrive copy is locked then). No SharePoint token or extra pairing is
+  involved. Returns the newest transcribed recording unless `recording_id`
+  names another, with `recording` (`recording_id`, time, `duration`,
+  `play_url`), `speakers`, `cue_count`, `other_recordings` (newest first, up to
+  20) and `transcript`: `format: "text"` (default — one line per speaker turn,
+  `[hh:mm:ss] Name: words`) or `"vtt"` (the WebVTT as Teams serves it). A
+  transcript over 200,000 characters is cut short (`truncated: true`).
+  `save: true` writes `<meeting>-<time>.vtt` and `.txt` instead, like
+  `teams_export_messages` (a fresh folder under `dest` → `TEAMS_OUTPUT_DIR` →
+  `~/Downloads/microsoft-teams-mcp` locally; a zip behind a signed link on a
+  hosted install), and returns where. The newest 2,000 messages of the chat are
+  searched for recordings. Teams' copy expires after some weeks (verified: about
+  four): an expired transcript is an error naming that, never a silent switch
+  to another recording.
 - `teams_export_messages` — bulk-export chats and channels to files, so thousands of
   messages can be archived or searched with shell tools without any of them
   entering the conversation: the result is only a manifest (where the files

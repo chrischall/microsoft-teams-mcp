@@ -17,6 +17,7 @@ import { registerActivityTools } from '../src/tools/activity.js';
 import { registerSearchTools } from '../src/tools/search.js';
 import { registerHealthcheckTool } from '../src/tools/healthcheck.js';
 import { registerExportTools } from '../src/tools/export.js';
+import { registerTranscriptTools } from '../src/tools/transcript.js';
 
 export async function servedTools() {
   const deps = {
@@ -39,6 +40,7 @@ export async function servedTools() {
     registerSearchTools(server, deps);
     registerHealthcheckTool(server, deps);
     registerExportTools(server, deps);
+    registerTranscriptTools(server, deps);
   });
   try {
     return (await h.client.listTools()).tools;

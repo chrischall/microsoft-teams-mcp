@@ -419,6 +419,45 @@ describe('getMessages', () => {
   });
 });
 
+describe('fetchTranscript', () => {
+  const OBJ = '0-wus-d11-0123456789abcdef0123456789abcdef';
+  const URL_ = `https://us-prod.asyncgw.teams.microsoft.com/v1/objects/${OBJ}/views/transcript`;
+
+  it('fetches the WebVTT off the Teams gateway with the bearer', async () => {
+    const fetchImpl: FetchMock = vi.fn(
+      async () => new Response('WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n<v A>hi</v>\n', { status: 200, headers: { 'content-type': 'text/vtt' } }),
+    );
+    await expect(client(fetchImpl).fetchTranscript(OBJ)).resolves.toMatch(/^WEBVTT/);
+    expect(urlOf(fetchImpl, 0)).toBe(URL_);
+    expect(headersOf(fetchImpl, 0).get('authorization')).toMatch(/^Bearer /);
+  });
+
+  it.each(['../x', 'https://evil.com/x', '0-wus-d11-abc', ''])('refuses object id %j without sending anything', async (id) => {
+    const fetchImpl: FetchMock = vi.fn(async () => new Response('x'));
+    await expect(client(fetchImpl).fetchTranscript(id)).rejects.toBeInstanceOf(McpToolError);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('says the transcript has expired or was removed on a 404', async () => {
+    const fetchImpl: FetchMock = vi.fn(async () => new Response('', { status: 404 }));
+    const err = (await client(fetchImpl).fetchTranscript(OBJ).catch((e: unknown) => e)) as McpToolError;
+    expect(err).toBeInstanceOf(McpToolError);
+    expect(err.status).toBe(404);
+    expect(err.message).toMatch(/no longer|expired|not available/i);
+  });
+
+  it('refuses something that is not a transcript', async () => {
+    const fetchImpl: FetchMock = vi.fn(async () => new Response('<html>', { status: 200, headers: { 'content-type': 'text/html' } }));
+    await expect(client(fetchImpl).fetchTranscript(OBJ)).rejects.toBeInstanceOf(McpToolError);
+  });
+
+  it('refuses a transcript over 20 MB', async () => {
+    const big = new Uint8Array(20 * 1024 * 1024 + 1);
+    const fetchImpl: FetchMock = vi.fn(async () => new Response(big, { status: 200, headers: { 'content-type': 'text/vtt' } }));
+    await expect(client(fetchImpl).fetchTranscript(OBJ)).rejects.toBeInstanceOf(McpToolError);
+  });
+});
+
 describe('fetchImage', () => {
   const IMG = 'https://us-api.asm.skype.com/v1/objects/0-abc-123/views/imgo';
 

@@ -620,7 +620,7 @@ export function registerExportTools(
         'open, no token yet, too large) is listed as skipped with the reason, never failing the export.' +
         UNTRUSTED_DESCRIPTION_SUFFIX,
       annotations: toolAnnotations({ readOnly: true, openWorld: true }),
-      _meta: workMeta('other', { aliases: ['export', 'save the chat', 'transcript'] }),
+      _meta: workMeta('other', { aliases: ['export', 'save the chat', 'chat history'] }),
       inputSchema: {
         conversations: conversationsArg
           .optional()

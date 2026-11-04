@@ -427,7 +427,7 @@ const NAMED_ENTITIES: Record<string, string> = {
   nbsp: ' ',
 };
 
-function decodeEntities(s: string): string {
+export function decodeEntities(s: string): string {
   // One pass, so `&amp;lt;` becomes `&lt;` and not `<`.
   return s.replace(/&(?:#(\d+)|#x([0-9a-f]+)|([a-z]+));/gi, (whole, dec, hex, name) => {
     if (name !== undefined) return NAMED_ENTITIES[name.toLowerCase()] ?? whole;

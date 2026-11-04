@@ -18,6 +18,7 @@ import { registerActivityTools } from './tools/activity.js';
 import { registerSearchTools } from './tools/search.js';
 import { registerHealthcheckTool } from './tools/healthcheck.js';
 import { registerExportTools } from './tools/export.js';
+import { registerTranscriptTools } from './tools/transcript.js';
 
 loadDotenvSafely();
 
@@ -55,6 +56,7 @@ await runMcp({
     registerActivityTools,
     registerSearchTools,
     registerExportTools,
+    registerTranscriptTools,
     registerHealthcheckTool,
   ],
 });
