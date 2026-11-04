@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.2](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.8.1...v0.8.2) (2026-11-04)
+
+
+### Bug Fixes
+
+* **transcript:** name the expired recording, its play_url and the others to try ([#94](https://github.com/chrischall/microsoft-teams-mcp/issues/94)) ([82d2a51](https://github.com/chrischall/microsoft-teams-mcp/commit/82d2a51557e5964d714fc45a4baf8daf1323f2ac))
+
 ## [0.8.1](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.8.0...v0.8.1) (2026-11-04)
 
 
