@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.1](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.8.0...v0.8.1) (2026-11-04)
+
+
+### Bug Fixes
+
+* **brief:** align the brief view with the fleet contract ([#91](https://github.com/chrischall/microsoft-teams-mcp/issues/91)) ([8f40651](https://github.com/chrischall/microsoft-teams-mcp/commit/8f4065142b527bc4ed63d4dcda9ed2cdc1ba137b))
+
 ## [0.8.0](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.7.0...v0.8.0) (2026-11-04)
 
 
