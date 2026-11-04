@@ -30,9 +30,15 @@
  * a conversation the listing called quiet is then not skipped), and it stays
  * at the input time when any read failed. Nothing writes the read marker.
  */
-import type { McpServer } from '@modelcontextprotocol/server';
+import type { CallToolResult, McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import { mapWithConcurrency, McpToolError, toolAnnotations } from '@chrischall/mcp-utils';
+import {
+  mapWithConcurrency,
+  McpToolError,
+  toolAnnotations,
+  UNTRUSTED_CONTENT_RULE,
+  untrustedEnvelope,
+} from '@chrischall/mcp-utils';
 import type { TeamsDeps } from '../deps.js';
 import {
   conversationSummary,
@@ -183,24 +189,36 @@ function briefStatus(read: ChangeRead): string {
 
 /**
  * One brief line, `title — <ISO date | no date> — <status>`, at most
- * {@link BRIEF_MAX} characters: the title is flattened to one line (a chat
- * topic can carry newlines) and shortened, never the date or the status.
+ * {@link BRIEF_MAX} characters as a WHOLE: the title is flattened to one line
+ * (a chat topic can carry newlines) and shortened first, never the date or the
+ * status (both are this MCP's own and short). A title that starts with `-- `
+ * or `\` is escaped with one leading `\`, so a topic someone set can never
+ * read as a note line (the consolidated brief-view contract; the gateway
+ * strips that one backslash).
  */
 export function briefLine(title: string, time: string | undefined, status: string): string {
   const tail = ` — ${time ?? 'no date'} — ${status}`;
   const flat = title.replace(/\s+/g, ' ').trim() || '(untitled)';
+  const escaped = flat.startsWith('-- ') || flat.startsWith('\\') ? `\\${flat}` : flat;
   const room = BRIEF_MAX - tail.length;
-  const shown = flat.length > room ? `${flat.slice(0, Math.max(room - 1, 0)).trimEnd()}…` : flat;
+  const shown = escaped.length > room ? `${escaped.slice(0, Math.max(room - 1, 0)).trimEnd()}…` : escaped;
   return `${shown}${tail}`;
 }
 
+/** Who writes a brief line's third-party text: the note the envelope carries ahead of it. */
+const BRIEF_NOTE = `Conversation titles below are set by other people in Microsoft Teams. ${UNTRUSTED_CONTENT_RULE}`;
+
 /**
- * The brief answer as plain text, one line per item. It carries no message
- * text — only conversation titles (which other people can set), counts and
- * times — and the tool's description keeps the untrusted-content warning.
+ * The brief answer: its lines inside the fleet untrusted-data envelope as
+ * `data: string[]`, minified, note first — the titles are chat topics and
+ * participant names other people set. A line starting `-- ` is a note:
+ * `-- none` when nothing is new, `-- error: …` when some reads failed.
  */
-function briefResult(lines: string[]): { content: { type: 'text'; text: string }[] } {
-  return { content: [{ type: 'text', text: lines.join('\n') }] };
+function briefResult(lines: string[], failed: number): CallToolResult {
+  const out = [...lines];
+  if (failed > 0) out.push(`-- error: ${failed} conversation${failed === 1 ? '' : 's'} could not be read.`);
+  if (out.length === 0) out.push('-- none');
+  return { content: [{ type: 'text', text: JSON.stringify(untrustedEnvelope(out, { note: BRIEF_NOTE })) }] };
 }
 
 export function registerChangesTools(server: McpServer, { chatsvc }: Pick<TeamsDeps, 'chatsvc'>): void {
@@ -263,9 +281,10 @@ export function registerChangesTools(server: McpServer, { chatsvc }: Pick<TeamsD
           .enum(['full', 'brief'])
           .optional()
           .describe(
-            '"full" (default) returns the result described above; "brief" returns plain text, one line per ' +
-              'changed conversation (limit does not apply): title — newest_time (ISO 8601, or "no date") — ' +
-              '"<n> new, <m> from others", or "could not read" for a conversation whose read failed.',
+            '"full" (default) returns the result described above; "brief" returns the untrusted-data ' +
+              'envelope with data: one line per changed conversation (limit does not apply): title — ' +
+              'newest_time (ISO 8601, or "no date") — "<n> new, <m> from others". A line starting "-- " is ' +
+              'a note: "-- none" when nothing is new, "-- error: …" when some conversations could not be read.',
           ),
       },
     },
@@ -346,10 +365,10 @@ export function registerChangesTools(server: McpServer, { chatsvc }: Pick<TeamsD
           after_message_id,
         }));
         if (view === 'brief') {
-          return briefResult([
-            ...changed.map(({ read }, i) => briefLine(titled[i].title, read.newestTime, briefStatus(read))),
-            ...failed.map((_, i) => briefLine(titled[changed.length + i].title, undefined, 'could not read')),
-          ]);
+          return briefResult(
+            changed.map(({ read }, i) => briefLine(titled[i].title, read.newestTime, briefStatus(read))),
+            failed.length,
+          );
         }
         const errors = failed.map((f, i) => ({
           conversation: titled[changed.length + i],
