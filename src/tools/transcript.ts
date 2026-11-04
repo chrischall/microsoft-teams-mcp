@@ -16,7 +16,7 @@
  */
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import { McpToolError, currentCallSignal, toolAnnotations } from '@chrischall/mcp-utils';
+import { McpToolError, currentCallSignal, errorStatusOf, toolAnnotations } from '@chrischall/mcp-utils';
 import { openExportSink, sanitizeExportFileName } from '@chrischall/mcp-utils/export';
 import type { RawMessage } from '../chatsvc.js';
 import type { TeamsDeps } from '../deps.js';
@@ -59,7 +59,7 @@ export function registerTranscriptTools(server: McpServer, { chatsvc }: Pick<Tea
         `${MAX_INLINE_CHARS.toLocaleString('en-US')} characters is cut short (truncated: true). save: true writes ` +
         `<meeting>-<time>.vtt and .txt instead (on a local install into a fresh folder under dest, else ${EXPORT_OUTPUT_ENV}, ` +
         `else ~/Downloads/${EXPORT_SERVER_NAME}; on a hosted install as a zip behind a signed link) and returns where. ` +
-        "Teams' copy expires after some weeks: an expired one is an error, not another recording. " +
+        "Teams' copy expires after about four weeks: an expired one is an error naming the recording, its play_url and the others, not another recording. " +
         'Does not mark anything read.' +
         UNTRUSTED_DESCRIPTION_SUFFIX,
       _meta: workMeta('lookup', { aliases: ['transcript', 'meeting transcript', 'recording', 'recap', 'vtt', 'what was said'] }),
@@ -119,10 +119,16 @@ export function registerTranscriptTools(server: McpServer, { chatsvc }: Pick<Tea
           }
         }
 
-        const vtt = await chatsvc.fetchTranscript(chosen.object_id);
+        const picked = chosen;
+        const others = recordings.filter((r) => r !== picked).slice(0, MAX_OTHERS).map(shown);
+        let vtt: string;
+        try {
+          vtt = await chatsvc.fetchTranscript(picked.object_id);
+        } catch (err) {
+          throw errorStatusOf(err) === 404 ? expiredError(summary.title, picked, others, err) : err;
+        }
         const cues = parseVtt(vtt);
         const text = renderTranscriptText(cues);
-        const others = recordings.filter((r) => r !== chosen).slice(0, MAX_OTHERS).map(shown);
         const base = {
           conversation: summary.id,
           title: summary.title,
@@ -170,6 +176,33 @@ export function registerTranscriptTools(server: McpServer, { chatsvc }: Pick<Tea
         if (err instanceof AmbiguousConversationError) return untrustedResult(ambiguousResult(err));
         throw wrapApiError(err, 'get the transcript');
       }
+    },
+  );
+}
+
+/**
+ * A 404 for `r`'s transcript, naming what the caller cannot otherwise see: which
+ * recording was tried (the default is the newest, never stated in the call), its
+ * play_url — the one way left to the recording — and the chat's other recordings.
+ * Expiry is not worked out from the time: the store's window was observed, not
+ * documented, so the others are listed for the caller to try.
+ */
+function expiredError(chatTitle: string, r: Recording, others: ReturnType<typeof shown>[], cause: unknown): McpToolError {
+  const which = `recording ${r.message_id} (${r.time})`;
+  const play = r.play_url !== undefined ? ` Open the recording in the browser instead: ${r.play_url}` : '';
+  const rest =
+    others.length > 0
+      ? ` Other recordings in this chat, newest first (pass one as recording_id): ${others
+          .map((o) => `${o.recording_id} (${o.time})`)
+          .join(', ')}.`
+      : '';
+  return new McpToolError(
+    `The transcript of ${which} in "${chatTitle}" is no longer available from Teams (404): it has expired or was removed.`,
+    {
+      status: 404,
+      kind: 'http',
+      hint: `Teams keeps its own copy of a transcript for about four weeks.${play}${rest}`,
+      cause,
     },
   );
 }
