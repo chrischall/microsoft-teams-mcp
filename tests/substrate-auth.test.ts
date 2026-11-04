@@ -18,6 +18,8 @@ const { captureSubstrateTokenViaFetchproxy, SUBSTRATE_CAPTURE_DECL, SUBSTRATE_TR
   '../src/substrate-auth.js'
 );
 
+const { bridgeCaptureDecls } = await import('../src/bridge-scope.js');
+
 // Opaque filler: long enough to pass the length guard, never a real token.
 const FAKE_TOKEN = 'x'.repeat(200);
 
@@ -29,8 +31,8 @@ beforeEach(() => {
 });
 
 describe('substrate trust scope', () => {
-  it('trusts exactly substrate.office.com, and captures off its search service', () => {
-    expect(SUBSTRATE_TRUST_DOMAINS).toEqual(['substrate.office.com']);
+  it('trusts the one bridge scope, and captures off the search service', () => {
+    expect(SUBSTRATE_TRUST_DOMAINS).toEqual(['teams.cloud.microsoft', 'sharepoint.com', 'substrate.office.com']);
     expect(SUBSTRATE_CAPTURE_DECL).toEqual({
       host: 'substrate.office.com',
       path: '/searchservice/*',
@@ -61,10 +63,11 @@ describe('captureSubstrateTokenViaFetchproxy', () => {
       captureHeaders: unknown[];
       fetchTimeoutMs: number;
     };
-    expect(opts.domains).toEqual(['substrate.office.com']);
+    expect(opts.domains).toEqual(['teams.cloud.microsoft', 'sharepoint.com', 'substrate.office.com']);
     expect(opts.port).toBe(37_149);
     expect([...opts.capabilities].sort()).toEqual(['capture_request_header', 'fetch']);
-    expect(opts.captureHeaders).toEqual([SUBSTRATE_CAPTURE_DECL]);
+    // Declares the whole bridge scope (bridge-scope.ts); reads only its own header.
+    expect(opts.captureHeaders).toEqual(bridgeCaptureDecls([]));
     expect(opts.fetchTimeoutMs).toBe(45_000);
     expect(close).toHaveBeenCalledTimes(1);
   });

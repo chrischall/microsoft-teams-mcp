@@ -32,7 +32,9 @@
  * The pairing TRUST SCOPE may still be the broad `sharepoint.com` —
  * `hostMatchesAnyDomain` accepts any `*.sharepoint.com` subdomain via
  * `endsWith('.' + domain)` — so one domain covers every tenant SP host without
- * re-pairing per host.
+ * re-pairing per host. That domain is one of the one bridge scope every capture
+ * of this server declares (`bridge-scope.ts`); a capture host is added to it,
+ * and remembered, once a capture of it succeeds.
  *
  * Import this module LAZILY (`await import('./sharepoint-auth.js')`) from the
  * code that needs a token, as `auth-fetchproxy.ts` is, so a server run with
@@ -40,26 +42,19 @@
  */
 import { captureBearerHeader } from '@chrischall/mcp-utils/fetchproxy';
 import { captureWindowMs } from './capture-window.js';
-import { createCaptureTransport, getWsPort } from './auth-fetchproxy.js';
+import { bridgeScopedTransport, getWsPort } from './auth-fetchproxy.js';
+import { BRIDGE_TRUST_DOMAINS, isSharePointHost, rememberSharePointHost, sharePointCaptureDecl } from './bridge-scope.js';
 import { PACKAGE_NAME, VERSION } from './version.js';
 
 /**
- * The extension's trust boundary for the SharePoint path: the broad family
- * domain. `hostMatchesAnyDomain` treats this as "any `*.sharepoint.com`", so a
- * single paired domain covers every tenant SP host, while the per-host capture
- * decl below stays a concrete hostname (the capture layer rejects a wildcard).
+ * The domains the SharePoint capture trusts: the one bridge scope
+ * (`bridge-scope.ts`), whose `sharepoint.com` covers every tenant SP host, while
+ * the per-host capture decl below stays a concrete hostname (the capture layer
+ * rejects a wildcard).
  */
-export const SHAREPOINT_TRUST_DOMAINS = ['sharepoint.com'] as const;
+export const SHAREPOINT_TRUST_DOMAINS = [...BRIDGE_TRUST_DOMAINS];
 
-/**
- * True for a concrete SharePoint tenant host (`{label}.sharepoint.com`), such
- * as `transunion-my.sharepoint.com` or `transunion.sharepoint.com`. Rejects a
- * bare `sharepoint.com`, a suffix spoof (`sharepoint.com.evil.com`), and any
- * non-SharePoint host. Host is lowercased before matching.
- */
-export function isSharePointHost(host: string): boolean {
-  return /^[a-z0-9][a-z0-9-]*\.sharepoint\.com$/.test(host.toLowerCase());
-}
+export { isSharePointHost } from './bridge-scope.js';
 
 /**
  * The host to capture a SharePoint token FROM, for a file that lives on
@@ -103,14 +98,14 @@ export async function captureSharePointTokenViaFetchproxy(
     );
   }
 
-  return captureBearerHeader({
+  const token = await captureBearerHeader({
     // The one request we capture from: any call the browser makes to this
     // OneDrive host (the caller resolves it from the file's host via
     // `captureHostFor`). A concrete host, never a wildcard — see the module note.
-    captures: [{ host, path: '/*', headerName: 'authorization' }],
-    // The broad family domain as the trust scope. Same verb set as the chatsvc
-    // capture, so an existing pairing that already trusts `sharepoint.com`
-    // needs no re-approval.
+    captures: [sharePointCaptureDecl(host)],
+    // The one bridge scope (`bridge-scope.ts`), with this host's capture added
+    // to the remembered ones so the hello asks for exactly what it is about to
+    // read.
     domains: SHAREPOINT_TRUST_DOMAINS,
     // Read per capture, not at import: see `capture-window.ts`.
     windowMs: captureWindowMs(env),
@@ -122,6 +117,9 @@ export async function captureSharePointTokenViaFetchproxy(
       `Click around Teams or open one of your own OneDrive files — that makes the ` +
       `browser request ${host}, which is where the SharePoint token is captured ` +
       'from — then retry.',
-    createTransport: createCaptureTransport,
+    createTransport: bridgeScopedTransport(env, host),
   });
+  // Granted and captured: every later hello declares this host too.
+  rememberSharePointHost(host, env);
+  return token;
 }
