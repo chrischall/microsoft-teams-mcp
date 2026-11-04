@@ -96,6 +96,21 @@ messages, read the Activity feed, fetch an inline image — are in
   SharePoint (Graph and SharePoint both refuse it). `properties.files` is a
   JSON *string*; parse it for each file's name and `openUrl`.
 
+## In context groups
+
+When the MCP is served through mcp-host, its tools join the **work** group
+(`_meta.mint.domain: "work"`; the healthcheck joins none). The one canonical
+read is **`teams_list_changed_conversations`** for *what's new*: no subject
+(Teams serves one signed-in account) and no range (it takes a cursor; none
+means the last 24 hours). With `view: "brief"` it answers one line per
+changed chat or channel — `title — <newest ISO time | no date> — <n> new,
+<m> from others`. There is no *what's due* or *what's on* read here (Teams'
+Calendar is Outlook's). A compound ask such as "anything new in Teams, and
+what's on my calendar today?" is answered by the work group fanning out to
+this read and the Outlook one. The group needs the signed-in Teams tab: with
+no browser bridge it answers "Microsoft Teams needs your browser open" for
+this source rather than guessing.
+
 ## Writes (sending, reacting, marking read)
 
 Everything above only reads. To post a message or a reaction, prefer the

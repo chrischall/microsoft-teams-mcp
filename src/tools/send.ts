@@ -46,6 +46,7 @@ import {
   untrustedResult,
   UNTRUSTED_DESCRIPTION_SUFFIX,
 } from './untrusted.js';
+import { workMeta } from './hints.js';
 
 const TOOL = 'teams_send_message';
 
@@ -239,6 +240,7 @@ export function registerSendTools(server: McpServer, { chatsvc }: Pick<TeamsDeps
         CONFIRM_INJECTION_RULE +
         UNTRUSTED_DESCRIPTION_SUFFIX,
       annotations: toolAnnotations({ readOnly: false, destructive: true, idempotent: false, openWorld: true }),
+      _meta: workMeta('send', { aliases: ['message', 'send a message', 'reply', 'tell', 'post', 'chat'] }),
       inputSchema: {
         conversation: z
           .string()

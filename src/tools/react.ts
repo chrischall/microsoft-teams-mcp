@@ -37,6 +37,7 @@ import { htmlToText, normaliseMessage, senderMri } from '../model.js';
 import { wrapApiError } from './errors.js';
 import { resolveTarget, SELF_CHAT } from './send.js';
 import { untrustedField, untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
+import { workMeta } from './hints.js';
 
 const TOOL = 'teams_react';
 
@@ -139,6 +140,7 @@ export function registerReactTools(server: McpServer, { chatsvc }: Pick<TeamsDep
         CONFIRM_INJECTION_RULE +
         UNTRUSTED_DESCRIPTION_SUFFIX,
       annotations: toolAnnotations({ readOnly: false, destructive: false, idempotent: true, openWorld: true }),
+      _meta: workMeta('send', { aliases: ['react', 'like', 'thumbs up', 'reaction'] }),
       inputSchema: {
         conversation: z
           .string()

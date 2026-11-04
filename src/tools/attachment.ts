@@ -29,6 +29,7 @@ import { normaliseMessage } from '../model.js';
 import { wrapApiError } from './errors.js';
 import { untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
 import { nameConversations, type ConversationName } from './titles.js';
+import { workMeta } from './hints.js';
 
 /**
  * Raw messages read looking for the one asked for (20 pages of 200). The
@@ -71,6 +72,7 @@ export function registerAttachmentTools(
         'Does not mark anything read.' +
         UNTRUSTED_DESCRIPTION_SUFFIX,
       annotations: toolAnnotations({ readOnly: true, openWorld: true }),
+      _meta: workMeta('other', { aliases: ['attachment', 'image', 'file', 'screenshot'] }),
       inputSchema: {
         conversation: z
           .string()

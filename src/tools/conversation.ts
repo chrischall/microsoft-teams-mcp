@@ -58,6 +58,7 @@ import {
   type MarkPlan,
   type MarkSkip,
 } from './markread.js';
+import { workMeta } from './hints.js';
 
 const MAX_MESSAGES = 500;
 
@@ -500,6 +501,7 @@ export function registerConversationTools(server: McpServer, { chatsvc }: Pick<T
         UNTRUSTED_DESCRIPTION_SUFFIX,
       // A write only with mark_read, but a write: it moves the user's read marker (never backwards, so a repeat is a no-op).
       annotations: toolAnnotations({ readOnly: false, destructive: false, idempotent: true, openWorld: true }),
+      _meta: workMeta('lookup', { aliases: ['messages', 'chat history', 'read the chat', 'thread'] }),
       inputSchema: {
         conversation: z
           .union([z.string().min(1), z.array(z.string().min(1)).min(1).max(MAX_CONVERSATIONS)])

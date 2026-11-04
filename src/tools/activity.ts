@@ -34,6 +34,7 @@ import { limitArg, trimRows } from './limit.js';
 import { conversationNamer, type ConversationNamer } from './titles.js';
 import { wrapApiError } from './errors.js';
 import { untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
+import { workMeta } from './hints.js';
 
 /** The chat-service conversation that holds the Activity feed. */
 export const ACTIVITY_FEED_ID = '48:notifications';
@@ -204,6 +205,7 @@ export function registerActivityTools(server: McpServer, { chatsvc }: Pick<Teams
         'to look. This does NOT mark anything read — the user\'s Activity badge is unaffected.' +
         UNTRUSTED_DESCRIPTION_SUFFIX,
       annotations: toolAnnotations({ readOnly: true, openWorld: true }),
+      _meta: workMeta('whats-new', { aliases: ['mentions', 'notifications', 'activity', 'missed calls', 'replies'] }),
       inputSchema: {
         unread_only: z
           .boolean()

@@ -22,6 +22,7 @@ import {
   UNREAD_HINT_DESCRIPTION,
   unreadOnlyArg,
 } from './listing.js';
+import { workMeta } from './hints.js';
 
 /** Up to 10 pages of 200 come back; this bounds one result, not the listing. */
 const MAX_CHANNELS = 500;
@@ -65,6 +66,7 @@ export function registerChannelTools(server: McpServer, { chatsvc }: Pick<TeamsD
         FAVORITES_DESCRIPTION +
         UNTRUSTED_DESCRIPTION_SUFFIX,
       annotations: toolAnnotations({ readOnly: true, openWorld: true }),
+      _meta: workMeta('lookup', { aliases: ['channels', 'teams', 'team channels'] }),
       inputSchema: {
         unread_only: unreadOnlyArg,
         since_days: listSinceDaysArg,
