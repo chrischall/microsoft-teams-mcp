@@ -32,6 +32,7 @@ const EXPECTED_INTENT: Record<string, string> = {
   teams_search_messages: 'lookup',
   teams_get_attachment: 'other',
   teams_export_messages: 'other',
+  teams_get_transcript: 'lookup',
   teams_send_message: 'send',
   teams_react: 'send',
   teams_mark_read: 'change',
@@ -41,6 +42,12 @@ const served = async () => (await servedTools()) as unknown as Listed[];
 const mint = (t: Listed) => t._meta?.mint as Record<string, unknown> | undefined;
 
 describe('_meta.mint on tools/list', () => {
+  it('routes "transcript" to the meeting-transcript tool, not the chat export', async () => {
+    const tools = await served();
+    const owners = tools.filter((t) => ((mint(t)?.aliases as string[] | undefined) ?? []).includes('transcript')).map((t) => t.name);
+    expect(owners).toEqual(['teams_get_transcript']);
+  });
+
   it('hints every served tool except the healthcheck, which joins no group', async () => {
     const tools = await served();
     const unhinted = tools.filter((t) => mint(t) === undefined).map((t) => t.name);

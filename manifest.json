@@ -216,6 +216,10 @@
       "description": "Bulk-export chats and channels to JSONL or Markdown files (local paths, or a download link when hosted) without the messages entering the conversation; resumable"
     },
     {
+      "name": "teams_get_transcript",
+      "description": "Get a recorded meeting's transcript from its meeting chat, even when transcript download is disabled"
+    },
+    {
       "name": "teams_healthcheck",
       "description": "Verify the Teams chat-service token and API, end-to-end"
     }

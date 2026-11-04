@@ -32,6 +32,7 @@ import {
 import { createCapturedTokenManager, type TokenManager } from '@chrischall/mcp-utils/session';
 import { createTokenCache, reportCacheWriteFailure } from './token-cache.js';
 import { SELF_CHAT } from './model.js';
+import { isAmsObjectId, transcriptUrl } from './transcript.js';
 import { describeTransportFailure } from './network-error.js';
 
 /**
@@ -73,6 +74,9 @@ const DEFAULT_MESSAGE_PAGE_SIZE = 200;
 
 /** Largest inline image we will buffer (they measured 8–18 KB live). */
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+
+/** Largest meeting transcript read (a multi-hour meeting is a few hundred KB of WebVTT). */
+const MAX_TRANSCRIPT_BYTES = 20 * 1024 * 1024;
 
 /**
  * Inline images live on Skype's AMS object store (`us-api.asm.skype.com`, the
@@ -556,6 +560,40 @@ export class ChatServiceClient {
         );
       }
     }
+  }
+
+  /**
+   * Download a meeting transcript (WebVTT) from Teams' object store, by the
+   * recording's AMS object id (`transcript.ts`). The URL is built here from an
+   * id of the vetted shape, never taken from message content, so the bearer
+   * only ever goes to the Teams gateway. Served even when the meeting's
+   * organizer disabled transcript download (verified live 2026-11-04). A 404 is
+   * a transcript the store no longer holds (it expires after some weeks).
+   */
+  async fetchTranscript(objectId: string): Promise<string> {
+    this.#requireConfigured();
+    if (!isAmsObjectId(objectId)) {
+      throw new McpToolError(`Refusing to fetch a transcript for ${JSON.stringify(objectId)}: not a Teams object id.`, {
+        hint: 'Pass a recording_id exactly as teams_get_transcript listed it.',
+      });
+    }
+    const { status, headers, body } = await this.#send(transcriptUrl(objectId), 'bytes', MAX_TRANSCRIPT_BYTES);
+    if (status === 404) {
+      throw new McpToolError('This transcript is no longer available from Teams (404): it has expired or was removed.', {
+        status,
+        kind: 'http',
+        hint:
+          "Teams' own copy of a transcript expires after some weeks. The recording's play_url may still open it " +
+          'in the browser if the organizer kept the recording.',
+      });
+    }
+    this.#checkStatus(status);
+    const mimeType = (headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase();
+    const text = Buffer.from(body as Uint8Array).toString('utf8');
+    if (mimeType !== 'text/vtt' && !text.replace(/^\uFEFF/, '').startsWith('WEBVTT')) {
+      throw new McpToolError(`Teams returned ${mimeType || 'an unknown type'} instead of a transcript.`, { status, kind: 'http' });
+    }
+    return text;
   }
 
   async #getImage(target: URL): Promise<{ mimeType: string; data: Buffer }> {

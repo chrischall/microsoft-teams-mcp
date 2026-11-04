@@ -77,6 +77,7 @@ describe('built server boots', () => {
       expect(tools).toEqual([
         'teams_export_messages',
         'teams_get_attachment',
+        'teams_get_transcript',
         'teams_healthcheck',
         'teams_list_activity',
         'teams_list_changed_conversations',
