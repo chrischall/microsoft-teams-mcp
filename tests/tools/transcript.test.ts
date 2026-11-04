@@ -138,6 +138,36 @@ describe('teams_get_transcript', () => {
     expect(gone).toHaveBeenCalledTimes(1);
   });
 
+  it('names the expired recording — its id, time and play_url — and the others to try', async () => {
+    const gone = vi.fn().mockRejectedValue(new McpToolError('This transcript is no longer available from Teams (404).', { status: 404 }));
+    const result = await call(chatsvcWith(MSGS, gone), { conversation: MEETING });
+    expect(result.isError).toBe(true);
+    const text = errorText(result);
+    // Which recording it tried, so the caller need not guess.
+    expect(text).toContain(String(T0 + 31 * MIN));
+    expect(text).toContain(new Date(T0 + 31 * MIN).toISOString());
+    expect(text).toContain('https://contoso-my.sharepoint.com/:v:/p/x/Play');
+    // The rest of the chat's recordings, by recording_id.
+    expect(text).toContain(String(T0));
+    expect(text).toMatch(/about four weeks/i);
+  });
+
+  it('names the expired recording picked by recording_id, listing the others but not it', async () => {
+    const gone = vi.fn().mockRejectedValue(new McpToolError('This transcript is no longer available from Teams (404).', { status: 404 }));
+    const result = await call(chatsvcWith(MSGS, gone), { conversation: MEETING, recording_id: String(T0) });
+    const text = errorText(result);
+    expect(text).toContain(new Date(T0).toISOString());
+    expect(text).toMatch(new RegExp(`other recordings[^]*${T0 + 31 * MIN}`, 'i'));
+  });
+
+  it('leaves errors other than a 404 as they are', async () => {
+    const boom = vi.fn().mockRejectedValue(new McpToolError('Teams answered 500.', { status: 500 }));
+    const result = await call(chatsvcWith(MSGS, boom), { conversation: MEETING });
+    const text = errorText(result);
+    expect(text).toMatch(/500/);
+    expect(text).not.toContain('https://contoso-my.sharepoint.com/:v:/p/x/Play');
+  });
+
   it('saves the WebVTT and the readable text to files with save, returning where — not the transcript', async () => {
     const result = await call(chatsvcWith(), { conversation: MEETING, save: true });
     const out = parseToolResult(result) as Record<string, any>;

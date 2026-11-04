@@ -568,7 +568,7 @@ export class ChatServiceClient {
    * id of the vetted shape, never taken from message content, so the bearer
    * only ever goes to the Teams gateway. Served even when the meeting's
    * organizer disabled transcript download (verified live 2026-11-04). A 404 is
-   * a transcript the store no longer holds (it expires after some weeks).
+   * a transcript the store no longer holds (it expires after about four weeks).
    */
   async fetchTranscript(objectId: string): Promise<string> {
     this.#requireConfigured();
@@ -583,7 +583,7 @@ export class ChatServiceClient {
         status,
         kind: 'http',
         hint:
-          "Teams' own copy of a transcript expires after some weeks. The recording's play_url may still open it " +
+          "Teams' own copy of a transcript expires after about four weeks. The recording's play_url may still open it " +
           'in the browser if the organizer kept the recording.',
       });
     }
