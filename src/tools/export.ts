@@ -83,6 +83,7 @@ import { takePage, type FromPosition } from './from.js';
 import { conversationName, enrichTitles } from './titles.js';
 import { resolveTimeZone, tzArg } from './timezone.js';
 import { untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
+import { workMeta } from './hints.js';
 
 export const EXPORT_SERVER_NAME = 'microsoft-teams-mcp';
 export const EXPORT_OUTPUT_ENV = 'TEAMS_OUTPUT_DIR';
@@ -619,6 +620,7 @@ export function registerExportTools(
         'open, no token yet, too large) is listed as skipped with the reason, never failing the export.' +
         UNTRUSTED_DESCRIPTION_SUFFIX,
       annotations: toolAnnotations({ readOnly: true, openWorld: true }),
+      _meta: workMeta('other', { aliases: ['export', 'save the chat', 'transcript'] }),
       inputSchema: {
         conversations: conversationsArg
           .optional()

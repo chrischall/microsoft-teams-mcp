@@ -35,6 +35,7 @@ import { confirmedSummary } from './confirm.js';
 import { resolveListed } from './conversation.js';
 import { wrapApiError } from './errors.js';
 import { untrustedField, untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
+import { workMeta } from './hints.js';
 
 const TOOL = 'teams_mark_read';
 
@@ -220,6 +221,7 @@ export function registerMarkReadTools(server: McpServer, { chatsvc }: Pick<Teams
         CONFIRM_INJECTION_RULE +
         UNTRUSTED_DESCRIPTION_SUFFIX,
       annotations: toolAnnotations({ readOnly: false, destructive: false, idempotent: true, openWorld: true }),
+      _meta: workMeta('change', { aliases: ['mark read', 'mark as read', 'clear unread'] }),
       inputSchema: {
         conversation: z
           .string()

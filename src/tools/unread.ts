@@ -82,6 +82,7 @@ import {
   type MarkPlan,
   type MarkSkip,
 } from './markread.js';
+import { workMeta } from './hints.js';
 
 const MAX_PER_CONVERSATION = 200;
 const DEFAULT_PER_CONVERSATION = 50;
@@ -286,6 +287,7 @@ export function registerUnreadTools(server: McpServer, { chatsvc }: Pick<TeamsDe
         UNTRUSTED_DESCRIPTION_SUFFIX,
       // A write only with mark_read, but a write: it moves the user's read markers (never backwards, so a repeat is a no-op).
       annotations: toolAnnotations({ readOnly: false, destructive: false, idempotent: true, openWorld: true }),
+      _meta: workMeta('whats-new', { aliases: ['unread', 'unread messages', 'what did i miss', 'new messages'] }),
       inputSchema: {
         kinds: z
           .array(z.enum(Object.keys(KIND_FILTERS) as [KindFilter, ...KindFilter[]]))

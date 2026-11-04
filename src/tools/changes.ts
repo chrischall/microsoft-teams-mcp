@@ -51,6 +51,7 @@ import { untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
 import { CURSOR_NO_CACHE_DESCRIPTION } from './cursor.js';
 import { DEFAULT_LIMIT, limitArg } from './limit.js';
 import { KIND_FILTERS, type KindFilter } from './unread.js';
+import { workMeta } from './hints.js';
 
 const MAX_CONVERSATIONS = 200;
 
@@ -172,6 +173,36 @@ async function readChanges(
   };
 }
 
+/** The longest line `view: 'brief'` answers (the context-groups contract). */
+export const BRIEF_MAX = 120;
+
+/** A changed conversation's brief status: how many messages arrived, and how many of them from others. */
+function briefStatus(read: ChangeRead): string {
+  return `${read.count}${read.truncated ? '+' : ''} new, ${read.fromOthers} from others`;
+}
+
+/**
+ * One brief line, `title — <ISO date | no date> — <status>`, at most
+ * {@link BRIEF_MAX} characters: the title is flattened to one line (a chat
+ * topic can carry newlines) and shortened, never the date or the status.
+ */
+export function briefLine(title: string, time: string | undefined, status: string): string {
+  const tail = ` — ${time ?? 'no date'} — ${status}`;
+  const flat = title.replace(/\s+/g, ' ').trim() || '(untitled)';
+  const room = BRIEF_MAX - tail.length;
+  const shown = flat.length > room ? `${flat.slice(0, Math.max(room - 1, 0)).trimEnd()}…` : flat;
+  return `${shown}${tail}`;
+}
+
+/**
+ * The brief answer as plain text, one line per item. It carries no message
+ * text — only conversation titles (which other people can set), counts and
+ * times — and the tool's description keeps the untrusted-content warning.
+ */
+function briefResult(lines: string[]): { content: { type: 'text'; text: string }[] } {
+  return { content: [{ type: 'text', text: lines.join('\n') }] };
+}
+
 export function registerChangesTools(server: McpServer, { chatsvc }: Pick<TeamsDeps, 'chatsvc'>): void {
   server.registerTool(
     'teams_list_changed_conversations',
@@ -202,6 +233,10 @@ export function registerChangesTools(server: McpServer, { chatsvc }: Pick<TeamsD
         'This does NOT mark anything read — the user\'s Teams unread badges are unaffected. ' +
         UNTRUSTED_DESCRIPTION_SUFFIX,
       annotations: toolAnnotations({ readOnly: true, openWorld: true }),
+      _meta: workMeta('whats-new', {
+        canonical: true,
+        aliases: ['work', 'teams', 'new messages', 'chats', 'messages', 'anything new', 'what did i miss'],
+      }),
       inputSchema: {
         cursor: z
           .string()
@@ -224,9 +259,17 @@ export function registerChangesTools(server: McpServer, { chatsvc }: Pick<TeamsD
           'Also include channels the user has hidden in Teams (default false: Teams shows them nowhere).',
         ),
         limit: limitArg(MAX_CONVERSATIONS, 'conversations', 'most recent activity first kept'),
+        view: z
+          .enum(['full', 'brief'])
+          .optional()
+          .describe(
+            '"full" (default) returns the result described above; "brief" returns plain text, one line per ' +
+              'changed conversation (limit does not apply): title — newest_time (ISO 8601, or "no date") — ' +
+              '"<n> new, <m> from others", or "could not read" for a conversation whose read failed.',
+          ),
       },
     },
-    async ({ cursor, kinds, include_hidden, limit }) => {
+    async ({ cursor, kinds, include_hidden, limit, view }) => {
       try {
         const t = cursor !== undefined ? decodeChangesCursor(cursor) : Date.now() - DEFAULT_WINDOW_MS;
         const fetched_at = new Date().toISOString();
@@ -302,6 +345,12 @@ export function registerChangesTools(server: McpServer, { chatsvc }: Pick<TeamsD
           new_message_count: read.count,
           after_message_id,
         }));
+        if (view === 'brief') {
+          return briefResult([
+            ...changed.map(({ read }, i) => briefLine(titled[i].title, read.newestTime, briefStatus(read))),
+            ...failed.map((_, i) => briefLine(titled[changed.length + i].title, undefined, 'could not read')),
+          ]);
+        }
         const errors = failed.map((f, i) => ({
           conversation: titled[changed.length + i],
           error: wrapApiError(f.error, 'read this conversation').message,

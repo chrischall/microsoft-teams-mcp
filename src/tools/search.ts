@@ -59,6 +59,7 @@ import { CONFIRM_CONCURRENCY, isUnreachable } from './confirm.js';
 import { conversationName, enrichTitles, participantsOf, type ConversationName } from './titles.js';
 import { wrapApiError } from './errors.js';
 import { untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
+import { workMeta } from './hints.js';
 
 const DEFAULT_LIMIT = 25;
 const MAX_LIMIT = 200;
@@ -188,6 +189,7 @@ export function registerSearchTools(
         'does NOT mark anything read.' +
         UNTRUSTED_DESCRIPTION_SUFFIX,
       annotations: toolAnnotations({ readOnly: true, openWorld: true }),
+      _meta: workMeta('lookup', { aliases: ['find a message', 'search teams', 'search chats'] }),
       inputSchema: {
         query: z
           .string()

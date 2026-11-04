@@ -26,6 +26,7 @@ import {
   UNREAD_HINT_DESCRIPTION,
   unreadOnlyArg,
 } from './listing.js';
+import { workMeta } from './hints.js';
 
 /** Up to 10 pages of 200 come back; this bounds one result, not the listing. */
 const MAX_CHATS = 500;
@@ -114,6 +115,7 @@ export function registerChatTools(server: McpServer, { chatsvc }: Pick<TeamsDeps
         ' Listing never marks anything read (teams_mark_read does). Channels are listed by teams_list_channels instead.' +
         UNTRUSTED_DESCRIPTION_SUFFIX,
       annotations: toolAnnotations({ readOnly: true, openWorld: true }),
+      _meta: workMeta('lookup', { aliases: ['chats', 'conversations', 'teams chats', 'who messaged me'] }),
       inputSchema: {
         unread_only: unreadOnlyArg,
         since_days: listSinceDaysArg,
