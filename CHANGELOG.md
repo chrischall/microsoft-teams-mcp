@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.8.0](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.7.0...v0.8.0) (2026-11-04)
+
+
+### Features
+
+* context-group hints, a brief view on the changed-conversations read ([#88](https://github.com/chrischall/microsoft-teams-mcp/issues/88)) ([34e7492](https://github.com/chrischall/microsoft-teams-mcp/commit/34e749227352a9c9f34babc050832cc368b1f35a))
+* **transcript:** get a meeting's transcript, even when its download is disabled ([#90](https://github.com/chrischall/microsoft-teams-mcp/issues/90)) ([f12fd7e](https://github.com/chrischall/microsoft-teams-mcp/commit/f12fd7ea0e622cad7552f45a77ec48c9887d7058))
+
+
+### Bug Fixes
+
+* **auth:** stop asking to re-pair every time chats, search and files are used ([#89](https://github.com/chrischall/microsoft-teams-mcp/issues/89)) ([7c00eba](https://github.com/chrischall/microsoft-teams-mcp/commit/7c00eba9e69581718165238aa340d8b3d49e4b11))
+* **deps:** bump the production-dependencies group across 1 directory with 2 updates ([#87](https://github.com/chrischall/microsoft-teams-mcp/issues/87)) ([bb25b1a](https://github.com/chrischall/microsoft-teams-mcp/commit/bb25b1afe5223969fb2fd7e38b7da57bf3d8c4cc))
+* **deps:** bump the production-dependencies group with 3 updates ([#84](https://github.com/chrischall/microsoft-teams-mcp/issues/84)) ([7708b15](https://github.com/chrischall/microsoft-teams-mcp/commit/7708b15363f71e6d30c09c9f2fe714f915f443e0))
+
 ## [0.7.0](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.6.2...v0.7.0) (2026-10-20)
 
 
