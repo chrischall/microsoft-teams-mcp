@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.3](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.8.2...v0.8.3) (2026-11-06)
+
+
+### Bug Fixes
+
+* **export:** keep the resume cursor short for whole-account exports ([#96](https://github.com/chrischall/microsoft-teams-mcp/issues/96)) ([1a55102](https://github.com/chrischall/microsoft-teams-mcp/commit/1a551025282c029ba1b66baf948af1799d2a4ef0))
+
 ## [0.8.2](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.8.1...v0.8.2) (2026-11-04)
 
 
