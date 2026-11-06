@@ -16,10 +16,12 @@
  * `budget_seconds`, whichever comes first, and returns `has_more` with a
  * `cursor`; passing the cursor back continues the SAME export (the same
  * directory on disk, the next `part-NNNN.zip` in the blob store). The cursor
- * carries the original arguments, the conversations still to do (or, when
- * that list is too long for a cursor, the id to go on from — conversations
- * are exported in id order; a conversation new since the first part with an
- * id before that point is then not exported), and where in the current
+ * carries the original arguments, what is still to do — for an export of
+ * named conversations the ids they resolved to; otherwise (or when that list
+ * is too long for a cursor) only the id to go on from, so the cursor stays
+ * short: conversations are exported in id order and the next part re-lists
+ * them from there, so one that first appears between parts is exported only
+ * if its id sorts after that point — and where in the current
  * conversation it stopped, as a `from.ts` position. The budget is checked
  * between conversations and between pages of a read; a read cut by it is
  * redone whole by the next part, except the first conversation of a call,
@@ -162,7 +164,7 @@ interface ResumeState {
   args: StoredArgs;
   /** The conversations still to do, the first being the one it stopped in. */
   ids?: string[];
-  /** Instead of `ids` when they did not fit: go on from this id, in id order. */
+  /** Instead of `ids` (a whole-account export, or ids that did not fit): go on from this id, in id order. */
   from_id?: string;
   /** The position inside the first of them, when it stopped part-way. */
   pos?: { id: string; t: number; s?: string[] };
@@ -534,11 +536,19 @@ async function runExport(
       args,
       ...(stopPos !== undefined ? { pos: stopPos } : {}),
     };
-    try {
-      cursor = encodeExportCursor({ ...base, ids: queue });
-    } catch (err) {
-      if (!(err instanceof TypeError)) throw err;
-      cursor = encodeExportCursor({ ...base, from_id: queue[0] });
+    // A whole-account export re-lists on resume, so it goes on from an id: the cursor stays
+    // short however many conversations remain. A named one keeps the conversations its names
+    // resolved to (a short list), so a resume never resolves them again.
+    const fromId = encodeExportCursor({ ...base, from_id: queue[0] });
+    if (args.conversations === undefined) {
+      cursor = fromId;
+    } else {
+      try {
+        cursor = encodeExportCursor({ ...base, ids: queue });
+      } catch (err) {
+        if (!(err instanceof TypeError)) throw err;
+        cursor = fromId;
+      }
     }
   } else {
     hasMore = false;
@@ -610,8 +620,8 @@ export function registerExportTools(
         `(default ${DEFAULT_MAX_ITEMS}, max ${MAX_ITEMS}) or budget_seconds (default ${DEFAULT_BUDGET_SECONDS}, ` +
         `max ${MAX_BUDGET_SECONDS}); when has_more is true pass cursor back (alone, or with max_items / ` +
         'budget_seconds) to continue the same export into the same folder (a hosted install returns a new link ' +
-        'per part). A cursor too long to list every remaining conversation resumes from an id instead, so a ' +
-        'conversation that first appears between parts may be left out. A rejected credential or persistent rate limiting stops early with a cursor and keeps what ' +
+        'per part). Conversations are exported in id order and a cursor resumes from an id, so a ' +
+        'conversation that first appears between parts is included only if it sorts after that point. A rejected credential or persistent rate limiting stops early with a cursor and keeps what ' +
         'was written; a conversation that cannot be read is listed in errors and skipped. Never marks anything ' +
         'read. A name matching several conversations returns {ambiguous: true, candidates} and writes nothing. ' +
         'With attachments true, inline images and shared files (up to 25 MB) are saved under ' +
