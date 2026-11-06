@@ -12,16 +12,32 @@
  * - an inline image (Teams' own image store) downloads with the chat-service
  *   token and comes back as MCP image content;
  * - a shared file lives in SharePoint, downloaded through `SharePointClient`
- *   with a separate per-host SharePoint token (see `sharepoint.ts`): an image
- *   comes back as MCP image content, anything else as an MCP embedded resource
- *   carrying the raw bytes. A file the account cannot open — or the first file
- *   from a SharePoint host before its short-lived token has been minted — comes
- *   back as metadata and its open link, degrading gracefully rather than
- *   failing the tool.
+ *   with a separate per-host SharePoint token (see `sharepoint.ts`). A file the
+ *   account cannot open — or the first file from a SharePoint host before its
+ *   short-lived token has been minted — comes back as metadata and its open
+ *   link, degrading gracefully rather than failing the tool.
+ *
+ * Either kind is handed back through `deliverFile` (mcp-utils): inline up to
+ * 10 MiB (an image as MCP image content, anything else as an embedded
+ * resource); past that a signed download link from the blob store when hosted,
+ * else a fresh file in the download folder on a local install. Inlining up to
+ * the 25 MiB download cap, as this tool once did, put ~33 MiB of base64 in one
+ * result — over mcp-host's 14 MiB result ceiling, which swaps it for a generic
+ * "result too large" error.
  */
 import type { CallToolResult, McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import { McpToolError, errorKindOf, errorStatusOf, toolAnnotations } from '@chrischall/mcp-utils';
+import {
+  McpToolError,
+  errorKindOf,
+  errorStatusOf,
+  expandPath,
+  readEnvVar,
+  toolAnnotations,
+} from '@chrischall/mcp-utils';
+import { deliverFile, isHostedEnv, type DeliveredFile } from '@chrischall/mcp-utils/export';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import type { RawMessage } from '../chatsvc.js';
 import type { TeamsDeps } from '../deps.js';
 import type { FileAttachment, NormalisedMessage } from '../model.js';
@@ -30,6 +46,7 @@ import { wrapApiError } from './errors.js';
 import { untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
 import { nameConversations, type ConversationName } from './titles.js';
 import { workMeta } from './hints.js';
+import { EXPORT_OUTPUT_ENV, EXPORT_SERVER_NAME } from './export.js';
 
 /**
  * Raw messages read looking for the one asked for (20 pages of 200). The
@@ -39,15 +56,17 @@ import { workMeta } from './hints.js';
 const MAX_RAW_MESSAGES = 4000;
 
 /**
- * Largest shared file whose contents are downloaded and returned inline. Past
- * this the bounded read in `SharePointClient` aborts and the file degrades to
- * metadata + link — a file this big belongs behind its link, not in a result.
+ * Largest shared file whose contents are downloaded. Past this the bounded read
+ * in `SharePointClient` aborts and the file degrades to metadata + its open
+ * link. What is downloaded is not necessarily inlined: `deliverFile` inlines
+ * only up to 10 MiB and hands anything larger over as a link or a saved file.
  */
 export const MAX_FILE_BYTES = 25 * 1024 * 1024;
 
 const FILE_HINT =
   'A shared file is downloaded from SharePoint and returned as its contents (an image as an image, ' +
-  'anything else as an embedded resource). The first file from a given SharePoint host may need ' +
+  'anything else as an embedded resource; over 10 MiB as a download link, or a saved file on a local ' +
+  'install). The first file from a given SharePoint host may need ' +
   'opening once in Teams to mint a short-lived token; a file your account cannot open comes back as ' +
   'metadata and its link.';
 
@@ -64,7 +83,10 @@ export function registerAttachmentTools(
         'teams_list_messages / teams_list_unread_messages. An inline image (attachments.images[].ref) ' +
         'is returned as the image itself. A shared file (attachments.files[].name) is downloaded ' +
         'from SharePoint and returned as its contents: an image as the image, anything else as an ' +
-        'embedded resource carrying the bytes. The first file from a given SharePoint host in a ' +
+        'embedded resource carrying the bytes. Anything over 10 MiB comes back instead as a signed, ' +
+        'expiring download link (downloadUrl) on a hosted install, or saved to a fresh file (path) under ' +
+        `${EXPORT_OUTPUT_ENV}, else ~/Downloads/${EXPORT_SERVER_NAME}, on a local one; the caption's via ` +
+        'says which. The first file from a given SharePoint host in a ' +
         'session may need opening once in Teams to mint a short-lived token; a file your account ' +
         'cannot open, or one that could not be fetched, comes back as metadata and its open link ' +
         'instead of failing. Its caption names the conversation beside its id: title (as teams_list_conversations ' +
@@ -109,6 +131,7 @@ export function registerAttachmentTools(
           if (!mimeType.startsWith('image/')) {
             throw new McpToolError(`The attachment ${ref} is not an image (the image store returned ${mimeType}).`);
           }
+          const delivered = await deliver(data, imageFileName(ref, mimeType), mimeType);
           const caption = untrustedResult({
             ref,
             message_id,
@@ -116,12 +139,11 @@ export function registerAttachmentTools(
             ...(await naming),
             sender: message.sender,
             time: message.time,
-            mimeType,
-            bytes: data.length,
+            mimeType: delivered.mimeType,
+            bytes: delivered.sizeBytes,
+            ...deliveryFields(delivered),
           });
-          return {
-            content: [{ type: 'image' as const, data: data.toString('base64'), mimeType }, ...caption.content],
-          };
+          return { content: [...delivered.content, ...caption.content] };
         }
 
         const file = message.attachments.files.find((f) => f.name === ref);
@@ -160,9 +182,33 @@ async function downloadSharedFile(
     return untrustedResult({ ...file, content_available: false, hint: FILE_HINT });
   }
 
+  let downloaded: { mimeType: string; data: Buffer; size: number };
   try {
-    const { mimeType, data, size } = await sharepoint.downloadFile(file.url, MAX_FILE_BYTES);
-    const caption = untrustedResult({
+    downloaded = await sharepoint.downloadFile(file.url, MAX_FILE_BYTES);
+  } catch (err) {
+    // Graceful degrade: a file that could not be fetched comes back as metadata
+    // and its link, never as a tool failure (see the docblock).
+    return untrustedResult({ ...file, content_available: false, hint: degradeHint(err, hostOf(file.url)) });
+  }
+
+  // A file that WAS fetched but has no route back to the caller (over the inline
+  // cap, hosted with no blob store) is a real error, not a degrade: say so, and
+  // keep the open link in the hint so the file is still reachable.
+  let delivered: DeliveredFile;
+  try {
+    delivered = await deliver(downloaded.data, file.name, downloaded.mimeType);
+  } catch (err) {
+    if (err instanceof McpToolError && file.openUrl !== undefined) {
+      throw new McpToolError(err.message, {
+        kind: err.kind,
+        hint: `Open it in SharePoint instead: ${file.openUrl}`,
+        cause: err,
+      });
+    }
+    throw err;
+  }
+
+  const caption = untrustedResult({
       name: file.name,
       ...(file.type !== undefined ? { type: file.type } : {}),
       ...(file.openUrl !== undefined ? { openUrl: file.openUrl } : {}),
@@ -170,8 +216,9 @@ async function downloadSharedFile(
       // download must carry the matching `true` so a caller keying on the field
       // does not read a downloaded file as unavailable.
       content_available: true,
-      mimeType,
-      bytes: size,
+      mimeType: delivered.mimeType,
+      bytes: downloaded.size,
+      ...deliveryFields(delivered),
       sender: message.sender,
       time: message.time,
       message_id: ids.message_id,
@@ -179,28 +226,53 @@ async function downloadSharedFile(
       ...(await naming),
     });
 
-    if (mimeType.startsWith('image/')) {
-      return { content: [{ type: 'image' as const, data: data.toString('base64'), mimeType }, ...caption.content] };
-    }
-    // An embedded resource carries the raw bytes; the installed
-    // `@modelcontextprotocol/server` (2.3.0) accepts a `{type:'resource'}`
-    // content block with a `BlobResourceContents` body ({uri, mimeType, blob}),
-    // so no base64-text fallback is needed. The `uri` is the file's open link
-    // (its SharePoint object url otherwise) — an identifier, not a re-fetch.
-    return {
-      content: [
-        {
-          type: 'resource' as const,
-          resource: { uri: file.openUrl ?? file.url, mimeType, blob: data.toString('base64') },
-        },
-        ...caption.content,
-      ],
-    };
-  } catch (err) {
-    // Graceful degrade: a file that could not be fetched comes back as metadata
-    // and its link, never as a tool failure (see the docblock).
-    return untrustedResult({ ...file, content_available: false, hint: degradeHint(err, hostOf(file.url)) });
-  }
+  // An embedded resource's `uri` is the file's open link (its SharePoint object
+  // url otherwise) — an identifier, not a re-fetch — rather than deliverFile's
+  // placeholder `attachment:///<name>`.
+  const uri = file.openUrl ?? file.url;
+  const content = delivered.content.map((block) =>
+    block.type === 'resource' ? { ...block, resource: { ...block.resource, uri } } : block,
+  );
+  return { content: [...content, ...caption.content] };
+}
+
+/**
+ * Hand bytes back by the first route that reaches the caller (`deliverFile`):
+ * inline up to 10 MiB, else a signed link from the blob store (hosted), else a
+ * fresh, never-overwriting file in the download folder — offered only on a
+ * local install, since a hosted runner's disk is unreachable from the session.
+ */
+function deliver(bytes: Buffer, fileName: string, mimeType: string): Promise<DeliveredFile> {
+  return deliverFile({
+    bytes,
+    fileName,
+    mimeType,
+    keyPrefix: 'attachments',
+    ...(isHostedEnv() ? {} : { disk: { dir: downloadDir() } }),
+  });
+}
+
+/** `TEAMS_OUTPUT_DIR`, else `~/Downloads/microsoft-teams-mcp` — the folder the export tools default to. */
+function downloadDir(): string {
+  const configured = readEnvVar(EXPORT_OUTPUT_ENV);
+  return configured !== undefined ? expandPath(configured) : join(homedir(), 'Downloads', EXPORT_SERVER_NAME);
+}
+
+/** An inline image has only a ref; name it `<ref>.<subtype>` for a link or a saved file. */
+function imageFileName(ref: string, mimeType: string): string {
+  const ext = (mimeType.split('/')[1] ?? '').split(/[;+]/)[0].replace(/[^a-z0-9]/gi, '');
+  return ext ? `${ref}.${ext}` : ref;
+}
+
+/** How the bytes were handed over, for the caption: the route, and where to find them when not inline. */
+function deliveryFields(d: DeliveredFile): Record<string, string> {
+  return {
+    via: d.via,
+    ...(d.url !== undefined ? { downloadUrl: d.url } : {}),
+    ...(d.expiresAt !== undefined ? { downloadExpiresAt: d.expiresAt } : {}),
+    ...(d.path !== undefined ? { path: d.path } : {}),
+    ...(d.note !== undefined ? { note: d.note } : {}),
+  };
 }
 
 /** The conversation's name beside its id in a caption: `title`, and `participants` for an untitled chat. */
