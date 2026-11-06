@@ -522,10 +522,12 @@ Everything is optional — by default the token is captured from your browser.
   and between pages of a read: a long read past it is dropped and redone by
   the next call (except the first conversation of a call, which always
   finishes, so every call makes progress). Conversations are exported in id
-  order; the cursor normally lists the ones still to do, but when that list is
-  too long for a cursor it holds only the id to go on from, and the next call
-  re-lists conversations from there — so a conversation that first appears
-  between calls with an id before that point is not in this export. A
+  order, and the cursor holds only the id to go on from (so it stays short
+  however many conversations remain): the next call re-lists conversations
+  from there, so a conversation that first appears between calls is in this
+  export only if its id sorts after that point. An export of named
+  `conversations` instead keeps the ids they resolved to, so a resume never
+  resolves the names again. A
   rejected credential, rate limiting that
   outlasts three backed-off retries, or a Teams-side failure stops the call
   early with a cursor, keeping what was written (re-authenticate and resume);

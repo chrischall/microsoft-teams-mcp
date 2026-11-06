@@ -530,6 +530,35 @@ describe('teams_export_messages cursor size', () => {
     expect(a).not.toBe(b);
     expect([a, b].sort()).toEqual([...many].sort().slice(0, 2));
   });
+
+  it('resumes a whole-account export from an id, so the cursor stays short however many conversations remain', async () => {
+    // 100 long ids fit the codec limit as a list (~8k characters) — the cursor must still not carry them.
+    const many = Array.from({ length: 100 }, (_, i) => `19:${'x'.repeat(40)}${String(i).padStart(4, '0')}@thread.v2`);
+    const convs = many.map((id, i) => rawConv(id, { topic: `Chat ${i}`, at: T0 + i }));
+    const byId = Object.fromEntries(many.map((id, i) => [id, [rawMsg(T0 + i, { conv: id })]]));
+    const chatsvc = chatsvcWith(convs, byId);
+    const first = payload((await call(chatsvc, { max_items: 1 })).data!);
+    const state = decodeExportCursor(first.cursor);
+    expect(state.ids).toBeUndefined();
+    expect(state.from_id).toBe([...many].sort()[1]);
+    expect(first.cursor.length).toBeLessThan(600);
+  });
+
+  it('keeps the resolved conversations of a named export, so a resume does not resolve the names again', async () => {
+    const first = payload((await call(chatsvcWith(), { conversations: ['Project Alpha', 'Design'], max_items: 1 })).data!);
+    expect(first.has_more).toBe(true);
+    expect(decodeExportCursor(first.cursor).ids).toEqual([ALPHA, CHANNEL]);
+    // A second "Project Alpha" appears between parts: re-resolving the name would now be ambiguous.
+    const twin = '19:alpha0002@thread.v2';
+    const later = chatsvcWith([...CONVS, rawConv(twin, { topic: 'Project Alpha', at: T0 + 6 * MIN })], {
+      ...MESSAGES,
+      [twin]: [said('Lee, Pat', T0 + 6 * MIN, twin, { text: 'twin' })],
+    });
+    const second = await call(later, { cursor: first.cursor });
+    expect(second.result.isError).toBeFalsy();
+    const ids = payload(second.data!).files.map((f: { path: string }) => lines(f.path)[0]._export.conversation.id);
+    expect(ids).not.toContain(twin);
+  });
 });
 
 describe('teams_export_messages attachments', () => {
