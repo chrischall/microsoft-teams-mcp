@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.4](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.8.3...v0.8.4) (2026-11-06)
+
+
+### Bug Fixes
+
+* **attachments:** return large Teams attachments as a download link instead of an over-limit inline blob ([#98](https://github.com/chrischall/microsoft-teams-mcp/issues/98)) ([9d90e95](https://github.com/chrischall/microsoft-teams-mcp/commit/9d90e957c988fe70dc87c749a56d25b889cf78c2))
+
 ## [0.8.3](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.8.2...v0.8.3) (2026-11-06)
 
 
