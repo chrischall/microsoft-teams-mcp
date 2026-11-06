@@ -1,4 +1,7 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
+import { mkdtempSync, readdirSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createTestHarness, parseToolResult } from '@chrischall/mcp-utils/test';
 import { McpToolError } from '@chrischall/mcp-utils';
 import { registerAttachmentTools } from '../../src/tools/attachment.js';
@@ -76,6 +79,50 @@ async function call(
 
 function errorText(result: { content?: unknown[] }): string {
   return (result.content?.[0] as { text?: string })?.text ?? '';
+}
+
+/** 10 MiB — the most a result may carry inline (mcp-utils' INLINE_DELIVERY_MAX_BYTES). */
+const INLINE_MAX = 10 * 1024 * 1024;
+const BLOB_BASE = 'https://host.example/b/reg123';
+
+let outDir: string;
+beforeEach(() => {
+  outDir = mkdtempSync(join(tmpdir(), 'teams-attachment-'));
+  vi.stubEnv('TEAMS_OUTPUT_DIR', outDir);
+  vi.stubEnv('MCP_BLOB_BASE_URL', '');
+  vi.stubEnv('MCP_BLOB_SIGNING_KEY', '');
+  vi.stubEnv('MCP_DATA_DIR', '');
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+});
+
+/** Point the blob store at a fake gateway; returns the PUTs it received. */
+function stubBlobStore(): { url: string; bytes: number; type: string }[] {
+  vi.stubEnv('MCP_BLOB_BASE_URL', BLOB_BASE);
+  vi.stubEnv('MCP_BLOB_SIGNING_KEY', 'k'.repeat(32));
+  const puts: { url: string; bytes: number; type: string }[] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      puts.push({
+        url: String(url),
+        bytes: (init?.body as Uint8Array).byteLength,
+        type: new Headers(init?.headers).get('content-type') ?? '',
+      });
+      return new Response(null, { status: 201 });
+    }),
+  );
+  return puts;
+}
+
+/** No content block of a result may carry more than INLINE_MAX raw bytes. */
+function expectNothingInlineOverCap(content: Block[]): void {
+  for (const block of content) {
+    const b64 = block.data ?? block.resource?.blob;
+    if (b64 !== undefined) expect(Buffer.from(b64, 'base64').length).toBeLessThanOrEqual(INLINE_MAX);
+  }
 }
 
 type Block = { type: string; text?: string; data?: string; mimeType?: string; resource?: { uri: string; mimeType?: string; blob?: string } };
@@ -287,5 +334,135 @@ describe('teams_get_attachment', () => {
 
     expect(result.isError).toBe(true);
     expect(errorText(result)).toMatch(/click into any chat/i);
+  });
+});
+
+describe('teams_get_attachment never inlines more than 10 MiB', () => {
+  const fileArgs = { conversation: GROUP, message_id: String(TARGET), ref: FILE_NAME };
+  const imageArgs = { conversation: GROUP, message_id: String(TARGET), ref: IMAGE_REF };
+  const docx = (n: number) => vi.fn().mockResolvedValue({ mimeType: DOCX_MIME, data: Buffer.alloc(n, 1), size: n });
+  /** A PNG signature padded out to `n` bytes. */
+  const png = (n: number) => Buffer.concat([PNG_BYTES, Buffer.alloc(n - PNG_BYTES.length)]);
+
+  it('returns a shared file of exactly 10 MiB inline', async () => {
+    const result = await call(chatsvcWith(), fileArgs, fakeSharepoint(docx(INLINE_MAX)));
+    expect(result.isError).toBeFalsy();
+    const content = result.content as Block[];
+    expect(content[0].type).toBe('resource');
+    expect(content[0].resource?.uri).toBe(FILE_OPEN_URL);
+    const caption = JSON.parse(content[1].text!) as Record<string, unknown>;
+    expect(caption).toMatchObject({ via: 'resource', bytes: INLINE_MAX, content_available: true });
+    expect(caption).not.toHaveProperty('downloadUrl');
+  });
+
+  it('marks a small inline image as delivered as an image', async () => {
+    const result = await call(chatsvcWith(), imageArgs);
+    const caption = JSON.parse((result.content as Block[])[1].text!) as Record<string, unknown>;
+    expect(caption.via).toBe('image');
+  });
+
+  it('returns an over-cap shared file as a signed download link when hosted, keeping its open link', async () => {
+    const puts = stubBlobStore();
+    const size = INLINE_MAX + 1;
+    const result = await call(chatsvcWith(), fileArgs, fakeSharepoint(docx(size)));
+
+    expect(result.isError).toBeFalsy();
+    const content = result.content as Block[];
+    expectNothingInlineOverCap(content);
+    expect(content.map((b) => b.type)).toEqual(['text']);
+    const caption = (JSON.parse(content[0].text!) as { data: Record<string, unknown> }).data;
+    expect(caption).toMatchObject({
+      name: FILE_NAME,
+      openUrl: FILE_OPEN_URL,
+      content_available: true,
+      via: 'link',
+      mimeType: DOCX_MIME,
+      bytes: size,
+    });
+    expect(caption.downloadUrl).toMatch(new RegExp(`^${BLOB_BASE}/attachments/[0-9a-f-]+/Example_plan\\.docx\\?exp=\\d+&sig=`));
+    expect(Date.parse(caption.downloadExpiresAt as string)).toBeGreaterThan(Date.now());
+    expect(caption.note).toMatch(/too large to return inline/);
+    expect(puts).toHaveLength(1);
+    expect(puts[0]).toMatchObject({ bytes: size, type: DOCX_MIME });
+    expect(readdirSync(outDir)).toHaveLength(0);
+  });
+
+  it('returns an over-cap inline image as a signed download link when hosted', async () => {
+    const puts = stubBlobStore();
+    const big = png(INLINE_MAX + 1);
+    const chatsvc = chatsvcWith(MSGS, { fetchImage: vi.fn().mockResolvedValue({ mimeType: 'image/png', data: big }) });
+    const result = await call(chatsvc, imageArgs);
+
+    expect(result.isError).toBeFalsy();
+    const content = result.content as Block[];
+    expectNothingInlineOverCap(content);
+    expect(content.map((b) => b.type)).toEqual(['text']);
+    const caption = (JSON.parse(content[0].text!) as { data: Record<string, unknown> }).data;
+    expect(caption).toMatchObject({ ref: IMAGE_REF, via: 'link', mimeType: 'image/png', bytes: big.length });
+    expect(caption.downloadUrl).toMatch(new RegExp(`^${BLOB_BASE}/attachments/`));
+    expect(puts).toHaveLength(1);
+  });
+
+  it('saves an over-cap shared file to the download folder on a local install, never overwriting', async () => {
+    const size = INLINE_MAX + 1;
+    const first = await call(chatsvcWith(), fileArgs, fakeSharepoint(docx(size)));
+    const second = await call(chatsvcWith(), fileArgs, fakeSharepoint(docx(size)));
+
+    for (const result of [first, second]) {
+      expect(result.isError).toBeFalsy();
+      expectNothingInlineOverCap(result.content as Block[]);
+    }
+    const a = (parseToolResult(first) as { data: Record<string, unknown> }).data;
+    const b = (parseToolResult(second) as { data: Record<string, unknown> }).data;
+    expect(a).toMatchObject({ via: 'disk', openUrl: FILE_OPEN_URL, content_available: true });
+    expect(a.path).toMatch(new RegExp(`^${outDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+    expect(b.path).not.toBe(a.path);
+    expect(readdirSync(outDir)).toHaveLength(2);
+    expect(readFileSync(a.path as string).length).toBe(size);
+  });
+
+  it('refuses an over-cap file with a clear error on a hosted install with no blob store, naming its open link', async () => {
+    vi.stubEnv('MCP_DATA_DIR', '/data');
+    const result = await call(chatsvcWith(), fileArgs, fakeSharepoint(docx(INLINE_MAX + 1)));
+
+    expect(result.isError).toBe(true);
+    const text = JSON.stringify(result.content);
+    expect(text).toMatch(/over the 10485760-byte inline limit/);
+    expect(text).toContain(FILE_OPEN_URL);
+    expect(readdirSync(outDir)).toHaveLength(0);
+  });
+
+  it('refuses an over-cap inline image with a clear error on a hosted install with no blob store', async () => {
+    vi.stubEnv('MCP_DATA_DIR', '/data');
+    const chatsvc = chatsvcWith(MSGS, {
+      fetchImage: vi.fn().mockResolvedValue({ mimeType: 'image/png', data: png(INLINE_MAX + 1) }),
+    });
+    const result = await call(chatsvc, imageArgs);
+
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toMatch(/inline limit/);
+  });
+
+  it('saves to ~/Downloads/microsoft-teams-mcp when TEAMS_OUTPUT_DIR is unset', async () => {
+    vi.stubEnv('TEAMS_OUTPUT_DIR', '');
+    const result = await call(chatsvcWith(), fileArgs, fakeSharepoint(docx(INLINE_MAX + 1)));
+    const data = (parseToolResult(result) as { data: Record<string, unknown> }).data;
+    expect(data.via).toBe('disk');
+    expect(data.path).toMatch(new RegExp(`^${join(process.env.HOME!, 'Downloads', 'microsoft-teams-mcp')}/Example plan`));
+  });
+
+  it('refuses an over-cap file that has no open link with the plain too-large error', async () => {
+    vi.stubEnv('MCP_DATA_DIR', '/data');
+    const noOpenUrl = {
+      ...withAttachments(TARGET),
+      properties: { files: JSON.stringify([{ fileName: FILE_NAME, fileType: 'docx', objectUrl: FILE_URL }]) },
+    };
+    const msgs = [rawMsg(T0 + 1 * MIN), noOpenUrl, rawMsg(T0 + 3 * MIN)];
+    const result = await call(chatsvcWith(msgs), fileArgs, fakeSharepoint(docx(INLINE_MAX + 1)));
+
+    expect(result.isError).toBe(true);
+    const text = JSON.stringify(result.content);
+    expect(text).toMatch(/inline limit/);
+    expect(text).not.toContain('Open it in SharePoint');
   });
 });
