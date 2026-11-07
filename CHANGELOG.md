@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.5](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.8.4...v0.8.5) (2026-11-07)
+
+
+### Bug Fixes
+
+* **deps:** upgrade @chrischall/mcp-utils to 3.7.2 so uploads carry only the file's bytes ([#103](https://github.com/chrischall/microsoft-teams-mcp/issues/103)) ([0954f86](https://github.com/chrischall/microsoft-teams-mcp/commit/0954f862371f467770e1af92c2582da64bd9c036))
+
 ## [0.8.4](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.8.3...v0.8.4) (2026-11-06)
 
 
