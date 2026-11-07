@@ -444,11 +444,15 @@ describe('teams_get_attachment never inlines more than 10 MiB', () => {
   });
 
   it('saves to ~/Downloads/microsoft-teams-mcp when TEAMS_OUTPUT_DIR is unset', async () => {
+    // A sandboxed HOME: the default dir is under homedir(), and this writes a >10 MiB file.
+    const home = mkdtempSync(join(tmpdir(), 'teams-home-'));
+    vi.stubEnv('HOME', home);
     vi.stubEnv('TEAMS_OUTPUT_DIR', '');
     const result = await call(chatsvcWith(), fileArgs, fakeSharepoint(docx(INLINE_MAX + 1)));
     const data = (parseToolResult(result) as { data: Record<string, unknown> }).data;
     expect(data.via).toBe('disk');
-    expect(data.path).toMatch(new RegExp(`^${join(process.env.HOME!, 'Downloads', 'microsoft-teams-mcp')}/Example plan`));
+    expect(data.path).toMatch(new RegExp(`^${join(home, 'Downloads', 'microsoft-teams-mcp')}/Example plan`));
+    expect(readdirSync(join(home, 'Downloads', 'microsoft-teams-mcp'))).toHaveLength(1);
   });
 
   it('refuses an over-cap file that has no open link with the plain too-large error', async () => {
