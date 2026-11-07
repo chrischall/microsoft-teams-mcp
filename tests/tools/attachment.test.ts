@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
-import { mkdtempSync, readdirSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createTestHarness, parseToolResult } from '@chrischall/mcp-utils/test';
@@ -96,6 +96,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
+  rmSync(outDir, { recursive: true, force: true });
 });
 
 /** Point the blob store at a fake gateway; returns the PUTs it received. */
@@ -446,13 +447,17 @@ describe('teams_get_attachment never inlines more than 10 MiB', () => {
   it('saves to ~/Downloads/microsoft-teams-mcp when TEAMS_OUTPUT_DIR is unset', async () => {
     // A sandboxed HOME: the default dir is under homedir(), and this writes a >10 MiB file.
     const home = mkdtempSync(join(tmpdir(), 'teams-home-'));
-    vi.stubEnv('HOME', home);
-    vi.stubEnv('TEAMS_OUTPUT_DIR', '');
-    const result = await call(chatsvcWith(), fileArgs, fakeSharepoint(docx(INLINE_MAX + 1)));
-    const data = (parseToolResult(result) as { data: Record<string, unknown> }).data;
-    expect(data.via).toBe('disk');
-    expect(data.path).toMatch(new RegExp(`^${join(home, 'Downloads', 'microsoft-teams-mcp')}/Example plan`));
-    expect(readdirSync(join(home, 'Downloads', 'microsoft-teams-mcp'))).toHaveLength(1);
+    try {
+      vi.stubEnv('HOME', home);
+      vi.stubEnv('TEAMS_OUTPUT_DIR', '');
+      const result = await call(chatsvcWith(), fileArgs, fakeSharepoint(docx(INLINE_MAX + 1)));
+      const data = (parseToolResult(result) as { data: Record<string, unknown> }).data;
+      expect(data.via).toBe('disk');
+      expect(data.path).toMatch(new RegExp(`^${join(home, 'Downloads', 'microsoft-teams-mcp')}/Example plan`));
+      expect(readdirSync(join(home, 'Downloads', 'microsoft-teams-mcp'))).toHaveLength(1);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   it('refuses an over-cap file that has no open link with the plain too-large error', async () => {
