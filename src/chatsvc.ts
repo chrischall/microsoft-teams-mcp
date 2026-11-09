@@ -363,13 +363,18 @@ export class ChatServiceClient {
   async listConversations(): Promise<RawConversation[]> {
     this.#requireConfigured();
     const out: RawConversation[] = [];
+    // A conversation that changes while the pages are read can come back on a
+    // later page too (seen live 2026-11-09); its first, newest copy is kept.
+    const seen = new Set<string>();
     let url: string | undefined = `${this.#baseUrl}/users/ME/conversations?view=msnp24Equivalent&pageSize=200`;
     for (let page = 0; url !== undefined && page < MAX_CONVERSATION_PAGES; page++) {
       const body: ConversationsPage = await this.#getJson<ConversationsPage>(url);
       const convs = body.conversations ?? [];
       if (convs.length === 0) break;
       for (const c of convs) {
-        if (typeof c?.id === 'string' && (!c.id.startsWith('48:') || c.id === SELF_CHAT)) out.push(c);
+        if (typeof c?.id !== 'string' || (c.id.startsWith('48:') && c.id !== SELF_CHAT) || seen.has(c.id)) continue;
+        seen.add(c.id);
+        out.push(c);
       }
       url = this.#nextLink(body);
     }
