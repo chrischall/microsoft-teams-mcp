@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.9.0...v0.10.0) (2026-11-09)
+
+
+### Features
+
+* **chats:** create group chats ([#118](https://github.com/chrischall/microsoft-teams-mcp/issues/118)) ([40b6e1b](https://github.com/chrischall/microsoft-teams-mcp/commit/40b6e1bdf99a7b0fbf7f888ad52b5a6daf261e3c))
+
 ## [0.9.0](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.8.7...v0.9.0) (2026-11-09)
 
 
