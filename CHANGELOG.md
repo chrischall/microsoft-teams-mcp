@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.9.0](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.8.7...v0.9.0) (2026-11-09)
+
+
+### Features
+
+* **attachments:** save attachments to disk, match names loosely, and use one SharePoint token for every host ([#113](https://github.com/chrischall/microsoft-teams-mcp/issues/113)) ([13bc817](https://github.com/chrischall/microsoft-teams-mcp/commit/13bc817da7c6c94416f3f50ef7626fa62c5ab7b3))
+* **chats:** add people to, remove people from, and rename group chats ([#116](https://github.com/chrischall/microsoft-teams-mcp/issues/116)) ([d76e717](https://github.com/chrischall/microsoft-teams-mcp/commit/d76e717d4c9b3fc55d68f04270eb6682aa09326c))
+* **chats:** find people to add or remove by email, or by name from the Teams directory ([#117](https://github.com/chrischall/microsoft-teams-mcp/issues/117)) ([fa6abd8](https://github.com/chrischall/microsoft-teams-mcp/commit/fa6abd8bcec1cfe30ae74b181aec8b694c4e0c99))
+
+
+### Bug Fixes
+
+* **chats:** stop a chat that changes mid-listing from being found twice by name ([#115](https://github.com/chrischall/microsoft-teams-mcp/issues/115)) ([db780e2](https://github.com/chrischall/microsoft-teams-mcp/commit/db780e2d1aca4e235267f8e2073f3659523c6a41))
+
 ## [0.8.7](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.8.6...v0.8.7) (2026-11-09)
 
 
