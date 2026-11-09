@@ -1,8 +1,13 @@
 /**
  * Group-chat housekeeping through the chat-service thread API (verified live
  * 2026-11-09): `teams_rename_chat` sets a group chat's topic,
- * `teams_add_chat_members` adds people to it and `teams_remove_chat_members`
- * takes people out of it.
+ * `teams_add_chat_members` adds people to it, `teams_remove_chat_members`
+ * takes people out of it and `teams_create_group_chat` starts a new one.
+ *
+ * Creating is the odd one out: it is NOT idempotent (each call makes another
+ * chat, and a chat cannot be deleted), so an unconfirmed create is reported
+ * as `unknown` with a warning never to retry blindly — there is no id to read
+ * back. A confirmed one is read back like the others.
  *
  * Each is gated by `confirmWrite` as `teams_react` is: Teams posts a notice
  * in the chat for every change, so everyone in it sees what was done. All
@@ -36,6 +41,7 @@ import {
 } from '@chrischall/mcp-utils';
 import type { ChatServiceClient, RawThread } from '../chatsvc.js';
 import type { TeamsDeps } from '../deps.js';
+import { UNTITLED_GROUP_TITLE } from '../model.js';
 import { wrapApiError } from './errors.js';
 import { workMeta } from './hints.js';
 import { knownPeople, resolvePeople, type PeopleDirectory, type ResolvedPerson } from './people.js';
@@ -45,6 +51,7 @@ import { untrustedField, untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from '.
 const RENAME = 'teams_rename_chat';
 const ADD = 'teams_add_chat_members';
 const REMOVE = 'teams_remove_chat_members';
+const CREATE = 'teams_create_group_chat';
 
 /** Most people one call adds or removes. */
 const MAX_PEOPLE = 20;
@@ -64,25 +71,37 @@ const conversationParam = z
       "an untitled chat's participant names.",
   );
 
+/** How a person may be named, for a `people` parameter; `local` says where a name is matched before the directory. */
+function peopleParamText(local: string): string {
+  return (
+    'each an MRI (8:orgid:…), a bare Entra object id, an email address (looked up in your organisation\'s ' +
+    'directory), or a display name ("Greg King" and "King, Greg" are the same) matched among ' +
+    `${local}, then — only if no one there matches — in the directory.`
+  );
+}
+
 const peopleParam = z
   .array(z.string().trim().min(1))
   .min(1)
   .max(MAX_PEOPLE)
-  .describe(
-    'Who: each an MRI (8:orgid:…), a bare Entra object id, an email address (looked up in your organisation\'s ' +
-      'directory), or a display name ("Greg King" and "King, Greg" are the same) matched among the other people ' +
-      'of your 1:1 chats and recent senders in this chat, then — only if no one there matches — in the directory.',
-  );
+  .describe(`Who: ${peopleParamText('the other people of your 1:1 chats and recent senders in this chat')}`);
 
-const PEOPLE_SENTENCE =
-  'people are MRIs (8:orgid:…), bare object ids, email addresses, or display names. A name is matched ' +
-  '(ignoring case, in either "First Last" or "Last, First" order) among the other person of each of the ' +
-  "user's 1:1 chats and the chat's recent senders first; only when no one there matches is the organisation's " +
-  'directory searched, where the one person with exactly that name is taken (or the only suggestion, when the ' +
-  'name is whole words of it). An email address is looked up in the directory and must be exactly one ' +
-  "person's email or UPN. An ambiguous or unknown person refuses the whole call, listing candidates. The " +
-  'directory is searched with the same token as teams_search_messages: the first lookup may need the user to ' +
-  'run any search in the Teams search box so it can be captured. ';
+/** The description's sentence on naming people; `local` says where a name is matched before the directory. */
+function peopleSentence(local: string): string {
+  return (
+    'people are MRIs (8:orgid:…), bare object ids, email addresses, or display names. A name is matched ' +
+    `(ignoring case, in either "First Last" or "Last, First" order) among ${local} first; only when no one ` +
+    "there matches is the organisation's directory searched, where the one person with exactly that name is " +
+    'taken (or the only suggestion, when the name is whole words of it). An email address is looked up in the ' +
+    "directory and must be exactly one person's email or UPN. An ambiguous or unknown person refuses the whole " +
+    'call, listing candidates. The directory is searched with the same token as teams_search_messages: the ' +
+    'first lookup may need the user to run any search in the Teams search box so it can be captured. '
+  );
+}
+
+const PEOPLE_SENTENCE = peopleSentence(
+  "the other person of each of the user's 1:1 chats and the chat's recent senders",
+);
 
 /** The conversation, refused unless it is a group chat. `doing` words the refusal ("renamed"). */
 async function groupChat(chatsvc: ChatServiceClient, conversation: string, me: string, doing: string): Promise<Target> {
@@ -122,12 +141,16 @@ function shown(p: ResolvedPerson): ResolvedPerson {
   };
 }
 
-/** People resolved and de-duplicated by MRI (the first naming of each kept). */
+/**
+ * People resolved and de-duplicated by MRI (the first naming of each kept).
+ * Names are matched among the user's 1:1s and, given `conversationId`, that
+ * chat's recent senders; with none (a chat not yet made), the 1:1s only.
+ */
 async function resolveFor(
   chatsvc: ChatServiceClient,
   directory: PeopleDirectory,
   me: string,
-  conversationId: string,
+  conversationId: string | undefined,
   people: readonly string[],
 ): Promise<ResolvedPerson[]> {
   const known = await knownPeople(chatsvc, me, conversationId);
@@ -481,6 +504,137 @@ export function registerGroupChatTools(
         });
       } catch (err) {
         throw wrapApiError(err, 'remove people from the chat');
+      }
+    },
+  );
+
+  server.registerTool(
+    CREATE,
+    {
+      title: 'Create a Teams group chat',
+      description:
+        'Start a new group chat as the signed-in user with 2–20 other people, optionally named (topic). The user ' +
+        'is always included (listing them is ignored), as are duplicates; fewer than two other people is refused — ' +
+        'one other person is a 1:1, which this tool does not create. ' +
+        peopleSentence("the other person of each of the user's 1:1 chats") +
+        'Everyone added sees the chat at once in their chat list, and it cannot be deleted afterwards — only ' +
+        'left. No message is sent: post the first one with teams_send_message, passing the new conversation id. ' +
+        'Not idempotent: every confirmed call makes a NEW chat. The result has the new conversation (id, title, ' +
+        'kind "group"), the members and whether reading the chat back showed them all and the topic (verified); ' +
+        'status "unknown" means Teams did not confirm the create — a chat may exist anyway, so check ' +
+        'teams_list_conversations and do NOT retry blindly (that would make a second chat). ' +
+        CONFIRM_FLOW_SENTENCE +
+        ' The preview shows the topic and exactly who would be in the chat — each with their source (id, chat or ' +
+        'directory) and, from the directory, their email — so the user can check it is the right people. ' +
+        CONFIRM_INJECTION_RULE +
+        UNTRUSTED_DESCRIPTION_SUFFIX,
+      annotations: toolAnnotations({ readOnly: false, destructive: false, idempotent: false, openWorld: true }),
+      _meta: workMeta('send', {
+        aliases: ['create chat', 'new group chat', 'start a chat', 'new chat', 'group chat', 'start group chat'],
+      }),
+      inputSchema: {
+        people: z
+          .array(z.string().trim().min(1))
+          .min(2)
+          .max(MAX_PEOPLE)
+          .describe(
+            `Who to start the chat with (2–20 others; you are added automatically): ` +
+              peopleParamText('the other people of your 1:1 chats'),
+          ),
+        topic: z
+          .string()
+          .optional()
+          .describe('A name for the chat (surrounding spaces are trimmed). Omit or leave empty for an untitled chat.'),
+        confirmToken: confirmTokenParam,
+      },
+    },
+    async ({ people, topic: rawTopic, confirmToken }, ctx) => {
+      try {
+        const me = await chatsvc.meMri();
+        const topic = rawTopic?.trim() || undefined;
+        const others = (await resolveFor(chatsvc, substrate, me, undefined, people)).filter(
+          (p) => p.mri.toLowerCase() !== me.toLowerCase(),
+        );
+        if (others.length < 2) {
+          throw new McpToolError(
+            `A group chat needs at least two other people besides you; ${others.length === 1 ? `only ${JSON.stringify(others[0].person)} is` : 'no one else is'} left once you and duplicates are dropped. One other person is a 1:1 chat, which this tool does not create.`,
+            {
+              hint:
+                'Add at least one more person, or to talk to one person use your 1:1 chat with them (teams_send_message, ' +
+                'conversation set to their name).',
+            },
+          );
+        }
+        const members = others.map(shown);
+        const allMris = [me, ...others.map((p) => p.mri)];
+
+        const count = `you and ${others.length} other people`;
+        const gate = await confirmWrite(ctx, {
+          tool: CREATE,
+          action: 'chat.create',
+          message: 'Review and confirm this new group chat before it is created — it cannot be deleted afterwards:',
+          // The topic is the caller's own text: JSON-quoted all the same, so it reads as one value.
+          summary: `Create ${topic !== undefined ? `group chat ${JSON.stringify(topic)}` : 'an untitled group chat'} with ${count}`,
+          account: me,
+          target: 'new group chat',
+          request: { method: 'POST', path: '/threads', body: { members: allMris, ...(topic !== undefined ? { topic } : {}) } },
+          // The resolved names are set by other people, so they are fenced.
+          preview: {
+            topic: topic ?? '(untitled)',
+            members: untrustedField(members),
+            note:
+              'Creates a NEW group chat with everyone as a member (Teams makes each one an Admin). Everyone added ' +
+              'sees it at once; it cannot be deleted afterwards, only left. No message is sent.',
+          },
+          confirmToken,
+        });
+        if (gate) return gate;
+
+        let id: string;
+        try {
+          ({ id } = await chatsvc.createGroupChat(others.map((p) => p.mri), topic));
+        } catch (e) {
+          if (!(e instanceof WriteOutcomeUnknownError)) throw e;
+          return untrustedResult({
+            status: 'unknown',
+            ...(topic !== undefined ? { topic } : {}),
+            members,
+            warning:
+              `Teams did not confirm creating the chat (${unconfirmedWhy(e)}), so it may or may not exist. Check ` +
+              'teams_list_conversations for a new group chat with these people (no messages yet) before doing ' +
+              'anything else — do NOT retry blindly: if it was created, retrying makes a second chat, and chats ' +
+              'cannot be deleted.',
+          });
+        }
+
+        let warning: string | undefined;
+        let verified: boolean | null;
+        try {
+          const thread = await chatsvc.getThread(id);
+          const present = memberSet(thread);
+          const missing = allMris.filter((m) => !present.has(m.toLowerCase()));
+          const shownTopic = thread.properties?.topic || undefined;
+          const notes: string[] = [];
+          if (missing.length > 0) notes.push(`did not show ${missing.join(', ')} as a member`);
+          if (shownTopic !== topic) notes.push(`showed the topic as ${JSON.stringify(shownTopic ?? '')}`);
+          verified = notes.length === 0;
+          if (!verified) {
+            warning = `Teams created the chat, but reading it back ${notes.join(' and ')} — check it in Teams (do not create it again).`;
+          }
+        } catch {
+          verified = null;
+          warning = 'Teams created the chat, but reading the chat back failed — check it in teams_list_conversations (do not create it again).';
+        }
+        return untrustedResult({
+          status: 'created',
+          conversation: { id, title: topic ?? UNTITLED_GROUP_TITLE, kind: 'group' },
+          ...(topic !== undefined ? { topic } : {}),
+          members,
+          verified,
+          ...(warning !== undefined ? { warning } : {}),
+        });
+      } catch (err) {
+        throw wrapApiError(err, 'create the group chat');
       }
     },
   );

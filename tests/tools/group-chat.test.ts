@@ -528,6 +528,197 @@ describe('teams_remove_chat_members', () => {
   });
 });
 
+describe('teams_create_group_chat', () => {
+  const NEW = '19:new0001@thread.v2';
+
+  /**
+   * A chat service where createGroupChat really makes a thread (the user first,
+   * everyone Admin) that getThread then shows — unless `drop` leaves someone out
+   * or `topicShown` overrides the topic Teams shows.
+   */
+  function fakeCreate(opts: { drop?: string; topicShown?: string; overrides?: Record<string, unknown> } = {}) {
+    let made: RawThread | undefined;
+    const createGroupChat = vi.fn(async (mris: string[], topic?: string) => {
+      const members = [ME, ...mris].filter((m) => m !== opts.drop).map((id) => ({ id, role: 'Admin' }));
+      const shownTopic = opts.topicShown ?? topic;
+      made = { id: NEW, properties: { threadType: 'chat', ...(shownTopic !== undefined ? { topic: shownTopic } : {}) }, members };
+      return { id: NEW };
+    });
+    const getThread = vi.fn(async (id: string) => {
+      if (id === NEW && made) return made;
+      throw new McpToolError('Teams chat service returned HTTP 404.', { status: 404 });
+    });
+    const getMessages = vi.fn(async (_id: string) => []);
+    const chatsvc = fakeChatsvc(CONVS, { createGroupChat, getThread, getMessages, ...opts.overrides });
+    return { chatsvc, createGroupChat, getThread, getMessages };
+  }
+
+  it('phase 1 resolves every person, previews the topic and members, binds POST /threads, and creates nothing', async () => {
+    const { chatsvc, createGroupChat } = fakeCreate();
+    const { substrate } = fakeSubstrate([GARY]);
+    const { preview } = await phaseOne(
+      chatsvc,
+      'teams_create_group_chat',
+      { people: ['Greg King', SAM_OID, 'gary.solomon@example.test'], topic: '  Project Osprey  ' },
+      substrate,
+    );
+    expect(preview?.confirmToken).toEqual(expect.any(String));
+    expect(preview?.preview?.method).toBe('POST');
+    expect(preview?.preview?.path).toBe('/threads');
+    expect(preview?.preview?.willSend).toEqual({ members: [ME, GREG, SAM, GARY.mri], topic: 'Project Osprey' });
+    expect(preview?.preview?.topic).toBe('Project Osprey');
+    expect(fenced(preview?.preview?.members)).toEqual([
+      { person: 'Greg King', mri: GREG, name: 'King, Greg', source: 'chat' },
+      { person: SAM_OID, mri: SAM, source: 'id' },
+      { person: 'gary.solomon@example.test', mri: GARY.mri, name: 'Solomon, Gary', source: 'directory', email: GARY.email },
+    ]);
+    expect(String(preview?.preview?.note)).toMatch(/cannot be deleted/i);
+    expect(JSON.stringify(preview)).toMatch(/Project Osprey/);
+    expect(JSON.stringify(preview)).toMatch(/3 other people/);
+    expect(createGroupChat).not.toHaveBeenCalled();
+  });
+
+  it('phase 2 creates the chat, reads it back, and reports it verified', async () => {
+    const { chatsvc, createGroupChat, getThread } = fakeCreate();
+    const { data } = await confirmed(chatsvc, 'teams_create_group_chat', { people: ['greg king', SAM], topic: 'Project Osprey' });
+    expect(createGroupChat.mock.calls).toEqual([[[GREG, SAM], 'Project Osprey']]);
+    expect(getThread).toHaveBeenCalledWith(NEW);
+    expect(payload(data)).toEqual({
+      status: 'created',
+      conversation: { id: NEW, title: 'Project Osprey', kind: 'group' },
+      topic: 'Project Osprey',
+      members: [
+        { person: 'greg king', mri: GREG, name: 'King, Greg', source: 'chat' },
+        { person: SAM, mri: SAM, source: 'id' },
+      ],
+      verified: true,
+    });
+  });
+
+  it('creates an untitled chat when the topic is missing or blank', async () => {
+    const { chatsvc, createGroupChat } = fakeCreate();
+    const { preview, data } = await confirmed(chatsvc, 'teams_create_group_chat', { people: [GREG, SAM], topic: '   ' });
+    expect(preview?.preview?.willSend).toEqual({ members: [ME, GREG, SAM] });
+    expect(createGroupChat.mock.calls).toEqual([[[GREG, SAM], undefined]]);
+    const p = payload(data);
+    expect(p.conversation).toEqual({ id: NEW, title: '(untitled group chat)', kind: 'group' });
+    expect(p).not.toHaveProperty('topic');
+    expect(p.verified).toBe(true);
+  });
+
+  it('drops the signed-in user and duplicates (by MRI, ignoring case) before counting', async () => {
+    const { chatsvc, createGroupChat } = fakeCreate();
+    await confirmed(chatsvc, 'teams_create_group_chat', { people: [ME_OID, GREG, 'King, Greg', SAM.toUpperCase(), SAM] });
+    expect(createGroupChat.mock.calls).toEqual([[[GREG, SAM.toUpperCase()], undefined]]);
+  });
+
+  it.each([
+    ['one other person and yourself', [GREG, ME]],
+    ['the same person twice', [GREG, 'Greg King']],
+  ])('refuses %s: that would be a 1:1, which this tool does not create', async (_label, people) => {
+    const { chatsvc, createGroupChat } = fakeCreate();
+    const { first } = await phaseOne(chatsvc, 'teams_create_group_chat', { people });
+    expect(first.isError).toBe(true);
+    expect(errorText(first)).toMatch(/two other people/i);
+    expect(errorText(first)).toMatch(/1:1/);
+    expect(createGroupChat).not.toHaveBeenCalled();
+  });
+
+  it('refuses fewer than 2 or more than 20 people at the schema', async () => {
+    const { chatsvc } = fakeCreate();
+    expect((await phaseOne(chatsvc, 'teams_create_group_chat', { people: [GREG] })).first.isError).toBe(true);
+    const many = Array.from({ length: 21 }, (_, i) => `8:orgid:p${i}`);
+    expect((await phaseOne(chatsvc, 'teams_create_group_chat', { people: many })).first.isError).toBe(true);
+  });
+
+  it('refuses the whole call when a name is unknown, before any preview', async () => {
+    const { chatsvc, createGroupChat } = fakeCreate();
+    const { first } = await phaseOne(chatsvc, 'teams_create_group_chat', { people: [GREG, 'Zed Nobody'] });
+    expect(first.isError).toBe(true);
+    expect(errorText(first)).toMatch(/Zed Nobody/);
+    expect(createGroupChat).not.toHaveBeenCalled();
+  });
+
+  it('matches names among your 1:1s only — no chat is read for senders', async () => {
+    const { chatsvc, getMessages } = fakeCreate();
+    const { substrate, suggestPeople } = fakeSubstrate([GARY]);
+    const { preview } = await phaseOne(chatsvc, 'teams_create_group_chat', { people: ['Greg King', 'Gary Solomon'] }, substrate);
+    expect(fenced(preview?.preview?.members)).toEqual([
+      { person: 'Greg King', mri: GREG, name: 'King, Greg', source: 'chat' },
+      { person: 'Gary Solomon', mri: GARY.mri, name: 'Solomon, Gary', source: 'directory', email: GARY.email },
+    ]);
+    expect(suggestPeople).toHaveBeenCalledTimes(1);
+    for (const [id] of getMessages.mock.calls) expect(id).toBe(ONE_ON_ONE);
+  });
+
+  it('reports verified: false with a warning when the read-back is missing someone', async () => {
+    const { chatsvc } = fakeCreate({ drop: SAM });
+    const { data } = await confirmed(chatsvc, 'teams_create_group_chat', { people: [GREG, SAM] });
+    expect(payload(data)).toMatchObject({ status: 'created', verified: false, warning: expect.stringMatching(new RegExp(SAM)) });
+  });
+
+  it('reports verified: false when the read-back shows another topic', async () => {
+    const { chatsvc } = fakeCreate({ topicShown: 'Something else' });
+    const { data } = await confirmed(chatsvc, 'teams_create_group_chat', { people: [GREG, SAM], topic: 'Project Osprey' });
+    expect(payload(data)).toMatchObject({ status: 'created', verified: false, warning: expect.stringMatching(/topic/) });
+  });
+
+  it('reports verified: null with a warning when the read-back fails', async () => {
+    const { chatsvc } = fakeCreate({ overrides: { getThread: vi.fn().mockRejectedValue(new Error('boom')) } });
+    const { data } = await confirmed(chatsvc, 'teams_create_group_chat', { people: [GREG, SAM] });
+    expect(payload(data)).toMatchObject({
+      status: 'created',
+      conversation: { id: NEW },
+      verified: null,
+      warning: expect.stringMatching(/reading the chat back failed/),
+    });
+  });
+
+  it('reports status "unknown" — and warns not to retry blindly — when Teams did not confirm the create', async () => {
+    const { chatsvc, getThread } = fakeCreate({ overrides: { createGroupChat: vi.fn().mockRejectedValue(unknownOutcome('POST')) } });
+    const { second, data } = await confirmed(chatsvc, 'teams_create_group_chat', { people: [GREG, SAM], topic: 'Project Osprey' });
+    expect(second.isError).toBeFalsy();
+    const p = payload(data);
+    expect(p).toMatchObject({ status: 'unknown', topic: 'Project Osprey' });
+    expect(p.members).toEqual([
+      { person: GREG, mri: GREG, name: 'King, Greg', source: 'id' },
+      { person: SAM, mri: SAM, source: 'id' },
+    ]);
+    expect(p).not.toHaveProperty('conversation');
+    expect(p.warning).toMatch(/HTTP 504/);
+    expect(p.warning).toMatch(/teams_list_conversations/);
+    expect(p.warning).toMatch(/second chat/);
+    expect(getThread).not.toHaveBeenCalled();
+  });
+
+  it('fails plainly on a refusal (or a success with no id)', async () => {
+    const { chatsvc } = fakeCreate({
+      overrides: { createGroupChat: vi.fn().mockRejectedValue(new McpToolError('Teams chat service returned HTTP 403.', { status: 403 })) },
+    });
+    const { second } = await confirmed(chatsvc, 'teams_create_group_chat', { people: [GREG, SAM] });
+    expect(second.isError).toBe(true);
+    expect(errorText(second)).toMatch(/403/);
+  });
+
+  it('is a non-idempotent, non-destructive, open-world write whose description warns about what cannot be undone', async () => {
+    const h = await createTestHarness((server) => registerGroupChatTools(server, { chatsvc: fakeCreate().chatsvc, substrate: fakeSubstrate().substrate }));
+    try {
+      const tool = (await h.client.listTools()).tools.find((t) => t.name === 'teams_create_group_chat')!;
+      expect(tool.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true });
+      expect(tool.description).toMatch(/cannot be deleted/);
+      expect(tool.description).toMatch(/teams_send_message/);
+      expect(tool.description).toMatch(/confirmToken/);
+      expect(tool.description).toMatch(/directory/);
+      expect(tool.description).toMatch(/1:1/);
+      expect(tool.inputSchema.properties).toHaveProperty('confirmToken');
+      expect(tool.inputSchema.properties).toHaveProperty('topic');
+      expect(tool.inputSchema.required).toEqual(['people']);
+    } finally {
+      await h.close();
+    }
+  });
+});
+
 describe('annotations', () => {
   it.each([
     ['teams_rename_chat', false],

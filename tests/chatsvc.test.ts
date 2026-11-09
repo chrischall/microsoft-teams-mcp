@@ -944,6 +944,106 @@ describe('group-chat threads', () => {
   });
 });
 
+describe('createGroupChat', () => {
+  const ME = `8:orgid:${ME_OID}`;
+  const A = '8:orgid:00000000-0000-0000-0000-0000000000c3';
+  const B = '8:orgid:00000000-0000-0000-0000-0000000000c4';
+  const NEW = '19:0123abcd@thread.v2';
+
+  function created(location: string | null = `${BASE}/threads/${NEW}`, status = 201): Response {
+    return new Response('{}', { status, headers: location !== null ? { location } : {} });
+  }
+
+  it('POSTs /threads with the user first, everyone Admin, and the topic; returns the id from Location', async () => {
+    const fetchImpl: FetchMock = vi.fn(async () => created());
+    const res = await client(fetchImpl).createGroupChat([A, B], 'Project Falcon');
+    expect(res).toEqual({ id: NEW });
+    expect(urlOf(fetchImpl, 0)).toBe(`${BASE}/threads`);
+    const init = fetchImpl.mock.calls[0]?.[1];
+    expect(init?.method).toBe('POST');
+    expect(JSON.parse(String(init?.body))).toEqual({
+      members: [
+        { id: ME, role: 'Admin' },
+        { id: A, role: 'Admin' },
+        { id: B, role: 'Admin' },
+      ],
+      properties: { threadType: 'chat', topic: 'Project Falcon', fixedRoster: false, uniquerosterthread: false },
+    });
+    expect(headersOf(fetchImpl, 0).get('content-type')).toBe('application/json');
+    expect(headersOf(fetchImpl, 0).get('authorization')).toMatch(/^Bearer /);
+  });
+
+  it.each([undefined, ''])('sends no topic property when the topic is %j', async (topic) => {
+    const fetchImpl: FetchMock = vi.fn(async () => created());
+    await client(fetchImpl).createGroupChat([A, B], topic);
+    const body = JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body)) as { properties: Record<string, unknown> };
+    expect(body.properties).toEqual({ threadType: 'chat', fixedRoster: false, uniquerosterthread: false });
+  });
+
+  it('does not list the signed-in user twice when they are passed too (ignoring case)', async () => {
+    const fetchImpl: FetchMock = vi.fn(async () => created());
+    await client(fetchImpl).createGroupChat([ME.toUpperCase(), A, B]);
+    const body = JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body)) as { members: { id: string }[] };
+    expect(body.members.map((m) => m.id)).toEqual([ME, A, B]);
+  });
+
+  it('decodes a URL-encoded id in Location', async () => {
+    const fetchImpl: FetchMock = vi.fn(async () => created(`${BASE}/threads/${encodeURIComponent(NEW)}`));
+    await expect(client(fetchImpl).createGroupChat([A, B])).resolves.toEqual({ id: NEW });
+  });
+
+  it('accepts a 200 with a Location as well as a 201', async () => {
+    const fetchImpl: FetchMock = vi.fn(async () => created(`${BASE}/threads/${NEW}/`, 200));
+    await expect(client(fetchImpl).createGroupChat([A, B])).resolves.toEqual({ id: NEW });
+  });
+
+  it.each([null, `${BASE}/threads/`, 'not a url at all', `${BASE}/threads/%E0%A4%A`])(
+    'refuses a success with no usable Location (%j), saying the chat was probably created',
+    async (location) => {
+      const fetchImpl: FetchMock = vi.fn(async () => created(location));
+      const err = await client(fetchImpl)
+        .createGroupChat([A, B])
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(McpToolError);
+      expect(err).not.toBeInstanceOf(WriteOutcomeUnknownError);
+      expect((err as McpToolError).message).toMatch(/probably created/i);
+      expect((err as McpToolError).message).toMatch(/id/i);
+      expect((err as McpToolError).hint).toMatch(/teams_list_conversations/);
+    },
+  );
+
+  it.each([500, 502, 503, 504])('reports a %i as an unknown outcome: a chat may already exist', async (status) => {
+    const fetchImpl: FetchMock = vi.fn(async () => jsonResponse({}, status));
+    const err = await client(fetchImpl)
+      .createGroupChat([A, B])
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(WriteOutcomeUnknownError);
+    expect(err).toMatchObject({ method: 'POST' });
+    expect(writeOutcomeStatus(err as WriteOutcomeUnknownError)).toBe(status);
+    expect((err as WriteOutcomeUnknownError).hint).toMatch(/may already have been created/i);
+    expect((err as WriteOutcomeUnknownError).hint).toMatch(/teams_list_conversations/);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a dropped connection or a timeout as an unknown outcome', async () => {
+    const dropped: FetchMock = vi.fn(async () => {
+      throw new TypeError('fetch failed');
+    });
+    await expect(client(dropped).createGroupChat([A, B])).rejects.toMatchObject({ outcomeUnknown: true, timedOut: false });
+    const slow: FetchMock = vi.fn(async () => {
+      throw new RequestTimeoutError('Teams', 60_000);
+    });
+    await expect(client(slow).createGroupChat([A, B])).rejects.toMatchObject({ outcomeUnknown: true, timedOut: true });
+  });
+
+  it.each([400, 403, 404])('maps a %i refusal to a plain McpToolError with its status', async (status) => {
+    const fetchImpl: FetchMock = vi.fn(async () => jsonResponse({}, status));
+    const p = client(fetchImpl).createGroupChat([A, B]);
+    await expect(p).rejects.toMatchObject({ status });
+    await expect(p).rejects.not.toBeInstanceOf(WriteOutcomeUnknownError);
+  });
+});
+
 describe('ensureToken', () => {
   it('captures a token without making any API request', async () => {
     const fetchImpl: FetchMock = vi.fn();

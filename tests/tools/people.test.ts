@@ -52,6 +52,19 @@ describe('knownPeople', () => {
     expect(known).toHaveLength(2);
   });
 
+  it('knows only the 1:1 people when there is no chat to read senders from', async () => {
+    const oneOnOne = `19:${ME_OID}_${GREG_OID}@unq.gbl.spaces`;
+    const getMessages = vi.fn(async (id: string) =>
+      id === oneOnOne ? [] : [{ ...rawMsg(T0, { sender: 'Bea Example' }), from: FROM('8:orgid:bea') }],
+    );
+    const chatsvc = fakeChatsvc(
+      [{ ...rawConv(oneOnOne, { at: T0 }), lastMessage: { ...rawConv(oneOnOne).lastMessage, from: FROM(GREG), imdisplayname: 'King, Greg' } }],
+      { getMessages },
+    );
+    await expect(knownPeople(chatsvc, ME)).resolves.toEqual([{ mri: GREG, name: 'King, Greg' }]);
+    for (const [id] of getMessages.mock.calls) expect(id).toBe(oneOnOne);
+  });
+
   it('still returns what it has when the recent-sender read fails', async () => {
     const chatsvc = fakeChatsvc([], { getMessages: vi.fn().mockRejectedValue(new Error('boom')) });
     await expect(knownPeople(chatsvc, ME, GROUP)).resolves.toEqual([]);

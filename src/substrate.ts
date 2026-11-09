@@ -48,7 +48,8 @@
  *   - A bad token is a 401.
  *
  * People lookup (`suggestPeople`, the directory fallback of
- * `teams_add_chat_members` / `teams_remove_chat_members`), verified live
+ * `teams_add_chat_members` / `teams_remove_chat_members` /
+ * `teams_create_group_chat`), verified live
  * 2026-11-09 with the SAME captured token — no new token or bridge scope:
  *
  *   POST https://substrate.office.com/search/api/v1/suggestions?scenario=powerbar
