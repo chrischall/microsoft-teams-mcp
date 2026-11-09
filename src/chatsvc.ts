@@ -132,6 +132,10 @@ const REACTION_OUTCOME_HINT =
 const THREAD_OUTCOME_HINT =
   'The change to the chat may already have been applied — check the chat (its name and members) before retrying.';
 
+const CREATE_OUTCOME_HINT =
+  'A chat may already have been created — check teams_list_conversations before retrying; a blind retry ' +
+  'would create a second chat (and a chat cannot be deleted).';
+
 const HORIZON_OUTCOME_HINT =
   'The read marker may already have moved — check the conversation (teams_list_messages) before retrying; ' +
   'moving it again to the same message is harmless.';
@@ -571,6 +575,56 @@ export class ChatServiceClient {
   /** Remove someone from a group chat: `DELETE /threads/{id}/members/{mri}`, no body (verified live 2026-11-09). */
   async removeMember(id: string, mri: string): Promise<void> {
     await this.#writeThread('DELETE', `${this.#threadUrl(id)}/members/${encodeURIComponent(mri)}`);
+  }
+
+  /**
+   * Start a group chat: `POST /threads` with every member as `Admin` (Teams
+   * makes every group-chat member Admin) and `{ threadType: "chat" }` plus the
+   * topic when there is one (verified live 2026-11-09: 201, `{}`, and the new
+   * id in `Location`). The signed-in user is always the first member.
+   *
+   * Not idempotent: an answer lost after sending (a timeout, a dropped
+   * connection, a 5xx) is a `WriteOutcomeUnknownError` — the chat may exist,
+   * and a retry would make a second one. A success without a readable
+   * `Location` is an error too: the chat was probably made, its id unknown.
+   */
+  async createGroupChat(memberMris: readonly string[], topic?: string): Promise<{ id: string }> {
+    this.#requireConfigured();
+    const me = await this.meMri();
+    const others = memberMris.filter((m) => m.toLowerCase() !== me.toLowerCase());
+    const body = {
+      members: [me, ...others].map((id) => ({ id, role: 'Admin' })),
+      properties: {
+        threadType: 'chat',
+        ...(topic ? { topic } : {}),
+        fixedRoster: false,
+        uniquerosterthread: false,
+      },
+    };
+    const { status, headers } = await this.#send(`${this.#baseUrl}/threads`, 'text', undefined, {
+      method: 'POST',
+      body,
+      hint: CREATE_OUTCOME_HINT,
+    });
+    this.#checkWriteStatus('POST', status, CREATE_OUTCOME_HINT);
+    const raw = /\/threads\/([^/?#]+)\/?(?:[?#].*)?$/.exec(headers.get('location') ?? '')?.[1];
+    let id: string | undefined;
+    try {
+      id = raw !== undefined ? decodeURIComponent(raw) : undefined;
+    } catch {
+      id = undefined;
+    }
+    if (!id) {
+      throw new McpToolError(
+        `Teams answered HTTP ${status} to creating the group chat, so it was probably created, but its id was not returned.`,
+        {
+          status,
+          kind: 'http',
+          hint: 'Find the new chat in teams_list_conversations (it has no messages yet) before trying again — do not retry blindly.',
+        },
+      );
+    }
+    return { id };
   }
 
   #threadUrl(id: string): string {

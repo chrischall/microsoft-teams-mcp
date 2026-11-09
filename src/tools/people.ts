@@ -1,6 +1,7 @@
 /**
  * People by name, for the tools that act on someone: a group chat's members
- * (`teams_add_chat_members`, `teams_remove_chat_members`) and a message's
+ * (`teams_add_chat_members`, `teams_remove_chat_members`,
+ * `teams_create_group_chat`) and a message's
  * @mentions (`teams_send_message`).
  *
  * A person is, in this order:
@@ -97,10 +98,11 @@ export async function recentSenders(chatsvc: ChatServiceClient, conversationId: 
 /**
  * Everyone this MCP can put a name to for `conversationId`: the other person
  * of every 1:1 the user has (as that 1:1 is titled), then the chat's recent
- * senders. One entry per MRI (ignoring case), the 1:1 name winning. Never
+ * senders. With no `conversationId` (a chat not yet made), the 1:1 people
+ * only. One entry per MRI (ignoring case), the 1:1 name winning. Never
  * throws — a failed read just knows fewer people.
  */
-export async function knownPeople(chatsvc: ChatServiceClient, me: string, conversationId: string): Promise<KnownPerson[]> {
+export async function knownPeople(chatsvc: ChatServiceClient, me: string, conversationId?: string): Promise<KnownPerson[]> {
   const byMri = new Map<string, KnownPerson>();
   const add = (mri: string, name: string) => {
     const key = mri.toLowerCase();
@@ -117,6 +119,7 @@ export async function knownPeople(chatsvc: ChatServiceClient, me: string, conver
   } catch {
     // No 1:1 names; the chat's own senders may still do.
   }
+  if (conversationId === undefined) return [...byMri.values()];
   try {
     for (const [mri, name] of await recentSenders(chatsvc, conversationId)) add(mri, name);
   } catch {
@@ -232,8 +235,8 @@ function pickByName(person: string, found: readonly DirectoryPerson[]): Resolved
   }
   throw new McpToolError(`No one in your chats or your organisation's directory is called "${person}".`, {
     hint:
-      `${PASS_ID} A name is matched among the other person of each of your 1:1 chats and this chat's recent ` +
-      "senders, then searched in your organisation's directory.",
+      `${PASS_ID} A name is matched among the other person of each of your 1:1 chats and (for an existing chat) ` +
+      "its recent senders, then searched in your organisation's directory.",
   });
 }
 

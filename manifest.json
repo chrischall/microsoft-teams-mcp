@@ -143,7 +143,7 @@
     "confirm_mode": {
       "type": "string",
       "title": "Write confirmation mode (optional)",
-      "description": "Optional. What the writes (teams_send_message, teams_react, teams_mark_read, teams_rename_chat, teams_add_chat_members, teams_remove_chat_members and the read tools' mark_read) do on a client that cannot show a confirmation prompt (claude.ai, Claude Desktop): \"ask-user\" (default: the first call returns a preview and a confirmToken, and the model must get your approval in chat before using it), \"auto\" (the model may use the token after reviewing the preview itself) or \"refuse\". An unrecognised value is treated as refuse. Leave blank for the default.",
+      "description": "Optional. What the writes (teams_send_message, teams_react, teams_mark_read, teams_rename_chat, teams_add_chat_members, teams_remove_chat_members, teams_create_group_chat and the read tools' mark_read) do on a client that cannot show a confirmation prompt (claude.ai, Claude Desktop): \"ask-user\" (default: the first call returns a preview and a confirmToken, and the model must get your approval in chat before using it), \"auto\" (the model may use the token after reviewing the preview itself) or \"refuse\". An unrecognised value is treated as refuse. Leave blank for the default.",
       "required": false
     },
     "confirm_elicitation": {
@@ -218,6 +218,10 @@
     {
       "name": "teams_remove_chat_members",
       "description": "Remove people from a group chat, by MRI or by name from your chats (Teams posts a notice in the chat) — asks you to confirm first"
+    },
+    {
+      "name": "teams_create_group_chat",
+      "description": "Start a new group chat with 2–20 people, by MRI, email or name, optionally named (it cannot be deleted afterwards; no message is sent) — asks you to confirm first"
     },
     {
       "name": "teams_list_activity",

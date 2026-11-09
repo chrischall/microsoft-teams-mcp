@@ -14,7 +14,7 @@ import { servedTools } from './served-tools.js';
  */
 describe('every tool declares what it does', () => {
   it('covers the full served surface (guards against a registrar being dropped)', async () => {
-    expect(await servedTools()).toHaveLength(17);
+    expect(await servedTools()).toHaveLength(18);
   });
 
   it('sets an explicit boolean readOnlyHint and openWorldHint on all of them', async () => {
@@ -43,6 +43,7 @@ describe('every tool declares what it does', () => {
       .sort();
     expect(writes).toEqual([
       'teams_add_chat_members',
+      'teams_create_group_chat',
       'teams_list_messages',
       'teams_list_unread_messages',
       'teams_mark_read',
@@ -83,6 +84,16 @@ describe('every tool declares what it does', () => {
       readOnlyHint: false,
       destructiveHint: destructive,
       idempotentHint: true,
+      openWorldHint: true,
+    });
+  });
+
+  it('publishes teams_create_group_chat as non-destructive but non-idempotent (a repeat makes a second chat)', async () => {
+    const tool = (await servedTools()).find((t) => t.name === 'teams_create_group_chat');
+    expect(tool?.annotations).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
       openWorldHint: true,
     });
   });

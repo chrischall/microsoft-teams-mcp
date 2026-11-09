@@ -38,6 +38,7 @@ const EXPECTED_INTENT: Record<string, string> = {
   teams_rename_chat: 'send',
   teams_add_chat_members: 'send',
   teams_remove_chat_members: 'send',
+  teams_create_group_chat: 'send',
   teams_mark_read: 'change',
 };
 

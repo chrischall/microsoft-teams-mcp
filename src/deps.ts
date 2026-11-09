@@ -11,8 +11,8 @@
  * - `substrate` — the Microsoft Substrate search client `teams_search_messages`
  *   uses first (a third token, captured on demand off the Teams tab's own search
  *   request; the tool falls back to scanning the chat service without it), and
- *   the directory `teams_add_chat_members` / `teams_remove_chat_members` look a
- *   person up in when no one in the user's chats matches (same token).
+ *   the directory `teams_add_chat_members` / `teams_remove_chat_members` /
+ *   `teams_create_group_chat` look a person up in when no one in the user's chats matches (same token).
  *
  * Registrars take a `Pick` of what they actually use, so tests stub only that.
  */

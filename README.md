@@ -36,9 +36,10 @@ By default nothing here marks anything read. Reading a chat through this
 server leaves your Teams unread badges exactly as they were — unless you ask
 for it: `teams_mark_read`, or `mark_read: true` on `teams_list_messages`
 / `teams_list_unread_messages`, moves your read marker forward. The writes —
-`teams_send_message`, `teams_react`, marking read, and renaming a group chat
+`teams_send_message`, `teams_react`, marking read, renaming a group chat
 or adding and removing its members (`teams_rename_chat`,
-`teams_add_chat_members`, `teams_remove_chat_members`) — go through the same
+`teams_add_chat_members`, `teams_remove_chat_members`), and starting a new
+one (`teams_create_group_chat`) — go through the same
 chat-service API and change nothing until you confirm (see
 [Writes](#writes)).
 
@@ -126,8 +127,8 @@ read only from the request header, never from page storage.
   another capture for 10 minutes. `mode: "substrate"` fails instead;
   `mode: "scan"` never touches Substrate.
 
-- **It also finds people.** `teams_add_chat_members` and
-  `teams_remove_chat_members` use the same token to look a person up in your
+- **It also finds people.** `teams_add_chat_members`,
+  `teams_remove_chat_members` and `teams_create_group_chat` use the same token to look a person up in your
   organisation's directory (Substrate's people suggestions) when a name is not
   in your chats, or when you pass an email address. A lookup is an explicit
   request, so it always tries a fresh capture rather than honouring the
@@ -646,6 +647,23 @@ Everything is optional — by default the token is captured from your browser.
   `not_member` and not written. Teams posts a notice in the chat for each
   person removed, and they lose access to it. Each person is reported
   `removed`, `not_member`, `unknown` or `failed`.
+- `teams_create_group_chat` — start a new group chat with `people` (2–20,
+  named as for `teams_add_chat_members`, except that with no chat yet a name
+  is matched among the other person of each of your 1:1 chats only, then the
+  directory) and an optional `topic` (trimmed; empty or missing is an
+  untitled chat). You are always included — listing yourself is ignored, as
+  are duplicates — and fewer than two other people is refused: one other
+  person is a 1:1, which this tool does not create. Sent as one
+  `POST /threads` with everyone as a member (Teams makes every group-chat
+  member an Admin). Everyone added sees the new chat at once, and **it
+  cannot be deleted afterwards** — only left. No message is sent; post the
+  first one with `teams_send_message`. The preview shows the topic and
+  everyone with their `source` and, from the directory, `email`. The chat is
+  read back and the result is `created` with the new `conversation` (id,
+  title, kind `group`), the `members` and `verified` (everyone and the topic
+  shown). It is not idempotent: `status: "unknown"` means Teams did not
+  confirm the create — check `teams_list_conversations` before retrying,
+  since a blind retry makes a second chat.
 
 `teams_list_messages` and `teams_list_unread_messages` also write when — and only
 when — you pass `mark_read: true` (see above). Every other tool is
@@ -653,8 +671,8 @@ read-only, and nothing marks anything read unless you ask it to.
 
 ## Writes
 
-A post, a reaction, a rename and a membership change are visible to everyone
-in the conversation, and marking read clears your unread badges, so each
+A post, a reaction, a rename, a membership change and a new group chat are
+visible to everyone in the conversation, and marking read clears your unread badges, so each
 write asks you first. A
 client that can show a confirmation prompt (Claude Code) shows one. On a
 client that cannot, the first call changes nothing and returns a

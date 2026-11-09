@@ -76,6 +76,7 @@ describe('built server boots', () => {
       const tools = await handshake(join(dir, 'bundle.js'), dir);
       expect(tools).toEqual([
         'teams_add_chat_members',
+        'teams_create_group_chat',
         'teams_export_messages',
         'teams_get_attachment',
         'teams_get_transcript',
