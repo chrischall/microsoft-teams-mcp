@@ -145,8 +145,15 @@ export function withBridgeScope<T extends object>(
   opts: T,
   env: NodeJS.ProcessEnv,
   extraSharePointHost?: string,
-): T & { domains: string[]; captureHeaders: CaptureDecl[] } {
+): T & { domains: string[]; tabDomains: string[]; captureHeaders: CaptureDecl[] } {
   const hosts = knownSharePointHosts(env);
   if (extraSharePointHost !== undefined) hosts.push(extraSharePointHost);
-  return { ...opts, domains: [...BRIDGE_TRUST_DOMAINS], captureHeaders: bridgeCaptureDecls(hosts) };
+  return {
+    ...opts,
+    domains: [...BRIDGE_TRUST_DOMAINS],
+    // Only Teams needs a page: the SharePoint and search captures read requests
+    // the Teams tab makes, so a tab on those domains would do nothing.
+    tabDomains: [CAPTURE_DECL.host],
+    captureHeaders: bridgeCaptureDecls(hosts),
+  };
 }
