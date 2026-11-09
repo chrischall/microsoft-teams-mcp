@@ -114,9 +114,9 @@ export async function captureSharePointTokenViaFetchproxy(
     version: VERSION,
     what: `a SharePoint token for ${host}`,
     guidance:
-      `Click around Teams or open one of your own OneDrive files — that makes the ` +
-      `browser request ${host}, which is where the SharePoint token is captured ` +
-      'from — then retry.',
+      `Reload your signed-in Teams tab and retry while it loads — that makes the ` +
+      `page call ${host} with the SharePoint token we capture. Opening a file does ` +
+      'not reliably do this.',
     createTransport: bridgeScopedTransport(env, host),
   });
   // Granted and captured: every later hello declares this host too.

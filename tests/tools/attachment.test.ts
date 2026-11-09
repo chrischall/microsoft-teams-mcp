@@ -320,7 +320,7 @@ describe('teams_get_attachment', () => {
     expect(data.hint).toBe('SharePoint returned HTTP 400.');
   });
 
-  it('falls back to the open-it-in-Teams hint when the failure has no message', async () => {
+  it('falls back to the reload-Teams hint when the failure has no message', async () => {
     const result = await call(
       chatsvcWith(),
       { conversation: GROUP, message_id: String(TARGET), ref: FILE_NAME },
@@ -328,7 +328,8 @@ describe('teams_get_attachment', () => {
     );
 
     const data = parseToolResult(result) as Record<string, unknown>;
-    expect(data.hint).toMatch(/open the (shared )?file once/i);
+    expect(data.hint).toMatch(/reload your signed-in Teams tab/i);
+    expect(data.hint).not.toMatch(/open the (shared )?file once/i);
   });
 
   it('errors when the message is not in the conversation', async () => {

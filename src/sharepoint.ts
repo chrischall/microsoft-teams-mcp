@@ -302,7 +302,7 @@ export class SharePointClient {
       throw new McpToolError('SharePoint rejected the access token (401) even after a fresh capture.', {
         status,
         kind: 'credential_rejected',
-        hint: 'Open the shared file once in a signed-in Teams tab to mint a fresh SharePoint token, then retry.',
+        hint: 'Reload your signed-in Teams tab to mint a fresh SharePoint token, and retry while it loads.',
       });
     }
     if (status === 429) {
