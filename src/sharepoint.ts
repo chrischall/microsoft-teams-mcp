@@ -12,12 +12,15 @@
  *   GET {@content.downloadUrl}                     [no auth — pre-signed]
  *   → the file's bytes
  *
- * The SP token is captured per host from the user's browser (see
- * `sharepoint-auth.ts`), is short-lived (~53 min) and host-family-scoped, so this
- * client holds one `TokenManager` per host — each with the same capture-on-401
- * recovery `ChatServiceClient` has. A 403 is expected (an account that cannot
- * open the file, or a host the captured token does not cover) and degrades
- * gracefully; it never crashes the tool.
+ * The SP token is captured from the user's browser (see `sharepoint-auth.ts`).
+ * One token serves every SharePoint host of the tenant — verified live
+ * 2026-11-09, a token captured from one OneDrive host returned 200 on another
+ * OneDrive region host and on the team-site root — so this client holds ONE
+ * `TokenManager`, with the same capture-on-401 recovery `ChatServiceClient` has.
+ * (It once held one per host, which made every new host wait for the user to
+ * open a file from it; the 403 that suggested per-host tokens was a per-file
+ * permission denial.) A 403 is expected — an account that cannot open the
+ * file — and degrades gracefully; it never crashes the tool.
  *
  * As with `chatsvc.ts`, once a token is held every request is a plain Node
  * `fetch` — the bridge is only ever touched to capture the token.
@@ -26,6 +29,7 @@ import { fetchBounded, McpToolError, parseBoolEnv } from '@chrischall/mcp-utils'
 import { describeTransportFailure } from './network-error.js';
 import { createCapturedTokenManager, type TokenManager } from '@chrischall/mcp-utils/session';
 import { createSharePointTokenCache, type SharePointTokenCache } from './sharepoint-token-cache.js';
+import { knownSharePointHosts } from './bridge-scope.js';
 
 /**
  * Capture a SharePoint token for `host` lazily.
@@ -36,9 +40,9 @@ import { createSharePointTokenCache, type SharePointTokenCache } from './sharepo
  * server could answer `initialize`. Deferring it (exactly as `chatsvc.ts` does
  * for its own capture) keeps boot free of the bridge.
  */
-async function captureSharePointTokenLazily(host: string): Promise<string> {
+async function captureSharePointTokenLazily(hosts: string[]): Promise<string> {
   const mod = await import('./sharepoint-auth.js');
-  return mod.captureSharePointTokenViaFetchproxy(host);
+  return mod.captureSharePointTokenViaFetchproxy(hosts);
 }
 
 /** Per-request deadline, covering the body read. */
@@ -63,14 +67,17 @@ interface DriveItemMeta {
 
 export interface SharePointClientOptions {
   env?: NodeJS.ProcessEnv;
-  /** Injected for tests so no suite ever touches the real bridge. */
-  captureToken?: (host: string) => Promise<string>;
+  /** Injected for tests so no suite ever touches the real bridge. Captures off any of `hosts`. */
+  captureToken?: (hosts: string[]) => Promise<string>;
+  /** The SharePoint hosts the bridge has granted a capture of. Default: `knownSharePointHosts(env)`. */
+  knownHosts?: () => string[];
   fetchImpl?: typeof fetch;
 }
 
 export class SharePointClient {
   readonly #env: NodeJS.ProcessEnv;
-  readonly #capture: (host: string) => Promise<string>;
+  readonly #capture: (hosts: string[]) => Promise<string>;
+  readonly #knownHosts: () => string[];
   readonly #fetchImpl: typeof fetch;
   readonly #cache: SharePointTokenCache | null;
   /**
@@ -78,12 +85,15 @@ export class SharePointClient {
    * still boots (and answers `tools/list`) with no credential present.
    */
   readonly #configError: McpToolError | null = null;
-  /** One `TokenManager` per SharePoint host — SP tokens are host-scoped. */
-  readonly #managers = new Map<string, TokenManager>();
+  /** The one `TokenManager`: one SharePoint token serves every host of the tenant. */
+  #manager: TokenManager | null = null;
+  /** The capture host of the file being fetched — where a first-ever capture looks. */
+  #fileCaptureHost = '';
 
   constructor(opts: SharePointClientOptions = {}) {
     this.#env = opts.env ?? process.env;
     this.#capture = opts.captureToken ?? captureSharePointTokenLazily;
+    this.#knownHosts = opts.knownHosts ?? (() => knownSharePointHosts(this.#env));
     // A receiver-safe wrapper, never the bare global: older undici throws
     // `Illegal invocation` when `fetch` is called with a non-global receiver.
     this.#fetchImpl = opts.fetchImpl ?? ((input, init) => fetch(input, init));
@@ -140,18 +150,18 @@ export class SharePointClient {
       });
     }
 
-    // The driveItem GET goes to the FILE's host, but the token is captured from
-    // (and cached under) the user's OneDrive host — the browser authenticates
-    // that host, and its token reads the tenant root too. See `captureHostFor`.
+    // The driveItem GET goes to the FILE's host. The token comes from whichever
+    // host a capture reads it off: one already granted, else this file's
+    // OneDrive host (see `#captureHosts` and `captureHostFor`).
     const { captureHostFor } = await import('./sharepoint-auth.js');
-    const captureHost = captureHostFor(host);
+    this.#fileCaptureHost = captureHostFor(host);
 
     // `u!` + unpadded base64url of the full objectUrl (Node's `base64url` already
     // uses `-`/`_` and drops padding), matching the live spike.
     const share = `u!${Buffer.from(objectUrl, 'utf8').toString('base64url')}`;
     const driveItemUrl = `https://${host}/_api/v2.1/shares/${share}/driveItem?$select=id,size,@content.downloadUrl`;
 
-    const meta = await this.#getDriveItem(captureHost, driveItemUrl);
+    const meta = await this.#getDriveItem(driveItemUrl);
 
     // Refuse an oversize file BEFORE streaming it: the driveItem carries `size`,
     // so a file past the cap degrades to metadata + link (the attachment tool
@@ -184,22 +194,27 @@ export class SharePointClient {
     if (this.#configError) throw this.#configError;
   }
 
-  /** The `TokenManager` for `host`, created (and cached) on first use. */
-  #managerFor(host: string): TokenManager {
-    const existing = this.#managers.get(host);
-    if (existing) return existing;
+  /**
+   * Where to capture the token from: the hosts the bridge has already granted
+   * (any of them yields a token every host accepts), or this file's OneDrive
+   * host when none has been. Declaring a new host when a granted one would do
+   * only widens the bridge scope, which the extension refuses until approved.
+   */
+  #captureHosts(): string[] {
+    const known = this.#knownHosts();
+    return known.length > 0 ? known : [this.#fileCaptureHost];
+  }
 
-    // The per-host cache view already swallows-and-reports its own write
-    // failures (see `sharepoint-token-cache.ts`), so it is passed straight
-    // through — no inline wrapping as chatsvc needs for its raw persistence.
+  /** The one `TokenManager`, created on first use. */
+  #tokens(): TokenManager {
     // Captured on first use, re-captured on a 401 (no refresh grant), expiring
-    // at the JWT's `exp`.
-    const mgr = createCapturedTokenManager({
-      capture: () => this.#capture(host),
-      persistence: this.#cache?.forHost(host) ?? null,
+    // at the JWT's `exp`. The cache view swallows-and-reports its own write
+    // failures (see `sharepoint-token-cache.ts`).
+    this.#manager ??= createCapturedTokenManager({
+      capture: () => this.#capture(this.#captureHosts()),
+      persistence: this.#cache?.shared() ?? null,
     });
-    this.#managers.set(host, mgr);
-    return mgr;
+    return this.#manager;
   }
 
   /**
@@ -209,9 +224,9 @@ export class SharePointClient {
    * `TokenManager.withAuth` supplies the token and, on a 401, re-captures once
    * and replays once — so a 401 that reaches here is the second one.
    */
-  async #getDriveItem(captureHost: string, url: string): Promise<DriveItemMeta> {
+  async #getDriveItem(url: string): Promise<DriveItemMeta> {
     let body = '';
-    const res = await this.#managerFor(captureHost).withAuth(async (token) => {
+    const res = await this.#tokens().withAuth(async (token) => {
       const r = await reachable(url, () =>
         fetchBounded(
           url,
@@ -235,12 +250,12 @@ export class SharePointClient {
     if (status === 403) {
       // mcp-utils' `kind` vocabulary has no 'forbidden'; the 403 is carried by
       // `status`, which the attachment tool reads to degrade to metadata + link.
+      // The token is good on every host of the tenant, so a 403 is the file's
+      // own permissions (verified live 2026-11-09).
       throw new McpToolError('SharePoint refused access to the file (403).', {
         status,
         kind: 'http',
-        hint:
-          'Your account cannot open this file, or it is on a SharePoint host your captured ' +
-          'token does not cover. Open it once in Teams, then retry.',
+        hint: 'Your account cannot open this file. Ask whoever shared it to give you access, then retry.',
       });
     }
     if (status === 404) {

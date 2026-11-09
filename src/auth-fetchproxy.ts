@@ -70,12 +70,12 @@ export const createCaptureTransport = (opts: Parameters<typeof createFetchproxyT
 /**
  * A capture transport factory that declares the one bridge scope
  * (`withBridgeScope`), whichever single header the capture reads.
- * `sharePointHost` is the host a SharePoint capture is about to try.
+ * `sharePointHosts` are the hosts a SharePoint capture is about to try.
  */
 export const bridgeScopedTransport =
-  (env: NodeJS.ProcessEnv, sharePointHost?: string) =>
+  (env: NodeJS.ProcessEnv, sharePointHosts: readonly string[] = []) =>
   (opts: Parameters<typeof createFetchproxyTransport>[0]): CaptureTransport =>
-    createCaptureTransport(withBridgeScope(opts, env, sharePointHost));
+    createCaptureTransport(withBridgeScope(opts, env, sharePointHosts));
 
 /**
  * Capture a chat-service access token from the user's signed-in Teams tab.

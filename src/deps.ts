@@ -6,8 +6,8 @@
  *   through, the Activity feed included (the bridge is touched only to capture
  *   its token).
  * - `sharepoint` — the SharePoint download client `teams_get_attachment` uses
- *   to fetch a shared file's contents (a separate, host-scoped, short-lived
- *   token from chatsvc's; the bridge is touched only to capture it).
+ *   to fetch a shared file's contents (a separate, short-lived SharePoint
+ *   token, good on every SharePoint host, distinct from chatsvc's; the bridge is touched only to capture it).
  * - `substrate` — the Microsoft Substrate search client `teams_search_messages`
  *   uses first (a third token, captured on demand off the Teams tab's own search
  *   request; the tool falls back to scanning the chat service without it).

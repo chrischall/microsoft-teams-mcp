@@ -78,7 +78,7 @@ export function sharePointCaptureDecl(host: string): CaptureDecl {
 
 /**
  * The capture headers every hello declares: the chat-service and search
- * captures, then one per SharePoint host (deduplicated, sorted, and only
+ * captures, then one per granted SharePoint host (deduplicated, sorted, and only
  * concrete SharePoint hosts), so the list is the same whichever capture runs.
  */
 export function bridgeCaptureDecls(sharePointHosts: Iterable<string>): CaptureDecl[] {
@@ -138,16 +138,15 @@ export function rememberSharePointHost(host: string, env: NodeJS.ProcessEnv = pr
  * The hello options of a capture transport, widened to the one scope: the
  * domains and capture headers mcp-utils derived from the single capture are
  * replaced with {@link BRIDGE_TRUST_DOMAINS} and {@link bridgeCaptureDecls}
- * (plus `extraSharePointHost`, the host a SharePoint capture is about to try).
+ * (plus `extraSharePointHosts`, the hosts a SharePoint capture is about to try).
  * The verb set is unchanged — every capture is `capture_request_header`.
  */
 export function withBridgeScope<T extends object>(
   opts: T,
   env: NodeJS.ProcessEnv,
-  extraSharePointHost?: string,
+  extraSharePointHosts: readonly string[] = [],
 ): T & { domains: string[]; tabDomains: string[]; captureHeaders: CaptureDecl[] } {
-  const hosts = knownSharePointHosts(env);
-  if (extraSharePointHost !== undefined) hosts.push(extraSharePointHost);
+  const hosts = [...knownSharePointHosts(env), ...extraSharePointHosts];
   return {
     ...opts,
     domains: [...BRIDGE_TRUST_DOMAINS],

@@ -12,10 +12,14 @@
  * - an inline image (Teams' own image store) downloads with the chat-service
  *   token and comes back as MCP image content;
  * - a shared file lives in SharePoint, downloaded through `SharePointClient`
- *   with a separate per-host SharePoint token (see `sharepoint.ts`). A file the
- *   account cannot open — or the first file from a SharePoint host before its
- *   short-lived token has been minted — comes back as metadata and its open
- *   link, degrading gracefully rather than failing the tool.
+ *   with a separate SharePoint token that every SharePoint host of the tenant
+ *   accepts (see `sharepoint.ts`). A file the account cannot open — or one
+ *   fetched before a token could be captured — comes back as metadata and its
+ *   open link, degrading gracefully rather than failing the tool.
+ *
+ * `ref` is matched exactly, else ignoring case, else (a file) ignoring case and
+ * extension; a loose match naming more than one attachment is refused. `save`
+ * asks for a file in the download folder rather than the contents.
  *
  * Either kind is handed back through `deliverFile` (mcp-utils): inline up to
  * 10 MiB (an image as MCP image content, anything else as an embedded
@@ -65,10 +69,9 @@ export const MAX_FILE_BYTES = 25 * 1024 * 1024;
 
 const FILE_HINT =
   'A shared file is downloaded from SharePoint and returned as its contents (an image as an image, ' +
-  'anything else as an embedded resource; over 10 MiB as a download link, or a saved file on a local ' +
-  'install). The first file from a given SharePoint host may need ' +
-  'your Teams tab reloaded to mint a short-lived token; a file your account cannot open comes back as ' +
-  'metadata and its link.';
+  'anything else as an embedded resource; over 10 MiB, or with save, as a download link or a saved file ' +
+  'on a local install). The first download may need your Teams tab reloaded to capture a SharePoint ' +
+  'token; a file your account cannot open comes back as metadata and its link.';
 
 export function registerAttachmentTools(
   server: McpServer,
@@ -80,14 +83,16 @@ export function registerAttachmentTools(
       title: 'Get a Teams message attachment',
       description:
         'Fetch one attachment of a Teams chat or channel message, as listed by ' +
-        'teams_list_messages / teams_list_unread_messages. An inline image (attachments.images[].ref) ' +
-        'is returned as the image itself. A shared file (attachments.files[].name) is downloaded ' +
-        'from SharePoint and returned as its contents: an image as the image, anything else as an ' +
-        'embedded resource carrying the bytes. Anything over 10 MiB comes back instead as a signed, ' +
+        'teams_list_messages / teams_list_unread_messages. ref names it: an inline image\'s ref ' +
+        '(attachments.images[].ref) or a shared file\'s name (attachments.files[].name), matched ignoring case ' +
+        'and, for a file, with or without its extension. An inline image is returned as the image itself. A ' +
+        'shared file is downloaded from SharePoint and returned as its contents: an image as the image, anything ' +
+        'else as an embedded resource carrying the bytes. Anything over 10 MiB comes back instead as a signed, ' +
         'expiring download link (downloadUrl) on a hosted install, or saved to a fresh file (path) under ' +
         `${EXPORT_OUTPUT_ENV}, else ~/Downloads/${EXPORT_SERVER_NAME}, on a local one; the caption's via ` +
-        'says which. The first file from a given SharePoint host in a ' +
-        'session may need your Teams tab reloaded to mint a short-lived token; a file your account ' +
+        'says which. save: true does the same for any size — use it when the user wants the file itself rather ' +
+        'than its contents read here. The first download may need your Teams tab reloaded to capture a ' +
+        'short-lived SharePoint token, which then serves every SharePoint host; a file your account ' +
         'cannot open, or one that could not be fetched, comes back as metadata and its open link ' +
         'instead of failing. Its caption names the conversation beside its id: title (as teams_list_conversations ' +
         'names it — an untitled group chat by its participants, a 1:1 by the other person) and participants. ' +
@@ -104,10 +109,20 @@ export function registerAttachmentTools(
         ref: z
           .string()
           .min(1)
-          .describe("An inline image's ref (attachments.images[].ref) or a shared file's name (attachments.files[].name)."),
+          .describe(
+            "An inline image's ref (attachments.images[].ref) or a shared file's name (attachments.files[].name). " +
+              'Case is ignored, and a file may be named without its extension.',
+          ),
+        save: z
+          .boolean()
+          .optional()
+          .describe(
+            `Save the attachment to a fresh file under ${EXPORT_OUTPUT_ENV} (else ~/Downloads/${EXPORT_SERVER_NAME}) ` +
+              'and return its path instead of its contents; a hosted install returns a download link instead. Default false.',
+          ),
       },
     },
-    async ({ conversation, message_id, ref }) => {
+    async ({ conversation, message_id, ref, save = false }) => {
       try {
         // A message id IS its arrival ms, and pages run newest first: the first
         // message older than it means it was not there.
@@ -125,15 +140,16 @@ export function registerAttachmentTools(
         // Named while the attachment is fetched; naming never throws, so it never fails the call.
         const naming = nameConversations(chatsvc, [conversation]).then((names) => nameFields(names.get(conversation)));
 
-        const image = message.attachments.images.find((i) => i.ref === ref);
-        if (image !== undefined) {
+        const found = findAttachment(message, ref, message_id);
+        if (found.kind === 'image') {
+          const image = found.image;
           const { mimeType, data } = await chatsvc.fetchImage(image.url);
           if (!mimeType.startsWith('image/')) {
-            throw new McpToolError(`The attachment ${ref} is not an image (the image store returned ${mimeType}).`);
+            throw new McpToolError(`The attachment ${image.ref} is not an image (the image store returned ${mimeType}).`);
           }
-          const delivered = await deliver(data, imageFileName(ref, mimeType), mimeType);
+          const delivered = await deliver(data, imageFileName(image.ref, mimeType), mimeType, save);
           const caption = untrustedResult({
-            ref,
+            ref: image.ref,
             message_id,
             conversation,
             ...(await naming),
@@ -146,17 +162,7 @@ export function registerAttachmentTools(
           return { content: [...delivered.content, ...caption.content] };
         }
 
-        const file = message.attachments.files.find((f) => f.name === ref);
-        if (file !== undefined) {
-          return downloadSharedFile(sharepoint, file, message, { conversation, message_id }, naming);
-        }
-
-        const { images, files } = message.attachments;
-        throw new McpToolError(`Message ${message_id} has no attachment "${ref}".`, {
-          hint:
-            `It has ${images.length} inline image(s) and ${files.length} shared file(s); pass an ` +
-            'image ref or a file name exactly as teams_list_messages listed it.',
-        });
+        return downloadSharedFile(sharepoint, found.file, message, { conversation, message_id }, naming, save);
       } catch (err) {
         throw wrapApiError(err, 'get the attachment');
       }
@@ -177,6 +183,7 @@ async function downloadSharedFile(
   message: NormalisedMessage,
   ids: { conversation: string; message_id: string },
   naming: Promise<ConversationNameFields>,
+  save: boolean,
 ): Promise<CallToolResult> {
   if (file.url === undefined) {
     return untrustedResult({ ...file, content_available: false, hint: FILE_HINT });
@@ -196,7 +203,7 @@ async function downloadSharedFile(
   // keep the open link in the hint so the file is still reachable.
   let delivered: DeliveredFile;
   try {
-    delivered = await deliver(downloaded.data, file.name, downloaded.mimeType);
+    delivered = await deliver(downloaded.data, file.name, downloaded.mimeType, save);
   } catch (err) {
     if (err instanceof McpToolError && file.openUrl !== undefined) {
       throw new McpToolError(err.message, {
@@ -236,18 +243,69 @@ async function downloadSharedFile(
   return { content: [...content, ...caption.content] };
 }
 
+type FoundAttachment =
+  | { kind: 'image'; image: NormalisedMessage['attachments']['images'][number] }
+  | { kind: 'file'; file: FileAttachment };
+
+/** A file name without its last extension: `report.csv` → `report`; `.env` stays `.env`. */
+function withoutExtension(name: string): string {
+  const dot = name.lastIndexOf('.');
+  return dot > 0 ? name.slice(0, dot) : name;
+}
+
+/**
+ * The attachment `ref` names. An exact match wins; failing that, one matched
+ * ignoring case; failing that, a file matched ignoring case and its extension
+ * (`Report` → `report.csv`). A looser match that names more than one
+ * attachment is refused with the candidates, never guessed between.
+ */
+function findAttachment(message: NormalisedMessage, ref: string, messageId: string): FoundAttachment {
+  const { images, files } = message.attachments;
+  const all: FoundAttachment[] = [
+    ...images.map((image) => ({ kind: 'image' as const, image })),
+    ...files.map((file) => ({ kind: 'file' as const, file })),
+  ];
+  const nameOf = (a: FoundAttachment) => (a.kind === 'image' ? a.image.ref : a.file.name);
+  const lower = ref.toLowerCase();
+  const rules: ((a: FoundAttachment) => boolean)[] = [
+    (a) => nameOf(a) === ref,
+    (a) => nameOf(a).toLowerCase() === lower,
+    (a) => a.kind === 'file' && withoutExtension(a.file.name).toLowerCase() === lower,
+  ];
+  for (const rule of rules) {
+    const hits = all.filter(rule);
+    if (hits.length === 1) return hits[0];
+    if (hits.length > 1) {
+      throw new McpToolError(`"${ref}" matches ${hits.length} attachments of message ${messageId}.`, {
+        hint: `Pass one of them exactly: ${hits.map((h) => JSON.stringify(nameOf(h))).join(', ')}.`,
+      });
+    }
+  }
+  const names = files.map((f) => JSON.stringify(f.name));
+  throw new McpToolError(`Message ${messageId} has no attachment "${ref}".`, {
+    hint:
+      `It has ${images.length} inline image(s) and ${files.length} shared file(s)` +
+      (names.length > 0 ? ` (${names.join(', ')})` : '') +
+      '; pass an image ref or a file name as teams_list_messages listed it.',
+  });
+}
+
 /**
  * Hand bytes back by the first route that reaches the caller (`deliverFile`):
  * inline up to 10 MiB, else a signed link from the blob store (hosted), else a
  * fresh, never-overwriting file in the download folder — offered only on a
  * local install, since a hosted runner's disk is unreachable from the session.
+ * `save` puts the download folder first (a link when hosted).
  */
-function deliver(bytes: Buffer, fileName: string, mimeType: string): Promise<DeliveredFile> {
+function deliver(bytes: Buffer, fileName: string, mimeType: string, save: boolean): Promise<DeliveredFile> {
   return deliverFile({
     bytes,
     fileName,
     mimeType,
     keyPrefix: 'attachments',
+    // `save` asks for a file rather than the contents; on a hosted install
+    // deliverFile turns the disk route into a link, saying why in `note`.
+    ...(save ? { prefer: 'disk' as const } : {}),
     ...(isHostedEnv() ? {} : { disk: { dir: downloadDir() } }),
   });
 }
@@ -301,10 +359,9 @@ export function hostOf(url: string): string {
  */
 export function degradeHint(err: unknown, host: string): string {
   if (errorStatusOf(err) === 403) {
-    return (
-      `Your account cannot open this file, or it is on a SharePoint host (${host}) your captured ` +
-      'token does not cover. Open it once in a signed-in Teams tab, then retry.'
-    );
+    // One token serves every SharePoint host of the tenant, so a 403 is the
+    // file's own permissions, not the token (verified live 2026-11-09).
+    return `Your account cannot open this file on ${host}. Ask whoever shared it to give you access, then retry.`;
   }
   if (errorKindOf(err) === 'no_credential') {
     return 'SharePoint file download is disabled here (no token source). Unset TEAMS_DISABLE_FETCHPROXY, then retry.';

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
-import { mkdtempSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, existsSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -44,54 +44,75 @@ describe('sharepoint token cache', () => {
     ).toBeNull();
   });
 
-  it('round-trips one host without clobbering a sibling', () => {
+  // One SharePoint token is accepted on every host of the tenant (verified live
+  // 2026-11-09: a token captured from one OneDrive host returned 200 on the
+  // other OneDrive region and on the team-site root), so there is one entry.
+  it('round-trips the one shared token', () => {
     const file = join(dir(), 'sharepoint-tokens.json');
-    const cache = createSharePointTokenCache({
-      TEAMS_SHAREPOINT_TOKEN_FILE: file,
-    } as NodeJS.ProcessEnv);
+    const cache = createSharePointTokenCache({ TEAMS_SHAREPOINT_TOKEN_FILE: file } as NodeJS.ProcessEnv);
     expect(cache).not.toBeNull();
 
-    const a = cache!.forHost(HOST_A);
-    const b = cache!.forHost(HOST_B);
-    const tokA = { accessToken: 'aaaa', expiresAt: Date.now() + 1000 };
-    const tokB = { accessToken: 'bbbb', expiresAt: Date.now() + 2000 };
-
-    a.save(tokA);
-    b.save(tokB);
+    const shared = cache!.shared();
+    expect(shared.load()).toBeNull();
+    shared.save({ accessToken: 'aaaa', expiresAt: Date.now() + 1000 });
     expect(existsSync(file)).toBe(true);
-    expect(a.load()).toMatchObject({ accessToken: 'aaaa' });
-    expect(b.load()).toMatchObject({ accessToken: 'bbbb' });
-
-    // Clearing one host leaves the sibling intact.
-    a.clear();
-    expect(a.load()).toBeNull();
-    expect(b.load()).toMatchObject({ accessToken: 'bbbb' });
+    expect(shared.load()).toMatchObject({ accessToken: 'aaaa' });
+    shared.clear();
+    expect(shared.load()).toBeNull();
   });
 
-  it('drops a corrupt entry without nuking its sibling', () => {
+  it('reuses the newest token an older per-host cache left behind, so an upgrade does not re-capture', () => {
     const file = join(dir(), 'sharepoint-tokens.json');
-    // Written straight to disk: one malformed slice, one good one.
     writeFileSync(
       file,
       JSON.stringify({
-        [HOST_A]: { accessToken: '', expiresAt: 1 }, // empty token → malformed
-        [HOST_B]: { accessToken: 'good', expiresAt: Date.now() + 1000 },
+        v: 1,
+        state: {
+          [HOST_A]: { accessToken: 'older', expiresAt: Date.now() + 1000 },
+          [HOST_B]: { accessToken: 'newer', expiresAt: Date.now() + 5000 },
+        },
       }),
     );
-    const cache = createSharePointTokenCache({
-      TEAMS_SHAREPOINT_TOKEN_FILE: file,
-    } as NodeJS.ProcessEnv)!;
-    expect(cache.forHost(HOST_A).load()).toBeNull();
-    expect(cache.forHost(HOST_B).load()).toMatchObject({ accessToken: 'good' });
+    const shared = createSharePointTokenCache({ TEAMS_SHAREPOINT_TOKEN_FILE: file } as NodeJS.ProcessEnv)!.shared();
+    expect(shared.load()).toMatchObject({ accessToken: 'newer' });
+  });
+
+  it('replaces the per-host entries when it saves, and clears them all', () => {
+    const file = join(dir(), 'sharepoint-tokens.json');
+    writeFileSync(
+      file,
+      JSON.stringify({ v: 1, state: { [HOST_A]: { accessToken: 'legacy', expiresAt: Date.now() + 9000 } } }),
+    );
+    const shared = createSharePointTokenCache({ TEAMS_SHAREPOINT_TOKEN_FILE: file } as NodeJS.ProcessEnv)!.shared();
+    shared.save({ accessToken: 'fresh', expiresAt: Date.now() + 1000 });
+    expect(JSON.parse(readFileSync(file, 'utf8')).state).toEqual({
+      '*': { accessToken: 'fresh', expiresAt: expect.any(Number) },
+    });
+    shared.clear();
+    expect(shared.load()).toBeNull();
+  });
+
+  it('skips a corrupt entry and uses a good one', () => {
+    const file = join(dir(), 'sharepoint-tokens.json');
+    writeFileSync(
+      file,
+      JSON.stringify({
+        v: 1,
+        state: {
+          [HOST_A]: { accessToken: '', expiresAt: 1 }, // empty token → malformed
+          [HOST_B]: { accessToken: 'good', expiresAt: Date.now() + 1000 },
+        },
+      }),
+    );
+    const cache = createSharePointTokenCache({ TEAMS_SHAREPOINT_TOKEN_FILE: file } as NodeJS.ProcessEnv)!;
+    expect(cache.shared().load()).toMatchObject({ accessToken: 'good' });
   });
 
   it('treats a non-object blob as empty rather than crashing', () => {
     const file = join(dir(), 'sharepoint-tokens.json');
     writeFileSync(file, JSON.stringify(['not', 'a', 'map']));
-    const cache = createSharePointTokenCache({
-      TEAMS_SHAREPOINT_TOKEN_FILE: file,
-    } as NodeJS.ProcessEnv)!;
-    expect(cache.forHost(HOST_A).load()).toBeNull();
+    const cache = createSharePointTokenCache({ TEAMS_SHAREPOINT_TOKEN_FILE: file } as NodeJS.ProcessEnv)!;
+    expect(cache.shared().load()).toBeNull();
   });
 
   it('reports a failed write without throwing into the caller', () => {
@@ -100,7 +121,7 @@ describe('sharepoint token cache', () => {
     const cache = createSharePointTokenCache({
       TEAMS_SHAREPOINT_TOKEN_FILE: file,
     } as NodeJS.ProcessEnv)!;
-    const host = cache.forHost(HOST_A);
+    const host = cache.shared();
     // A directory sitting where the token file should go makes the atomic
     // rename-over-target fail, so the underlying save throws.
     mkdirSync(file);

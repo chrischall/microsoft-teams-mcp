@@ -47,7 +47,8 @@ and approving a grant replaces the stored list of header captures. So all of
 this server's captures (chat service, SharePoint, Substrate search) declare the
 **same** scope: the three domains `teams.cloud.microsoft`, `sharepoint.com` and
 `substrate.office.com`, plus the chat-service and search captures and one
-capture per SharePoint host the server has already captured from. Each capture
+capture per SharePoint host the server has already captured from (usually just
+your own OneDrive host — see [SharePoint file download](#sharepoint-file-download)). Each capture
 still reads only the one header it needs. The SharePoint hosts are remembered
 in `~/.microsoft-teams-mcp/bridge-scope.json` (beside the SharePoint token
 cache; not written with `TEAMS_TOKEN_CACHE=false`) once a capture from them
@@ -78,17 +79,28 @@ Two things follow from that:
   `teams.cloud.microsoft`, `sharepoint.com` and `substrate.office.com`, and the
   same list of header captures. So approving `microsoft-teams-mcp` once covers
   all three, and moving between chats, files and search never asks again (see
-  [Pairing](#pairing)). The first file from a new SharePoint host asks once to
-  grant that host's capture.
-- **Open the file once per SharePoint host.** The SharePoint token is captured
-  from the browser's own request to the file's SharePoint host, is short-lived
-  (~53 minutes), and is scoped to one host family. So the first file from a
-  given host in a session may need you to reload a signed-in Teams tab (the
-  requests it makes while loading are what the token is read from; opening a
-  file does not reliably make one); after that the token is
-  cached and refreshed until it expires. A file your account cannot open, or on
-  a SharePoint host your token does not cover, comes back as metadata and its
-  open link rather than failing.
+  [Pairing](#pairing)). The very first download asks once to grant the capture
+  from your OneDrive host.
+- **One token serves every SharePoint host.** The SharePoint token is captured
+  from a request your Teams tab makes to your own OneDrive host
+  (`<tenant>-my.sharepoint.com`), and SharePoint accepts it on every host of the
+  tenant: colleagues' OneDrives in other regions and team sites alike. So you
+  never need to open a file in Teams before downloading it. The first download,
+  and the first after the short-lived token expires, may need you to reload a
+  signed-in Teams tab (the requests it makes while loading are what the token
+  is read from); after that the token is cached until it expires. If the bridge
+  has not yet granted a SharePoint host, the download says so: approve the
+  pending scope update for `microsoft-teams-mcp` in the ContextMint Bridge
+  popup (no need to remove or re-pair it) and retry.
+- **A file your account cannot open** (SharePoint answers 403) comes back as
+  metadata and its open link rather than failing.
+
+`ref` matches an attachment ignoring case, and a file without its extension
+(`report` finds `report.csv`); a name that matches two attachments is refused
+with both listed. `save: true` writes the attachment to a fresh file in the
+same folder `teams_export_messages` uses — `TEAMS_OUTPUT_DIR`, else
+`~/Downloads/microsoft-teams-mcp` — and returns its `path` instead of the
+contents (a download link on a hosted install, whose disk you cannot reach).
 
 ## Substrate search
 
@@ -190,9 +202,9 @@ Everything is optional — by default the token is captured from your browser.
 | `TEAMS_TOKEN_CACHE` | `false` to keep the captured token in memory only. Defaults to on. |
 | `TEAMS_TOKEN_FILE` | Where the captured token is cached. Defaults to `~/.microsoft-teams-mcp/token.json`. |
 | `TEAMS_SUBSTRATE_TOKEN_FILE` | Where the captured Substrate search token is cached. Defaults to `~/.microsoft-teams-mcp/substrate-token.json`. `TEAMS_TOKEN_CACHE=false` keeps it in memory too. |
-| `TEAMS_SHAREPOINT_TOKEN_FILE` | Where the captured SharePoint tokens (one per host, used to download shared files) are cached. Defaults to `~/.microsoft-teams-mcp/sharepoint-tokens.json`. `TEAMS_TOKEN_CACHE=false` keeps them in memory too. |
+| `TEAMS_SHAREPOINT_TOKEN_FILE` | Where the captured SharePoint token (one for every SharePoint host, used to download shared files) is cached. Defaults to `~/.microsoft-teams-mcp/sharepoint-tokens.json`. `TEAMS_TOKEN_CACHE=false` keeps them in memory too. |
 | `TEAMS_TIME_ZONE` | Default IANA time zone (e.g. `America/New_York`) for the `tz` argument of `teams_list_messages` and `teams_list_unread_messages`: each message then carries `time_local` (ISO 8601 with offset) next to its UTC `time`. Unset means no `time_local` unless `tz` is passed; a name `Intl` does not know is reported as an error. |
-| `TEAMS_OUTPUT_DIR` | Folder `teams_export_messages` (and `teams_get_transcript` with `save`) writes into (each export gets its own timestamped subfolder). Defaults to `~/Downloads/microsoft-teams-mcp`. When set, a per-call `dest` must lie inside it; when unset, `dest` must be under `~/Downloads`, `~/Documents` or `~/Desktop`. |
+| `TEAMS_OUTPUT_DIR` | Folder `teams_export_messages` (and `teams_get_transcript` with `save`, and `teams_get_attachment` with `save` or for a file over 10 MiB) writes into (each export gets its own timestamped subfolder). Defaults to `~/Downloads/microsoft-teams-mcp`. When set, a per-call `dest` must lie inside it; when unset, `dest` must be under `~/Downloads`, `~/Documents` or `~/Desktop`. |
 | `TEAMS_WS_PORT` | fetchproxy concentrator port. Defaults to `37149`, the fleet-wide shared port. |
 | `FETCHPROXY_WS_HOST` | Bind interface for the bridge (default `127.0.0.1`; a literal IP only, anything else is ignored). Keep on loopback — it exists for ONE topology: a hosted child in its own network namespace. |
 | `FETCHPROXY_IDENTITY_DIR` | Where to store the long-term fetchproxy identity keypair (default `~/.fetchproxy/identity/`; an absolute path only, anything else is ignored). Exists for a host that runs a separate child per caller, so they can share one identity. |
@@ -457,9 +469,12 @@ Everything is optional — by default the token is captured from your browser.
 - `teams_get_attachment` — one attachment of a message: an inline image is
   returned as the image itself; a shared file is downloaded from SharePoint and
   returned as its contents — an image as the image, anything else as an embedded
-  resource carrying the bytes. Shared-file download uses a separate, short-lived
-  SharePoint token captured per SharePoint host, so the first file from a given
-  host may need [your Teams tab reloaded](#sharepoint-file-download) to mint it; a
+  resource carrying the bytes. `save: true` writes it to a fresh file under
+  `TEAMS_OUTPUT_DIR` (else `~/Downloads/microsoft-teams-mcp`) and returns its
+  `path` instead. `ref` matches ignoring case, and a file without its extension.
+  Shared-file download uses a separate, short-lived SharePoint token that serves
+  every SharePoint host, so the first download may need
+  [your Teams tab reloaded](#sharepoint-file-download) to capture it; a
   file your account cannot open, or one that could not be fetched, comes back as
   metadata and its open link instead of failing. The caption names the
   conversation beside its id (`title`, plus `participants` for an untitled
