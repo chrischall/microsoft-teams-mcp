@@ -209,6 +209,23 @@ describe('listConversations', () => {
     ]);
   });
 
+  // Seen live 2026-11-09: a chat that changed while the listing was paged came
+  // back on two pages, and looking it up by name then found it "twice".
+  it('keeps a conversation that appears on two pages once, where it first appeared', async () => {
+    let n = 0;
+    const fetchImpl: FetchMock = vi.fn(async () =>
+      n++ === 0
+        ? jsonResponse({
+            conversations: [{ id: '19:moved@thread.v2', version: 2 }, { id: '19:a@thread.v2' }],
+            _metadata: { backwardLink: `${BASE}/users/ME/conversations?syncState=page2` },
+          })
+        : jsonResponse({ conversations: [{ id: '19:b@thread.v2' }, { id: '19:moved@thread.v2', version: 1 }] }),
+    );
+    const convs = await client(fetchImpl).listConversations();
+    expect(convs.map((c) => c.id)).toEqual(['19:moved@thread.v2', '19:a@thread.v2', '19:b@thread.v2']);
+    expect(convs[0].version).toBe(2);
+  });
+
   it('stops on an empty page even when it carries a link', async () => {
     let n = 0;
     const fetchImpl: FetchMock = vi.fn(async () =>
