@@ -67,7 +67,7 @@ const FILE_HINT =
   'A shared file is downloaded from SharePoint and returned as its contents (an image as an image, ' +
   'anything else as an embedded resource; over 10 MiB as a download link, or a saved file on a local ' +
   'install). The first file from a given SharePoint host may need ' +
-  'opening once in Teams to mint a short-lived token; a file your account cannot open comes back as ' +
+  'your Teams tab reloaded to mint a short-lived token; a file your account cannot open comes back as ' +
   'metadata and its link.';
 
 export function registerAttachmentTools(
@@ -87,7 +87,7 @@ export function registerAttachmentTools(
         'expiring download link (downloadUrl) on a hosted install, or saved to a fresh file (path) under ' +
         `${EXPORT_OUTPUT_ENV}, else ~/Downloads/${EXPORT_SERVER_NAME}, on a local one; the caption's via ` +
         'says which. The first file from a given SharePoint host in a ' +
-        'session may need opening once in Teams to mint a short-lived token; a file your account ' +
+        'session may need your Teams tab reloaded to mint a short-lived token; a file your account ' +
         'cannot open, or one that could not be fetched, comes back as metadata and its open link ' +
         'instead of failing. Its caption names the conversation beside its id: title (as teams_list_conversations ' +
         'names it — an untitled group chat by its participants, a 1:1 by the other person) and participants. ' +
@@ -320,7 +320,7 @@ export function degradeHint(err: unknown, host: string): string {
   // "open the file" cannot fix a refusal.
   if (err instanceof Error && err.message !== '') return err.message;
   return (
-    `Couldn't mint a SharePoint token for ${host} — open the shared file once in a signed-in Teams ` +
-    'tab (that browser request is where the token is captured from), then retry.'
+    `Couldn't mint a SharePoint token for ${host} — reload your signed-in Teams tab and retry while ` +
+    'it loads (that page load is where the token is captured from).'
   );
 }

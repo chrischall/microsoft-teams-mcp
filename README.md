@@ -83,8 +83,9 @@ Two things follow from that:
 - **Open the file once per SharePoint host.** The SharePoint token is captured
   from the browser's own request to the file's SharePoint host, is short-lived
   (~53 minutes), and is scoped to one host family. So the first file from a
-  given host in a session may need you to open it once in a signed-in Teams tab
-  (that browser request is what the token is read from); after that the token is
+  given host in a session may need you to reload a signed-in Teams tab (the
+  requests it makes while loading are what the token is read from; opening a
+  file does not reliably make one); after that the token is
   cached and refreshed until it expires. A file your account cannot open, or on
   a SharePoint host your token does not cover, comes back as metadata and its
   open link rather than failing.
@@ -458,7 +459,7 @@ Everything is optional — by default the token is captured from your browser.
   returned as its contents — an image as the image, anything else as an embedded
   resource carrying the bytes. Shared-file download uses a separate, short-lived
   SharePoint token captured per SharePoint host, so the first file from a given
-  host may need [opening once in Teams](#sharepoint-file-download) to mint it; a
+  host may need [your Teams tab reloaded](#sharepoint-file-download) to mint it; a
   file your account cannot open, or one that could not be fetched, comes back as
   metadata and its open link instead of failing. The caption names the
   conversation beside its id (`title`, plus `participants` for an untitled

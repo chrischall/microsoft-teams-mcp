@@ -169,7 +169,7 @@ describe('captureSharePointTokenViaFetchproxy', () => {
     expect((err as Error).message).toMatch(/timed out/);
     // The token is captured from the OneDrive host, not by opening the team-site
     // file, so the hint points at interacting with Teams / one's own OneDrive.
-    expect((err as Error).message).toMatch(/open one of your own OneDrive files/i);
+    expect((err as Error).message).toMatch(/reload your signed-in Teams tab/i);
     expect((err as Error).message).toMatch(new RegExp(HOST.replace(/\./g, '\\.')));
   });
 
