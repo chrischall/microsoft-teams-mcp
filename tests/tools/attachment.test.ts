@@ -276,7 +276,11 @@ describe('teams_get_attachment', () => {
   });
 
   it('degrades a token-capture failure to metadata and its link, not a thrown error', async () => {
-    const downloadFile = vi.fn().mockRejectedValue(new Error('could not capture a SharePoint token (timed out).'));
+    const downloadFile = vi
+      .fn()
+      .mockRejectedValue(
+        new Error('could not capture a SharePoint token from the browser (timeout). Open one of your own OneDrive files, then retry.'),
+      );
     const result = await call(
       chatsvcWith(),
       { conversation: GROUP, message_id: String(TARGET), ref: FILE_NAME },
@@ -286,6 +290,44 @@ describe('teams_get_attachment', () => {
     expect(result.isError).toBeFalsy();
     const data = parseToolResult(result) as Record<string, unknown>;
     expect(data).toMatchObject({ name: FILE_NAME, content_available: false });
+    expect(data.hint).toMatch(/open one of your own OneDrive files/i);
+  });
+
+  // The capture layer throws plain Errors whose message is the only record of
+  // why: replacing it sent users to "open the file" for a refusal no file opens.
+  it('keeps the real reason when the bridge refuses the capture scope', async () => {
+    const refusal =
+      'could not capture a SharePoint token for contoso-my.sharepoint.com from the browser ((host, path, headerName) ' +
+      'not in declared captureHeaders — Revoke this MCP in the ContextMint Bridge extension popup, then re-run).';
+    const result = await call(
+      chatsvcWith(),
+      { conversation: GROUP, message_id: String(TARGET), ref: FILE_NAME },
+      fakeSharepoint(vi.fn().mockRejectedValue(new Error(refusal))),
+    );
+
+    const data = parseToolResult(result) as Record<string, unknown>;
+    expect(data).toMatchObject({ content_available: false, hint: refusal });
+  });
+
+  it('reports a SharePoint failure that carries no hint instead of blaming the token', async () => {
+    const result = await call(
+      chatsvcWith(),
+      { conversation: GROUP, message_id: String(TARGET), ref: FILE_NAME },
+      fakeSharepoint(vi.fn().mockRejectedValue(new McpToolError('SharePoint returned HTTP 400.', { status: 400, kind: 'http' }))),
+    );
+
+    const data = parseToolResult(result) as Record<string, unknown>;
+    expect(data.hint).toBe('SharePoint returned HTTP 400.');
+  });
+
+  it('falls back to the open-it-in-Teams hint when the failure has no message', async () => {
+    const result = await call(
+      chatsvcWith(),
+      { conversation: GROUP, message_id: String(TARGET), ref: FILE_NAME },
+      fakeSharepoint(vi.fn().mockRejectedValue('nope')),
+    );
+
+    const data = parseToolResult(result) as Record<string, unknown>;
     expect(data.hint).toMatch(/open the (shared )?file once/i);
   });
 

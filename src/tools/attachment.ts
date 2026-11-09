@@ -315,6 +315,10 @@ export function degradeHint(err: unknown, host: string): string {
     return err.hint !== undefined ? `${err.message} ${err.hint}` : err.message;
   }
   if (err instanceof McpToolError && err.hint !== undefined) return err.hint;
+  // A capture failure is a plain Error whose message holds the only record of
+  // why (a refused bridge scope, a timeout) and what to do about it. Keep it:
+  // "open the file" cannot fix a refusal.
+  if (err instanceof Error && err.message !== '') return err.message;
   return (
     `Couldn't mint a SharePoint token for ${host} — open the shared file once in a signed-in Teams ` +
     'tab (that browser request is where the token is captured from), then retry.'
