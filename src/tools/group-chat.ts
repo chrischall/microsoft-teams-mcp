@@ -15,7 +15,10 @@
  * self-chat has no one else in it.
  *
  * People are resolved before anything is previewed — every one, or the call
- * is refused (`people.ts`). After the writes the thread is read back once and
+ * is refused (`people.ts`): MRIs as given, names from the user's chats first,
+ * then (and email addresses always) from the directory through Substrate. The
+ * preview shows each person's source and, for a directory hit, their email,
+ * so the user sees exactly who is meant. After the writes the thread is read back once and
  * each change looked for; a write Teams did not confirm (a timeout, a dropped
  * connection, a 5xx) is settled by that read-back, as for a reaction.
  */
@@ -35,7 +38,7 @@ import type { ChatServiceClient, RawThread } from '../chatsvc.js';
 import type { TeamsDeps } from '../deps.js';
 import { wrapApiError } from './errors.js';
 import { workMeta } from './hints.js';
-import { knownPeople, resolvePeople, type ResolvedPerson } from './people.js';
+import { knownPeople, resolvePeople, type PeopleDirectory, type ResolvedPerson } from './people.js';
 import { resolveTarget, SELF_CHAT, type Target } from './send.js';
 import { untrustedField, untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
 
@@ -66,15 +69,20 @@ const peopleParam = z
   .min(1)
   .max(MAX_PEOPLE)
   .describe(
-    'Who: each an MRI (8:orgid:…), a bare Entra object id, or a display name ("Greg King" and "King, Greg" are ' +
-      'the same) matched among the other people of your 1:1 chats and recent senders in this chat.',
+    'Who: each an MRI (8:orgid:…), a bare Entra object id, an email address (looked up in your organisation\'s ' +
+      'directory), or a display name ("Greg King" and "King, Greg" are the same) matched among the other people ' +
+      'of your 1:1 chats and recent senders in this chat, then — only if no one there matches — in the directory.',
   );
 
 const PEOPLE_SENTENCE =
-  'people are MRIs (8:orgid:…), bare object ids, or display names matched (ignoring case, in either ' +
-  '"First Last" or "Last, First" order) among the other person of each of the user\'s 1:1 chats and the ' +
-  "chat's recent senders — there is no directory search, so anyone else needs their MRI; an ambiguous or " +
-  'unknown name refuses the whole call, listing candidates. ';
+  'people are MRIs (8:orgid:…), bare object ids, email addresses, or display names. A name is matched ' +
+  '(ignoring case, in either "First Last" or "Last, First" order) among the other person of each of the ' +
+  "user's 1:1 chats and the chat's recent senders first; only when no one there matches is the organisation's " +
+  'directory searched, where the one person with exactly that name is taken (or the only suggestion, when the ' +
+  'name is whole words of it). An email address is looked up in the directory and must be exactly one ' +
+  "person's email or UPN. An ambiguous or unknown person refuses the whole call, listing candidates. The " +
+  'directory is searched with the same token as teams_search_messages: the first lookup may need the user to ' +
+  'run any search in the Teams search box so it can be captured. ';
 
 /** The conversation, refused unless it is a group chat. `doing` words the refusal ("renamed"). */
 async function groupChat(chatsvc: ChatServiceClient, conversation: string, me: string, doing: string): Promise<Target> {
@@ -103,21 +111,28 @@ function memberSet(thread: RawThread): Set<string> {
   return new Set((thread.members ?? []).map((m) => m.id.toLowerCase()));
 }
 
-/** A person as a preview or a result shows them. */
+/** A person as a preview or a result shows them: where they were found and, from the directory, their email. */
 function shown(p: ResolvedPerson): ResolvedPerson {
-  return { person: p.person, mri: p.mri, ...(p.name !== undefined ? { name: p.name } : {}) };
+  return {
+    person: p.person,
+    mri: p.mri,
+    ...(p.name !== undefined ? { name: p.name } : {}),
+    source: p.source,
+    ...(p.email !== undefined ? { email: p.email } : {}),
+  };
 }
 
 /** People resolved and de-duplicated by MRI (the first naming of each kept). */
 async function resolveFor(
   chatsvc: ChatServiceClient,
+  directory: PeopleDirectory,
   me: string,
   conversationId: string,
   people: readonly string[],
 ): Promise<ResolvedPerson[]> {
   const known = await knownPeople(chatsvc, me, conversationId);
   const seen = new Set<string>();
-  return resolvePeople(people, known).filter((p) => {
+  return (await resolvePeople(people, known, directory)).filter((p) => {
     const key = p.mri.toLowerCase();
     if (seen.has(key)) return false;
     seen.add(key);
@@ -198,7 +213,10 @@ async function applyMemberChanges(
   };
 }
 
-export function registerGroupChatTools(server: McpServer, { chatsvc }: Pick<TeamsDeps, 'chatsvc'>): void {
+export function registerGroupChatTools(
+  server: McpServer,
+  { chatsvc, substrate }: Pick<TeamsDeps, 'chatsvc' | 'substrate'>,
+): void {
   server.registerTool(
     RENAME,
     {
@@ -308,7 +326,8 @@ export function registerGroupChatTools(server: McpServer, { chatsvc }: Pick<Team
         'already_member, unknown (Teams did not confirm and reading the chat back does not show them — check ' +
         'before retrying) or failed (with the error). ' +
         CONFIRM_FLOW_SENTENCE +
-        ' The preview shows the chat and exactly who would be added. ' +
+        ' The preview shows the chat and exactly who would be added — each with their source (id, chat or ' +
+        'directory) and, from the directory, their email — so the user can check it is the right person. ' +
         CONFIRM_INJECTION_RULE +
         UNTRUSTED_DESCRIPTION_SUFFIX,
       annotations: toolAnnotations({ readOnly: false, destructive: false, idempotent: true, openWorld: true }),
@@ -323,7 +342,7 @@ export function registerGroupChatTools(server: McpServer, { chatsvc }: Pick<Team
       try {
         const me = await chatsvc.meMri();
         const target = await groupChat(chatsvc, conversation, me, 'given more people');
-        const resolved = await resolveFor(chatsvc, me, target.id, people);
+        const resolved = await resolveFor(chatsvc, substrate, me, target.id, people);
         const members = memberSet(await chatsvc.getThread(target.id));
         const already = resolved.filter((p) => members.has(p.mri.toLowerCase()));
         const toAdd = resolved.filter((p) => !members.has(p.mri.toLowerCase()));
@@ -389,7 +408,8 @@ export function registerGroupChatTools(server: McpServer, { chatsvc }: Pick<Team
         'result lists each person: removed, not_member, unknown (Teams did not confirm and reading the chat back ' +
         'still shows them — check before retrying) or failed (with the error). ' +
         CONFIRM_FLOW_SENTENCE +
-        ' The preview shows the chat and exactly who would be removed. ' +
+        ' The preview shows the chat and exactly who would be removed — each with their source (id, chat or ' +
+        'directory) and, from the directory, their email. ' +
         CONFIRM_INJECTION_RULE +
         UNTRUSTED_DESCRIPTION_SUFFIX,
       annotations: toolAnnotations({ readOnly: false, destructive: true, idempotent: true, openWorld: true }),
@@ -404,7 +424,7 @@ export function registerGroupChatTools(server: McpServer, { chatsvc }: Pick<Team
       try {
         const me = await chatsvc.meMri();
         const target = await groupChat(chatsvc, conversation, me, 'changed');
-        const resolved = await resolveFor(chatsvc, me, target.id, people);
+        const resolved = await resolveFor(chatsvc, substrate, me, target.id, people);
         const self = resolved.find((p) => p.mri.toLowerCase() === me.toLowerCase());
         if (self !== undefined) {
           throw new McpToolError(`Refusing to remove you (the signed-in user, "${self.person}") from the chat.`, {

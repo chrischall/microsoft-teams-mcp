@@ -394,6 +394,7 @@ function fakeSubstrate(
         ...(opts.total !== undefined ? { total: opts.total } : {}),
       };
     }),
+    suggestPeople: vi.fn(async () => []),
   };
 }
 

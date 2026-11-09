@@ -126,6 +126,12 @@ read only from the request header, never from page storage.
   another capture for 10 minutes. `mode: "substrate"` fails instead;
   `mode: "scan"` never touches Substrate.
 
+- **It also finds people.** `teams_add_chat_members` and
+  `teams_remove_chat_members` use the same token to look a person up in your
+  organisation's directory (Substrate's people suggestions) when a name is not
+  in your chats, or when you pass an email address. A lookup is an explicit
+  request, so it always tries a fresh capture rather than honouring the
+  10-minute cooldown below.
 - **It does not re-capture in a loop.** If a freshly captured token is still
   refused (401), the same 10-minute cooldown applies, so `auto` goes straight
   to the scan instead of waiting on the bridge every call.
@@ -603,12 +609,32 @@ Everything is optional — by default the token is captured from your browser.
   name; renaming to the current name writes nothing and asks nothing. The
   chat is read back to verify the new name (`verified`).
 - `teams_add_chat_members` — add `people` (1–20) to a group chat as
-  ordinary members. Each person is an MRI (`8:orgid:…`), a bare object id,
-  or a display name matched — ignoring case, with "Greg King" and
-  "King, Greg" the same — among the other person of each of your 1:1 chats
-  and the chat's recent senders. There is no directory search, so anyone
-  else needs their MRI; an ambiguous or unknown name refuses the whole call
-  with the candidates. People already in the chat are reported as
+  ordinary members. Each person is one of:
+  - an MRI (`8:orgid:…`) or a bare object id — used as given;
+  - an email address — looked up in your organisation's directory and taken
+    only when exactly one person there has that email or UPN (ignoring case);
+  - a display name — matched, ignoring case and with "Greg King" and
+    "King, Greg" the same, among the other person of each of your 1:1 chats
+    and the chat's recent senders (exact first, then substring; several is
+    refused). **Only when no one there matches** is the directory searched:
+    the one person whose name is exactly that is taken; failing an exact
+    match, the directory's *only* suggestion is taken when the name is whole
+    words of it ("Solomon" for "Solomon, Gary", never "Sol"). Anything else —
+    several exact matches, several suggestions, a partial word, nothing —
+    refuses, listing the candidates with their email and MRI.
+
+  The directory is Substrate's people suggestions
+  (`POST https://substrate.office.com/search/api/v1/suggestions`), reached
+  with the [Substrate token](#substrate-search) search already captures — no
+  new token or bridge scope, but the first lookup may need you to run any
+  search in the Teams search box so the token can be captured. Only people in
+  your organisation are found there (not distribution lists or personal
+  contacts). If the directory cannot be searched (no token yet, a capture
+  timeout, `TEAMS_DISABLE_FETCHPROXY`), the error says so and what to do;
+  passing the MRI always works. An ambiguous or unknown person refuses the
+  whole call. The preview lists everyone with their `source` (`id`, `chat`
+  or `directory`) and, for a directory hit, their `email`, so you can see
+  exactly who will be added. People already in the chat are reported as
   `already_member` and not written (if everyone is, nothing is asked). Teams
   posts a notice in the chat for each person added. The chat is read back,
   and each person is reported `added`, `already_member`, `unknown` (Teams
@@ -792,7 +818,9 @@ instead.
   (below), sent only to the file's own `*.sharepoint.com` host; the pre-signed
   download link it returns is fetched with **no** token at all. Search uses a
   third, Substrate token, sent only to
-  `https://substrate.office.com/searchservice/api/v2/query`.
+  `https://substrate.office.com/searchservice/api/v2/query` and, to look a
+  person up in the directory for the group-chat member tools,
+  `https://substrate.office.com/search/api/v1/suggestions`.
 - **Shared files download from SharePoint.** They live in SharePoint, which
   does not accept the chat-service token, so `teams_get_attachment` captures a
   separate SharePoint token and fetches the file through SharePoint's v2.1
