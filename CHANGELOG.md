@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.7](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.8.6...v0.8.7) (2026-11-09)
+
+
+### Bug Fixes
+
+* **attachments:** tell users to reload Teams when a SharePoint token is needed ([#108](https://github.com/chrischall/microsoft-teams-mcp/issues/108)) ([6420eea](https://github.com/chrischall/microsoft-teams-mcp/commit/6420eea04b2f2c12866d001e879150739f52a26a))
+* **deps:** bump runtime and dev dependencies ([#112](https://github.com/chrischall/microsoft-teams-mcp/issues/112)) ([e3fcfb0](https://github.com/chrischall/microsoft-teams-mcp/commit/e3fcfb067f1c8d294bdb79f12dba5daca198d483))
+
 ## [0.8.6](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.8.5...v0.8.6) (2026-11-09)
 
 
