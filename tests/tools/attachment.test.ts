@@ -279,7 +279,7 @@ describe('teams_get_attachment', () => {
     const downloadFile = vi
       .fn()
       .mockRejectedValue(
-        new Error('could not capture a SharePoint token from the browser (timeout). Open one of your own OneDrive files, then retry.'),
+        new Error('could not capture a SharePoint token from the browser (timeout). Reload your signed-in Teams tab and retry while it loads.'),
       );
     const result = await call(
       chatsvcWith(),
@@ -290,7 +290,7 @@ describe('teams_get_attachment', () => {
     expect(result.isError).toBeFalsy();
     const data = parseToolResult(result) as Record<string, unknown>;
     expect(data).toMatchObject({ name: FILE_NAME, content_available: false });
-    expect(data.hint).toMatch(/open one of your own OneDrive files/i);
+    expect(data.hint).toMatch(/reload your signed-in Teams tab/i);
   });
 
   // The capture layer throws plain Errors whose message is the only record of
