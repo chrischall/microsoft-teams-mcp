@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.6](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.8.5...v0.8.6) (2026-11-09)
+
+
+### Bug Fixes
+
+* **bridge:** open only the Teams tab and report why a shared file could not be fetched ([#105](https://github.com/chrischall/microsoft-teams-mcp/issues/105)) ([c953a4d](https://github.com/chrischall/microsoft-teams-mcp/commit/c953a4dcf227b42e4fb5168f5fcd716c514bea35))
+
 ## [0.8.5](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.8.4...v0.8.5) (2026-11-07)
 
 
