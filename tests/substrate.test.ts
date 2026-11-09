@@ -8,6 +8,9 @@ import {
   buildQueryString,
   parseQueryResponse,
   CAPTURE_RETRY_COOLDOWN_MS,
+  SUBSTRATE_SUGGESTIONS_URL,
+  buildSuggestionsBody,
+  parseSuggestionsResponse,
 } from '../src/substrate.js';
 
 /** A JWT carrying `exp`; opaque filler, never a real token. */
@@ -280,6 +283,197 @@ describe('SubstrateClient.searchMessages', () => {
       vi.setSystemTime(Date.now() + CAPTURE_RETRY_COOLDOWN_MS + 1);
       await expect(c.searchMessages({ query: 'x', from: 0, size: 25 })).rejects.toThrow();
       expect(capture).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('buildSuggestionsBody', () => {
+  it('asks the powerbar scenario for People matching the text, with the required cvid and logical id', () => {
+    const body = buildSuggestionsBody('Gary Solomon', 7) as {
+      EntityRequests: Record<string, unknown>[];
+      Cvid: string;
+      LogicalId: string;
+      Scenario: { Name: string };
+    };
+    expect(body.EntityRequests).toEqual([{ EntityType: 'People', Query: { QueryString: 'Gary Solomon' }, Size: 7 }]);
+    expect(body.Cvid).toMatch(/^[0-9a-f-]{36}$/);
+    expect(body.LogicalId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(body.Scenario).toEqual({ Name: 'powerbar' });
+  });
+});
+
+const OID_G = '0000AAAA-0000-0000-0000-0000000000F1';
+const OID_H = '00000000-0000-0000-0000-0000000000f2';
+
+/** A suggestion as the live response carries one (default fields); placeholders only. */
+function suggestion(over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    Id: 'opaque-id',
+    DisplayName: 'Solomon, Gary',
+    EmailAddresses: ['gary.solomon@example.test'],
+    ProxyEmailAddresses: ['SMTP:gary.solomon@example.test'],
+    Department: 'Engineering',
+    OfficeLocation: 'Remote',
+    JobTitle: 'Engineer',
+    ImAddress: 'sip:gary.solomon@example.test',
+    PeopleSubtype: 'OrganizationUser',
+    UserPrincipalName: 'gsolomon@example.test',
+    ExternalDirectoryObjectId: OID_G,
+    Confidence: 0.9,
+    ...over,
+  };
+}
+
+function suggestionsOf(items: unknown[]): unknown {
+  return { Groups: [{ Type: 'People', Suggestions: items }], Instrumentation: {} };
+}
+
+describe('parseSuggestionsResponse', () => {
+  it('maps an organisation user, deriving the MRI from the lower-cased directory object id', () => {
+    expect(parseSuggestionsResponse(suggestionsOf([suggestion()]))).toEqual([
+      {
+        mri: `8:orgid:${OID_G.toLowerCase()}`,
+        name: 'Solomon, Gary',
+        email: 'gary.solomon@example.test',
+        upn: 'gsolomon@example.test',
+        jobTitle: 'Engineer',
+        department: 'Engineering',
+      },
+    ]);
+  });
+
+  it('prefers an 8:orgid: MRI field over the object id', () => {
+    const [p] = parseSuggestionsResponse(suggestionsOf([suggestion({ MRI: `8:orgid:${OID_H}` })]));
+    expect(p.mri).toBe(`8:orgid:${OID_H}`);
+  });
+
+  it('ignores an MRI field that is not 8:orgid: and falls back to the object id', () => {
+    const [p] = parseSuggestionsResponse(suggestionsOf([suggestion({ MRI: '28:bot' })]));
+    expect(p.mri).toBe(`8:orgid:${OID_G.toLowerCase()}`);
+  });
+
+  it('keeps an entry with no subtype, and leaves out absent optional fields', () => {
+    const raw = suggestion({ PeopleSubtype: undefined, JobTitle: undefined, Department: '', EmailAddresses: [] });
+    expect(parseSuggestionsResponse(suggestionsOf([raw]))).toEqual([
+      { mri: `8:orgid:${OID_G.toLowerCase()}`, name: 'Solomon, Gary', upn: 'gsolomon@example.test' },
+    ]);
+  });
+
+  it('drops distribution lists, personal contacts, unknowns and entries with no usable id', () => {
+    const people = parseSuggestionsResponse(
+      suggestionsOf([
+        suggestion({ PeopleSubtype: 'PublicDistributionList', DisplayName: 'All staff' }),
+        suggestion({ PeopleSubtype: 'PersonalContact', DisplayName: 'Plumber' }),
+        suggestion({ PeopleSubtype: 'Unknown', DisplayName: 'Someone' }),
+        suggestion({ ExternalDirectoryObjectId: undefined, DisplayName: 'No id' }),
+        suggestion({ ExternalDirectoryObjectId: 'not-a-guid', DisplayName: 'Bad id' }),
+        suggestion({ DisplayName: 'Kept', ExternalDirectoryObjectId: OID_H }),
+      ]),
+    );
+    expect(people.map((p) => p.name)).toEqual(['Kept']);
+  });
+
+  it('keeps one entry per MRI', () => {
+    expect(parseSuggestionsResponse(suggestionsOf([suggestion(), suggestion({ DisplayName: 'Gary S' })]))).toHaveLength(1);
+  });
+
+  it('reads only the People group and never throws on shape', () => {
+    expect(parseSuggestionsResponse({ Groups: [{ Type: 'Files', Suggestions: [suggestion()] }] })).toEqual([]);
+    expect(parseSuggestionsResponse({})).toEqual([]);
+    expect(parseSuggestionsResponse(null)).toEqual([]);
+    expect(parseSuggestionsResponse({ Groups: [{ Type: 'People', Suggestions: [null, 3, suggestion()] }] })).toHaveLength(1);
+  });
+});
+
+describe('SubstrateClient.suggestPeople', () => {
+  it('POSTs to the suggestions endpoint with the captured bearer, never following a redirect', async () => {
+    const token = jwt();
+    const fetchImpl: FetchMock = vi.fn(async () => json(suggestionsOf([suggestion()])));
+    const people = await client(fetchImpl, async () => token).suggestPeople('  Solomon ', { size: 5 });
+    expect(people).toHaveLength(1);
+
+    const [url, init] = fetchImpl.mock.calls[0];
+    expect(String(url)).toBe(SUBSTRATE_SUGGESTIONS_URL);
+    expect(SUBSTRATE_SUGGESTIONS_URL).toBe('https://substrate.office.com/search/api/v1/suggestions?scenario=powerbar');
+    expect(init?.method).toBe('POST');
+    expect(init?.redirect).toBe('error');
+    const headers = new Headers(init?.headers);
+    expect(headers.get('authorization')).toBe(`Bearer ${token}`);
+    expect(headers.get('content-type')).toBe('application/json');
+    expect(headers.get('accept')).toBe('application/json');
+    expect(JSON.parse(String(init?.body))).toMatchObject({
+      EntityRequests: [{ EntityType: 'People', Query: { QueryString: 'Solomon' }, Size: 5 }],
+    });
+  });
+
+  it('asks for 10 by default', async () => {
+    const fetchImpl: FetchMock = vi.fn(async () => json(suggestionsOf([])));
+    await client(fetchImpl).suggestPeople('x');
+    expect(JSON.parse(String(fetchImpl.mock.calls[0][1]?.body))).toMatchObject({ EntityRequests: [{ Size: 10 }] });
+  });
+
+  it('asks nothing for blank text', async () => {
+    const fetchImpl: FetchMock = vi.fn();
+    await expect(client(fetchImpl).suggestPeople('   ')).resolves.toEqual([]);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('re-captures once and replays on a 401', async () => {
+    const capture = vi.fn(async () => jwt());
+    const fetchImpl: FetchMock = vi.fn();
+    fetchImpl.mockResolvedValueOnce(new Response('', { status: 401 }));
+    fetchImpl.mockResolvedValueOnce(json(suggestionsOf([suggestion()])));
+    await expect(client(fetchImpl, capture).suggestPeople('gary')).resolves.toHaveLength(1);
+    expect(capture).toHaveBeenCalledTimes(2);
+  });
+
+  it('maps a non-2xx to an McpToolError with its status, naming the people lookup and never the body', async () => {
+    const fetchImpl: FetchMock = vi.fn(async () => new Response('secret-ish body', { status: 400 }));
+    const err = (await client(fetchImpl).suggestPeople('x').catch((e) => e)) as McpToolError;
+    expect(err).toBeInstanceOf(McpToolError);
+    expect(err.status).toBe(400);
+    expect(err.message).toMatch(/people/i);
+    expect(err.message).not.toContain('secret-ish');
+  });
+
+  it('refuses a body that is not JSON without echoing it', async () => {
+    const fetchImpl: FetchMock = vi.fn(async () => new Response('<html>secret-ish</html>', { status: 200 }));
+    const err = (await client(fetchImpl).suggestPeople('x').catch((e) => e)) as McpToolError;
+    expect(err).toBeInstanceOf(McpToolError);
+    expect(err.message).not.toContain('secret-ish');
+  });
+
+  it('names substrate.office.com and the cause when the request never got a response', async () => {
+    const cause = Object.assign(new Error('getaddrinfo EAI_AGAIN substrate.office.com'), { code: 'EAI_AGAIN' });
+    const fetchImpl: FetchMock = vi.fn(async () => {
+      throw new TypeError('fetch failed', { cause });
+    });
+    const err = (await client(fetchImpl).suggestPeople('x').catch((e) => e)) as McpToolError;
+    expect(err.kind).toBe('transport');
+    expect(err.message).toMatch(/substrate\.office\.com.*EAI_AGAIN/);
+  });
+
+  it('is refused, never capturing, with the bridge disabled', async () => {
+    const capture = vi.fn(async () => jwt());
+    const c = client(vi.fn(), capture, { ...ENV, TEAMS_DISABLE_FETCHPROXY: 'true' });
+    await expect(c.suggestPeople('x')).rejects.toMatchObject({ kind: 'no_credential' });
+    expect(capture).not.toHaveBeenCalled();
+  });
+
+  it('shares the capture cooldown with search: a failed capture is not retried unless forced', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const capture = vi.fn(async (): Promise<string> => {
+        throw new Error('could not capture a Substrate search token from the browser (timed out)');
+      });
+      const c = client(vi.fn(), capture);
+      await expect(c.searchMessages({ query: 'x', from: 0, size: 25 })).rejects.toThrow(/timed out/);
+      await expect(c.suggestPeople('x')).rejects.toThrow(/timed out/);
+      expect(capture).toHaveBeenCalledTimes(1);
+      await expect(c.suggestPeople('x', { force: true })).rejects.toThrow(/timed out/);
+      expect(capture).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
     }

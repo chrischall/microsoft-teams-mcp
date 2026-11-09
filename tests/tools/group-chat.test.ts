@@ -4,6 +4,7 @@ import { McpToolError, WriteOutcomeUnknownError } from '@chrischall/mcp-utils';
 import { registerGroupChatTools } from '../../src/tools/group-chat.js';
 import { UNTRUSTED_CONTENT_NOTE } from '../../src/tools/untrusted.js';
 import type { ChatServiceClient, RawConversation, RawThread } from '../../src/chatsvc.js';
+import type { DirectoryPerson, SubstrateSearch } from '../../src/substrate.js';
 import { ME, fakeChatsvc, rawConv, rawMsg } from './fake-chatsvc.js';
 
 const T0 = 1_760_000_000_000;
@@ -56,6 +57,28 @@ function fakeWith(opts: { members?: string[]; topic?: string; ignore?: boolean; 
   return { chatsvc, getThread, setTopic, addMember, removeMember };
 }
 
+const GARY: DirectoryPerson = {
+  mri: '8:orgid:00000000-0000-0000-0000-0000000000b1',
+  name: 'Solomon, Gary',
+  email: 'gary.solomon@example.test',
+  upn: 'gsolomon@example.test',
+};
+
+/** A directory that knows `people` (matched on any query word), or fails with `fail`. */
+function fakeSubstrate(people: DirectoryPerson[] = [], fail?: unknown) {
+  const suggestPeople = vi.fn(async (text: string): Promise<DirectoryPerson[]> => {
+    if (fail !== undefined) throw fail;
+    const words = text.toLowerCase().replace(/,/g, ' ').split(/\s+/).filter(Boolean);
+    return people.filter((p) => words.some((w) => [p.name, p.email ?? '', p.upn ?? ''].some((f) => f.toLowerCase().includes(w))));
+  });
+  const substrate: SubstrateSearch = {
+    isConfigured: () => true,
+    searchMessages: vi.fn(),
+    suggestPeople,
+  };
+  return { substrate, suggestPeople };
+}
+
 type PhaseOne = {
   confirmToken?: string;
   preview?: { method?: string; path?: string; willSend?: unknown } & Record<string, unknown>;
@@ -66,8 +89,13 @@ function errorText(result: { content?: unknown[] }): string {
 }
 
 /** Phase 1 then (when it minted a token) phase 2 with it. */
-async function confirmed(chatsvc: ChatServiceClient, tool: string, args: Record<string, unknown>) {
-  const h = await createTestHarness((server) => registerGroupChatTools(server, { chatsvc }));
+async function confirmed(
+  chatsvc: ChatServiceClient,
+  tool: string,
+  args: Record<string, unknown>,
+  substrate: SubstrateSearch = fakeSubstrate().substrate,
+) {
+  const h = await createTestHarness((server) => registerGroupChatTools(server, { chatsvc, substrate }));
   try {
     const first = await h.callTool(tool, args);
     if (first.isError) return { first, second: first, preview: undefined, data: undefined };
@@ -87,8 +115,13 @@ async function confirmed(chatsvc: ChatServiceClient, tool: string, args: Record<
   }
 }
 
-async function phaseOne(chatsvc: ChatServiceClient, tool: string, args: Record<string, unknown>) {
-  const h = await createTestHarness((server) => registerGroupChatTools(server, { chatsvc }));
+async function phaseOne(
+  chatsvc: ChatServiceClient,
+  tool: string,
+  args: Record<string, unknown>,
+  substrate: SubstrateSearch = fakeSubstrate().substrate,
+) {
+  const h = await createTestHarness((server) => registerGroupChatTools(server, { chatsvc, substrate }));
   try {
     const first = await h.callTool(tool, args);
     return { first, preview: first.isError ? undefined : parseToolResult<PhaseOne>(first) };
@@ -234,10 +267,10 @@ describe('teams_add_chat_members', () => {
     expect(preview?.preview?.path).toBe(`/threads/${ENC}/members`);
     expect(fenced(preview?.preview?.conversation)).toEqual({ id: GROUP, title: 'Project Falcon', kind: 'group' });
     expect(fenced(preview?.preview?.add)).toEqual([
-      { person: 'Greg King', mri: GREG, name: 'King, Greg' },
-      { person: SAM_OID, mri: SAM },
+      { person: 'Greg King', mri: GREG, name: 'King, Greg', source: 'chat' },
+      { person: SAM_OID, mri: SAM, source: 'id' },
     ]);
-    expect(fenced(preview?.preview?.already_members)).toEqual([{ person: 'bea', mri: BEA, name: 'Bea Example' }]);
+    expect(fenced(preview?.preview?.already_members)).toEqual([{ person: 'bea', mri: BEA, name: 'Bea Example', source: 'chat' }]);
     expect(addMember).not.toHaveBeenCalled();
   });
 
@@ -255,9 +288,9 @@ describe('teams_add_chat_members', () => {
       status: 'done',
       conversation: { id: GROUP, title: 'Project Falcon', kind: 'group' },
       results: [
-        { person: 'King, Greg', mri: GREG, name: 'King, Greg', status: 'added', verified: true },
-        { person: SAM, mri: SAM, status: 'added', verified: true },
-        { person: 'Bea Example', mri: BEA, name: 'Bea Example', status: 'already_member' },
+        { person: 'King, Greg', mri: GREG, name: 'King, Greg', source: 'chat', status: 'added', verified: true },
+        { person: SAM, mri: SAM, source: 'id', status: 'added', verified: true },
+        { person: 'Bea Example', mri: BEA, name: 'Bea Example', source: 'chat', status: 'already_member' },
       ],
     });
   });
@@ -268,7 +301,7 @@ describe('teams_add_chat_members', () => {
     expect(preview?.confirmToken).toBeUndefined();
     expect(payload(data)).toMatchObject({
       status: 'unchanged',
-      results: [{ person: BEA, mri: BEA, name: 'Bea Example', status: 'already_member' }],
+      results: [{ person: BEA, mri: BEA, name: 'Bea Example', source: 'id', status: 'already_member' }],
     });
     expect(addMember).not.toHaveBeenCalled();
   });
@@ -296,6 +329,68 @@ describe('teams_add_chat_members', () => {
     expect(addMember).not.toHaveBeenCalled();
   });
 
+  it('falls back to the directory for a name not in your chats, previewing the source and email', async () => {
+    const { chatsvc, addMember } = fakeWith();
+    const { substrate, suggestPeople } = fakeSubstrate([GARY]);
+    const { preview } = await phaseOne(
+      chatsvc,
+      'teams_add_chat_members',
+      { conversation: GROUP, people: ['Gary Solomon', 'Greg King'] },
+      substrate,
+    );
+    expect(fenced(preview?.preview?.add)).toEqual([
+      { person: 'Gary Solomon', mri: GARY.mri, name: 'Solomon, Gary', source: 'directory', email: GARY.email },
+      { person: 'Greg King', mri: GREG, name: 'King, Greg', source: 'chat' },
+    ]);
+    expect(suggestPeople).toHaveBeenCalledTimes(1);
+    expect(addMember).not.toHaveBeenCalled();
+  });
+
+  it('adds someone named by email address, found in the directory', async () => {
+    const { chatsvc, addMember } = fakeWith();
+    const { data } = await confirmed(
+      chatsvc,
+      'teams_add_chat_members',
+      { conversation: GROUP, people: ['GSolomon@example.test'] },
+      fakeSubstrate([GARY]).substrate,
+    );
+    expect(addMember.mock.calls).toEqual([[GROUP, GARY.mri, 'User']]);
+    expect(payload(data).results).toEqual([
+      {
+        person: 'GSolomon@example.test',
+        mri: GARY.mri,
+        name: 'Solomon, Gary',
+        source: 'directory',
+        email: GARY.email,
+        status: 'added',
+        verified: true,
+      },
+    ]);
+  });
+
+  it('never asks the directory when everyone is found in your chats or by MRI', async () => {
+    const { chatsvc } = fakeWith();
+    const { substrate, suggestPeople } = fakeSubstrate([GARY]);
+    await phaseOne(chatsvc, 'teams_add_chat_members', { conversation: GROUP, people: ['Greg King', SAM] }, substrate);
+    expect(suggestPeople).not.toHaveBeenCalled();
+  });
+
+  it('refuses, keeping the remedy, when the directory cannot be searched', async () => {
+    const { chatsvc, addMember } = fakeWith();
+    const fail = new Error('could not capture a Substrate search token from the browser (timed out)');
+    const { first } = await phaseOne(
+      chatsvc,
+      'teams_add_chat_members',
+      { conversation: GROUP, people: ['Gary Solomon'] },
+      fakeSubstrate([], fail).substrate,
+    );
+    expect(first.isError).toBe(true);
+    expect(errorText(first)).toMatch(/directory could not be searched/);
+    expect(errorText(first)).toMatch(/timed out/);
+    expect(errorText(first)).toMatch(/search box/);
+    expect(addMember).not.toHaveBeenCalled();
+  });
+
   it.each(NON_GROUPS)('refuses %s', async (_label, conversation, why) => {
     const { chatsvc, addMember } = fakeWith();
     const { first } = await phaseOne(chatsvc, 'teams_add_chat_members', { conversation, people: [SAM] });
@@ -314,8 +409,8 @@ describe('teams_add_chat_members', () => {
     const { data } = await confirmed(chatsvc, 'teams_add_chat_members', { conversation: GROUP, people: [GREG, SAM] });
     const p = payload(data);
     expect(p.results).toEqual([
-      { person: GREG, mri: GREG, name: 'King, Greg', status: 'added', verified: true },
-      { person: SAM, mri: SAM, status: 'unknown', verified: false },
+      { person: GREG, mri: GREG, name: 'King, Greg', source: 'id', status: 'added', verified: true },
+      { person: SAM, mri: SAM, source: 'id', status: 'unknown', verified: false },
     ]);
     expect(p.warning).toMatch(/check the chat/i);
   });
@@ -329,8 +424,8 @@ describe('teams_add_chat_members', () => {
     });
     const { data } = await confirmed(chatsvc, 'teams_add_chat_members', { conversation: GROUP, people: [GREG, SAM] });
     expect(payload(data).results).toEqual([
-      { person: GREG, mri: GREG, name: 'King, Greg', status: 'failed', error: 'Teams chat service returned HTTP 403.' },
-      { person: SAM, mri: SAM, status: 'added', verified: true },
+      { person: GREG, mri: GREG, name: 'King, Greg', source: 'id', status: 'failed', error: 'Teams chat service returned HTTP 403.' },
+      { person: SAM, mri: SAM, source: 'id', status: 'added', verified: true },
     ]);
   });
 
@@ -349,7 +444,7 @@ describe('teams_remove_chat_members', () => {
     expect(preview?.confirmToken).toEqual(expect.any(String));
     expect(preview?.preview?.method).toBe('DELETE');
     expect(preview?.preview?.path).toBe(`/threads/${ENC}/members`);
-    expect(fenced(preview?.preview?.remove)).toEqual([{ person: 'Example, Bea', mri: BEA, name: 'Bea Example' }]);
+    expect(fenced(preview?.preview?.remove)).toEqual([{ person: 'Example, Bea', mri: BEA, name: 'Bea Example', source: 'chat' }]);
     expect(removeMember).not.toHaveBeenCalled();
   });
 
@@ -367,11 +462,24 @@ describe('teams_remove_chat_members', () => {
       status: 'done',
       conversation: { id: GROUP, title: 'Project Falcon', kind: 'group' },
       results: [
-        { person: 'Example, Bea', mri: BEA, name: 'Bea Example', status: 'removed', verified: true },
-        { person: 'greg king', mri: GREG, name: 'King, Greg', status: 'removed', verified: true },
-        { person: SAM, mri: SAM, status: 'not_member' },
+        { person: 'Example, Bea', mri: BEA, name: 'Bea Example', source: 'chat', status: 'removed', verified: true },
+        { person: 'greg king', mri: GREG, name: 'King, Greg', source: 'chat', status: 'removed', verified: true },
+        { person: SAM, mri: SAM, source: 'id', status: 'not_member' },
       ],
     });
+  });
+
+  it('previews a directory hit with its source and email', async () => {
+    const { chatsvc } = fakeWith({ members: [ME, BEA, GARY.mri] });
+    const { preview } = await phaseOne(
+      chatsvc,
+      'teams_remove_chat_members',
+      { conversation: GROUP, people: ['gary.solomon@example.test'] },
+      fakeSubstrate([GARY]).substrate,
+    );
+    expect(fenced(preview?.preview?.remove)).toEqual([
+      { person: 'gary.solomon@example.test', mri: GARY.mri, name: 'Solomon, Gary', source: 'directory', email: GARY.email },
+    ]);
   });
 
   it('returns at once, with no confirmation, when no one named is a member', async () => {
@@ -402,7 +510,7 @@ describe('teams_remove_chat_members', () => {
     const { chatsvc } = fakeWith({ overrides: { removeMember: vi.fn().mockRejectedValue(unknownOutcome('DELETE')) } });
     const { data } = await confirmed(chatsvc, 'teams_remove_chat_members', { conversation: GROUP, people: [BEA] });
     const p = payload(data);
-    expect(p.results).toEqual([{ person: BEA, mri: BEA, name: 'Bea Example', status: 'unknown', verified: false }]);
+    expect(p.results).toEqual([{ person: BEA, mri: BEA, name: 'Bea Example', source: 'id', status: 'unknown', verified: false }]);
     expect(p.warning).toMatch(/HTTP 504/);
   });
 
@@ -415,7 +523,7 @@ describe('teams_remove_chat_members', () => {
     });
     const { data } = await confirmed(chatsvc, 'teams_remove_chat_members', { conversation: GROUP, people: [BEA] });
     const p = payload(data);
-    expect(p.results).toEqual([{ person: BEA, mri: BEA, name: 'Bea Example', status: 'removed', verified: null }]);
+    expect(p.results).toEqual([{ person: BEA, mri: BEA, name: 'Bea Example', source: 'id', status: 'removed', verified: null }]);
     expect(p.warning).toMatch(/reading the chat back failed/);
   });
 });
@@ -426,7 +534,7 @@ describe('annotations', () => {
     ['teams_add_chat_members', false],
     ['teams_remove_chat_members', true],
   ] as const)('%s is an idempotent, open-world write (destructive: %s) taking a confirmToken', async (name, destructive) => {
-    const h = await createTestHarness((server) => registerGroupChatTools(server, { chatsvc: fakeWith().chatsvc }));
+    const h = await createTestHarness((server) => registerGroupChatTools(server, { chatsvc: fakeWith().chatsvc, substrate: fakeSubstrate().substrate }));
     try {
       const tool = (await h.client.listTools()).tools.find((t) => t.name === name)!;
       expect(tool.annotations).toMatchObject({
@@ -438,6 +546,12 @@ describe('annotations', () => {
       expect(tool.description).toMatch(/confirmToken/);
       expect(tool.description).toMatch(/notice/);
       expect(tool.inputSchema.properties).toHaveProperty('confirmToken');
+      if (name !== 'teams_rename_chat') {
+        expect(tool.description).toMatch(/directory/);
+        expect(tool.description).toMatch(/email/);
+        expect(tool.description).toMatch(/search box/);
+        expect(JSON.stringify(tool.inputSchema.properties?.people)).toMatch(/directory/);
+      }
     } finally {
       await h.close();
     }

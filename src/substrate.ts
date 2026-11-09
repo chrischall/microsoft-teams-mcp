@@ -47,6 +47,24 @@
  *     stays client-side.
  *   - A bad token is a 401.
  *
+ * People lookup (`suggestPeople`, the directory fallback of
+ * `teams_add_chat_members` / `teams_remove_chat_members`), verified live
+ * 2026-11-09 with the SAME captured token — no new token or bridge scope:
+ *
+ *   POST https://substrate.office.com/search/api/v1/suggestions?scenario=powerbar
+ *        { EntityRequests: [{ EntityType: "People", Query: { QueryString },
+ *            Size }], Cvid, LogicalId, Scenario: { Name: "powerbar" } }
+ *   → { Groups: [{ Type: "People", Suggestions: [{ DisplayName,
+ *          EmailAddresses: string[], UserPrincipalName, JobTitle, Department,
+ *          PeopleSubtype, MRI, ExternalDirectoryObjectId, … }] }] }
+ *
+ *   - A surname, or "First Last", found the person; their
+ *     `ExternalDirectoryObjectId` is their Entra oid, and their chat MRI is
+ *     `8:orgid:<that oid>`.
+ *   - `PeopleSubtype` seen: `OrganizationUser`, `PersonalContact`, `Unknown`,
+ *     `PublicDistributionList` — only the first can be a chat member.
+ *   - The v2 query endpoint with `EntityType: "People"` is a 400: not used.
+ *
  * As with the other clients, the bridge is touched only to capture the token
  * (`substrate-auth.ts`); every request is a plain Node `fetch`.
  */
@@ -56,6 +74,13 @@ import { createCapturedTokenManager, type TokenManager } from '@chrischall/mcp-u
 import { createSubstrateTokenCache } from './substrate-token-cache.js';
 
 export const SUBSTRATE_QUERY_URL = 'https://substrate.office.com/searchservice/api/v2/query';
+export const SUBSTRATE_SUGGESTIONS_URL = 'https://substrate.office.com/search/api/v1/suggestions?scenario=powerbar';
+
+/** Directory suggestions asked for when the caller names no size. */
+const DEFAULT_SUGGESTIONS = 10;
+
+/** Most suggestions one lookup asks for. */
+const MAX_SUGGESTIONS = 25;
 
 /**
  * How long after a failed capture (or a 401 on a freshly captured token) an
@@ -117,10 +142,25 @@ export interface SubstratePage {
   unmapped: number;
 }
 
-/** What `teams_search_messages` needs of a Substrate client — tests pass a fake. */
+/** A person from the directory who can be a chat member. Every field but the MRI and name is best-effort. */
+export interface DirectoryPerson {
+  /** `8:orgid:<oid>`. */
+  mri: string;
+  name: string;
+  email?: string;
+  upn?: string;
+  jobTitle?: string;
+  department?: string;
+}
+
+/**
+ * What `teams_search_messages` and the group-chat member tools need of a
+ * Substrate client — tests pass a fake. `force` skips the capture cooldown.
+ */
 export interface SubstrateSearch {
   isConfigured(): boolean;
   searchMessages(req: SubstrateSearchRequest, opts?: { force?: boolean }): Promise<SubstratePage>;
+  suggestPeople(text: string, opts?: { size?: number; force?: boolean }): Promise<DirectoryPerson[]>;
 }
 
 /** `sent>=` takes an unquoted ISO date-time (a quoted one was mis-read live); whole seconds, rounded down. */
@@ -252,6 +292,82 @@ export function parseQueryResponse(body: unknown): SubstratePage {
   };
 }
 
+/** The suggestions body, as verified live 2026-11-09 (capitalised keys, as Teams sends them). */
+export function buildSuggestionsBody(text: string, size: number): Record<string, unknown> {
+  return {
+    EntityRequests: [{ EntityType: 'People', Query: { QueryString: text }, Size: size }],
+    Cvid: crypto.randomUUID(),
+    LogicalId: crypto.randomUUID(),
+    Scenario: { Name: 'powerbar' },
+  };
+}
+
+const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const ORGID_MRI = /^8:orgid:\S+$/i;
+
+/**
+ * A suggestion as a directory person, or `undefined` when it cannot be a chat
+ * member: only an `OrganizationUser` (or an entry with no subtype) with a
+ * usable id — its `MRI` when that is `8:orgid:…`, else `8:orgid:<its
+ * ExternalDirectoryObjectId, lower-cased>`.
+ */
+function mapSuggestion(raw: unknown): DirectoryPerson | undefined {
+  const r = obj(raw);
+  if (r === undefined) return undefined;
+  const subtype = str(r.PeopleSubtype);
+  if (subtype !== undefined && subtype !== 'OrganizationUser') return undefined;
+  const mriField = str(r.MRI)?.trim();
+  const oid = str(r.ExternalDirectoryObjectId)?.trim();
+  const mri =
+    mriField !== undefined && ORGID_MRI.test(mriField)
+      ? mriField
+      : oid !== undefined && GUID.test(oid)
+        ? `8:orgid:${oid.toLowerCase()}`
+        : undefined;
+  if (mri === undefined) return undefined;
+  const email = Array.isArray(r.EmailAddresses) ? r.EmailAddresses.map(str).find((e) => e !== undefined) : undefined;
+  const upn = str(r.UserPrincipalName);
+  const name = str(r.DisplayName)?.trim() ?? email ?? upn ?? mri;
+  const jobTitle = str(r.JobTitle);
+  const department = str(r.Department);
+  return {
+    mri,
+    name,
+    ...(email !== undefined ? { email } : {}),
+    ...(upn !== undefined ? { upn } : {}),
+    ...(jobTitle !== undefined ? { jobTitle } : {}),
+    ...(department !== undefined ? { department } : {}),
+  };
+}
+
+/** Parse a suggestions response into the people who can be chat members, one per MRI. Never throws on shape. */
+export function parseSuggestionsResponse(body: unknown): DirectoryPerson[] {
+  const groups = obj(body)?.Groups;
+  if (!Array.isArray(groups)) return [];
+  const byMri = new Map<string, DirectoryPerson>();
+  for (const g of groups) {
+    const group = obj(g);
+    if (group?.Type !== 'People' || !Array.isArray(group.Suggestions)) continue;
+    for (const raw of group.Suggestions) {
+      const p = mapSuggestion(raw);
+      if (p !== undefined && !byMri.has(p.mri.toLowerCase())) byMri.set(p.mri.toLowerCase(), p);
+    }
+  }
+  return [...byMri.values()];
+}
+
+/** What a request is for: words its errors, and names its host on a transport failure. */
+interface Lookup {
+  url: string;
+  /** "Substrate search" / "Substrate people lookup". */
+  service: string;
+  /** "searches" / "people lookups", for the 429. */
+  plural: string;
+}
+
+const SEARCH: Lookup = { url: SUBSTRATE_QUERY_URL, service: 'Substrate search', plural: 'searches' };
+const PEOPLE: Lookup = { url: SUBSTRATE_SUGGESTIONS_URL, service: 'Substrate people lookup', plural: 'people lookups' };
+
 export interface SubstrateClientOptions {
   env?: NodeJS.ProcessEnv;
   /** Injected for tests so no suite ever touches the real bridge. */
@@ -305,16 +421,38 @@ export class SubstrateClient implements SubstrateSearch {
   }
 
   async searchMessages(req: SubstrateSearchRequest, opts: { force?: boolean } = {}): Promise<SubstratePage> {
+    return parseQueryResponse(await this.#post(SEARCH, buildQueryBody(req), opts.force === true));
+  }
+
+  /**
+   * People in the directory matching `text` (a name, part of one, or an
+   * address), as Teams' search box suggests them — only those who can be a
+   * chat member (see {@link parseSuggestionsResponse}). Blank text asks nothing.
+   */
+  async suggestPeople(text: string, opts: { size?: number; force?: boolean } = {}): Promise<DirectoryPerson[]> {
+    const q = text.trim();
+    if (q === '') return [];
+    const size = Math.min(Math.max(1, Math.floor(opts.size ?? DEFAULT_SUGGESTIONS)), MAX_SUGGESTIONS);
+    return parseSuggestionsResponse(await this.#post(PEOPLE, buildSuggestionsBody(q, size), opts.force === true));
+  }
+
+  /**
+   * POST `body` to Substrate with the captured token and return the parsed
+   * JSON: the config error, the capture cooldown (unless `force`), one
+   * re-capture on a 401, a bounded read, no redirects, and the status mapped
+   * to an `McpToolError` — the body is never echoed.
+   */
+  async #post(lookup: Lookup, body: Record<string, unknown>, force: boolean): Promise<unknown> {
     if (this.#configError) throw this.#configError;
     const failed = this.#captureFailure;
-    if (!opts.force && failed !== null && Date.now() - failed.at < CAPTURE_RETRY_COOLDOWN_MS) throw failed.error;
+    if (!force && failed !== null && Date.now() - failed.at < CAPTURE_RETRY_COOLDOWN_MS) throw failed.error;
 
     let text = '';
     const res = await this.#manager.withAuth(async (token) => {
       let r: Awaited<ReturnType<typeof fetchBounded<'text'>>>;
       try {
         r = await fetchBounded(
-          SUBSTRATE_QUERY_URL,
+          lookup.url,
           {
             method: 'POST',
             headers: {
@@ -322,7 +460,7 @@ export class SubstrateClient implements SubstrateSearch {
               'content-type': 'application/json',
               accept: 'application/json',
             },
-            body: JSON.stringify(buildQueryBody(req)),
+            body: JSON.stringify(body),
             redirect: 'error',
           },
           {
@@ -334,32 +472,32 @@ export class SubstrateClient implements SubstrateSearch {
           },
         );
       } catch (e) {
-        throw describeTransportFailure(e, SUBSTRATE_QUERY_URL, 'Substrate search') ?? e;
+        throw describeTransportFailure(e, lookup.url, lookup.service) ?? e;
       }
       text = r.body;
       return r.res;
     });
 
     try {
-      checkStatus(res.status);
+      checkStatus(res.status, lookup);
     } catch (error) {
       // A 401 here is on a token `withAuth` just re-captured: the capture itself
       // is not yielding a usable token. Cool down like a failed capture, so each
-      // unforced search does not hold the call for another capture window.
+      // unforced call does not hold the caller for another capture window.
       if (res.status === 401) this.#captureFailure = { at: Date.now(), error };
       throw error;
     }
     try {
-      return parseQueryResponse(JSON.parse(text));
+      return JSON.parse(text);
     } catch {
-      // Never echo the body: it holds message content.
+      // Never echo the body: it holds message content or people's details.
       throw new McpToolError('Substrate returned a response that is not JSON.', { status: res.status, kind: 'http' });
     }
   }
 }
 
 /** Map a non-2xx to an `McpToolError` carrying its status. The body is never included. */
-function checkStatus(status: number): void {
+function checkStatus(status: number, lookup: Lookup): void {
   if (status >= 200 && status < 300) return;
   if (status === 401) {
     throw new McpToolError('Substrate rejected the search token (401) even after a fresh capture.', {
@@ -369,9 +507,13 @@ function checkStatus(status: number): void {
     });
   }
   if (status === 429) {
-    throw new McpToolError('Substrate is rate-limiting searches (429).', { status, kind: 'http', hint: 'Wait a minute before retrying.' });
+    throw new McpToolError(`Substrate is rate-limiting ${lookup.plural} (429).`, {
+      status,
+      kind: 'http',
+      hint: 'Wait a minute before retrying.',
+    });
   }
-  throw new McpToolError(`Substrate search returned HTTP ${status}.`, {
+  throw new McpToolError(`${lookup.service} returned HTTP ${status}.`, {
     status,
     kind: 'http',
     ...(status >= 500 ? { hint: 'A Substrate-side failure; retry shortly.' } : {}),
