@@ -163,12 +163,12 @@ describe('captureSharePointTokenViaFetchproxy', () => {
     await expect(captureSharePointTokenViaFetchproxy(HOST)).rejects.toThrow(/no header/);
   });
 
-  it('wraps a capture failure with guidance to interact with Teams / open a OneDrive file', async () => {
+  it('wraps a capture failure with guidance to reload the signed-in Teams tab', async () => {
     captureRequestHeader.mockRejectedValue(new Error('timed out'));
     const err = await captureSharePointTokenViaFetchproxy(HOST).catch((e: Error) => e);
     expect((err as Error).message).toMatch(/timed out/);
-    // The token is captured from the OneDrive host, not by opening the team-site
-    // file, so the hint points at interacting with Teams / one's own OneDrive.
+    // The token is captured while the signed-in Teams tab loads, not by opening
+    // the team-site file, so the hint points at reloading that tab.
     expect((err as Error).message).toMatch(/reload your signed-in Teams tab/i);
     expect((err as Error).message).toMatch(new RegExp(HOST.replace(/\./g, '\\.')));
   });
