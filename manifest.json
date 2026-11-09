@@ -143,7 +143,7 @@
     "confirm_mode": {
       "type": "string",
       "title": "Write confirmation mode (optional)",
-      "description": "Optional. What the writes (teams_send_message, teams_react, teams_mark_read and the read tools' mark_read) do on a client that cannot show a confirmation prompt (claude.ai, Claude Desktop): \"ask-user\" (default: the first call returns a preview and a confirmToken, and the model must get your approval in chat before using it), \"auto\" (the model may use the token after reviewing the preview itself) or \"refuse\". An unrecognised value is treated as refuse. Leave blank for the default.",
+      "description": "Optional. What the writes (teams_send_message, teams_react, teams_mark_read, teams_rename_chat, teams_add_chat_members, teams_remove_chat_members and the read tools' mark_read) do on a client that cannot show a confirmation prompt (claude.ai, Claude Desktop): \"ask-user\" (default: the first call returns a preview and a confirmToken, and the model must get your approval in chat before using it), \"auto\" (the model may use the token after reviewing the preview itself) or \"refuse\". An unrecognised value is treated as refuse. Leave blank for the default.",
       "required": false
     },
     "confirm_elicitation": {
@@ -206,6 +206,18 @@
     {
       "name": "teams_mark_read",
       "description": "Mark a chat or channel read up to a message, clearing its unread badge (never backwards) — asks you to confirm first"
+    },
+    {
+      "name": "teams_rename_chat",
+      "description": "Rename a group chat (Teams posts a notice in the chat) — asks you to confirm first"
+    },
+    {
+      "name": "teams_add_chat_members",
+      "description": "Add people to a group chat, by MRI or by name from your chats (Teams posts a notice in the chat) — asks you to confirm first"
+    },
+    {
+      "name": "teams_remove_chat_members",
+      "description": "Remove people from a group chat, by MRI or by name from your chats (Teams posts a notice in the chat) — asks you to confirm first"
     },
     {
       "name": "teams_list_activity",

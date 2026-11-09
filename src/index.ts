@@ -14,6 +14,7 @@ import { registerAttachmentTools } from './tools/attachment.js';
 import { registerSendTools } from './tools/send.js';
 import { registerReactTools } from './tools/react.js';
 import { registerMarkReadTools } from './tools/markread.js';
+import { registerGroupChatTools } from './tools/group-chat.js';
 import { registerActivityTools } from './tools/activity.js';
 import { registerSearchTools } from './tools/search.js';
 import { registerHealthcheckTool } from './tools/healthcheck.js';
@@ -53,6 +54,7 @@ await runMcp({
     registerSendTools,
     registerReactTools,
     registerMarkReadTools,
+    registerGroupChatTools,
     registerActivityTools,
     registerSearchTools,
     registerExportTools,

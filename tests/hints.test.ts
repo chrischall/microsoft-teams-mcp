@@ -35,6 +35,9 @@ const EXPECTED_INTENT: Record<string, string> = {
   teams_get_transcript: 'lookup',
   teams_send_message: 'send',
   teams_react: 'send',
+  teams_rename_chat: 'send',
+  teams_add_chat_members: 'send',
+  teams_remove_chat_members: 'send',
   teams_mark_read: 'change',
 };
 

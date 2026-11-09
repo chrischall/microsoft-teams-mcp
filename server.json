@@ -116,7 +116,7 @@
         },
         {
           "name": "MCP_CONFIRM_MODE",
-          "description": "What the writes (teams_send_message, teams_react, teams_mark_read and the read tools' mark_read) do on a client that cannot show a confirmation prompt (claude.ai, Claude Desktop): \"ask-user\" (default: the first call returns a preview and a confirmToken, and the model must get your approval in chat before using it), \"auto\" (the model may use the token after reviewing the preview itself) or \"refuse\". An unrecognised value is treated as refuse.",
+          "description": "What the writes (teams_send_message, teams_react, teams_mark_read, teams_rename_chat, teams_add_chat_members, teams_remove_chat_members and the read tools' mark_read) do on a client that cannot show a confirmation prompt (claude.ai, Claude Desktop): \"ask-user\" (default: the first call returns a preview and a confirmToken, and the model must get your approval in chat before using it), \"auto\" (the model may use the token after reviewing the preview itself) or \"refuse\". An unrecognised value is treated as refuse.",
           "isRequired": false,
           "format": "string",
           "isSecret": false

@@ -36,7 +36,9 @@ By default nothing here marks anything read. Reading a chat through this
 server leaves your Teams unread badges exactly as they were — unless you ask
 for it: `teams_mark_read`, or `mark_read: true` on `teams_list_messages`
 / `teams_list_unread_messages`, moves your read marker forward. The writes —
-`teams_send_message`, `teams_react` and marking read — go through the same
+`teams_send_message`, `teams_react`, marking read, and renaming a group chat
+or adding and removing its members (`teams_rename_chat`,
+`teams_add_chat_members`, `teams_remove_chat_members`) — go through the same
 chat-service API and change nothing until you confirm (see
 [Writes](#writes)).
 
@@ -594,6 +596,30 @@ Everything is optional — by default the token is captured from your browser.
   `new_horizon_message_id`. The marker never moves backwards: when it is
   already at or past the target, nothing is written (no confirmation is
   asked) and `status` is `already_read`. Only you see your read marker.
+- `teams_rename_chat` — rename a group chat (set its topic): `name` is
+  trimmed and must not be empty. Only group chats — 1:1s, meeting chats,
+  channels and the self-chat are refused. Teams posts a notice in the chat,
+  so everyone in it sees the rename. The preview shows the current and new
+  name; renaming to the current name writes nothing and asks nothing. The
+  chat is read back to verify the new name (`verified`).
+- `teams_add_chat_members` — add `people` (1–20) to a group chat as
+  ordinary members. Each person is an MRI (`8:orgid:…`), a bare object id,
+  or a display name matched — ignoring case, with "Greg King" and
+  "King, Greg" the same — among the other person of each of your 1:1 chats
+  and the chat's recent senders. There is no directory search, so anyone
+  else needs their MRI; an ambiguous or unknown name refuses the whole call
+  with the candidates. People already in the chat are reported as
+  `already_member` and not written (if everyone is, nothing is asked). Teams
+  posts a notice in the chat for each person added. The chat is read back,
+  and each person is reported `added`, `already_member`, `unknown` (Teams
+  did not confirm and the read-back does not show them) or `failed` (with
+  the error).
+- `teams_remove_chat_members` — remove `people` (1–20, named as for
+  `teams_add_chat_members`) from a group chat; refuses to remove you (leave
+  the chat in Teams instead). People not in the chat are reported as
+  `not_member` and not written. Teams posts a notice in the chat for each
+  person removed, and they lose access to it. Each person is reported
+  `removed`, `not_member`, `unknown` or `failed`.
 
 `teams_list_messages` and `teams_list_unread_messages` also write when — and only
 when — you pass `mark_read: true` (see above). Every other tool is
@@ -601,13 +627,15 @@ read-only, and nothing marks anything read unless you ask it to.
 
 ## Writes
 
-A post and a reaction are visible to everyone in the conversation, and
-marking read clears your unread badges, so each write asks you first. A
+A post, a reaction, a rename and a membership change are visible to everyone
+in the conversation, and marking read clears your unread badges, so each
+write asks you first. A
 client that can show a confirmation prompt (Claude Code) shows one. On a
 client that cannot, the first call changes nothing and returns a
 `confirmation-required` preview — the conversation, the exact text, any
-mentions, the quoted message, the reaction, or the message your read marker
-moves to and where it was, with everything other people wrote (titles,
+mentions, the quoted message, the reaction, the message your read marker
+moves to and where it was, a chat's current and new name, or who is added or
+removed, with everything other people wrote (titles,
 names, quoted text) fenced as untrusted — plus a `confirmToken`; only a
 repeat call with that token writes. With `mark_read` on
 `teams_list_messages` / `teams_list_unread_messages`, that first call returns just
@@ -627,8 +655,9 @@ itself, so keep `MCP_CONFIRM_MODE=ask-user` and approve each preview in chat
 as the real guard on what gets posted.
 
 **Try it in your own notes first.** The conversation `48:notes` (also by the
-name `notes` or `self`) is your Teams self-chat ("notes to self"): every write
-accepts it, `teams_list_messages` reads it, nobody else sees it, and
+name `notes` or `self`) is your Teams self-chat ("notes to self"): sending,
+reacting and marking read accept it (the group-chat tools do not — it has no
+one else in it), `teams_list_messages` reads it, nobody else sees it, and
 it is the safe place to see what a message or reaction will look like. Every
 other `48:` system conversation (calendar and the like) is refused.
 
@@ -641,7 +670,10 @@ is `status: "unknown"` only when that does not show the change. A read-marker
 move Teams does not confirm is `status: "unknown"` (`marked_read: false` with a
 `mark_read_warning` from the read tools); moving it again to the same message
 is harmless. Marking read (`PUT …/properties?name=consumptionhorizon`) was
-verified live on `48:notes` on 2026-10-12. Threaded channel replies, @mentions,
+verified live on `48:notes` on 2026-10-12. A rename or membership change
+Teams does not confirm is settled the same way, by reading the chat back;
+renaming, adding and removing (`/threads/{id}/properties?name=topic` and
+`/threads/{id}/members/{mri}`) were verified live on 2026-11-09. Threaded channel replies, @mentions,
 removing a reaction and the ✅ reaction's key follow Teams' documented or
 inferred shapes but have not been verified against a live tenant yet.
 

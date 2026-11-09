@@ -14,7 +14,7 @@ import { servedTools } from './served-tools.js';
  */
 describe('every tool declares what it does', () => {
   it('covers the full served surface (guards against a registrar being dropped)', async () => {
-    expect(await servedTools()).toHaveLength(14);
+    expect(await servedTools()).toHaveLength(17);
   });
 
   it('sets an explicit boolean readOnlyHint and openWorldHint on all of them', async () => {
@@ -42,10 +42,13 @@ describe('every tool declares what it does', () => {
       .map((t) => t.name)
       .sort();
     expect(writes).toEqual([
+      'teams_add_chat_members',
       'teams_list_messages',
       'teams_list_unread_messages',
       'teams_mark_read',
       'teams_react',
+      'teams_remove_chat_members',
+      'teams_rename_chat',
       'teams_send_message',
     ]);
   });
@@ -65,6 +68,20 @@ describe('every tool declares what it does', () => {
     expect(react?.annotations).toMatchObject({
       readOnlyHint: false,
       destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    });
+  });
+
+  it.each([
+    ['teams_rename_chat', false],
+    ['teams_add_chat_members', false],
+    ['teams_remove_chat_members', true],
+  ] as const)('publishes %s as idempotent with destructiveHint %s (a repeat changes nothing; only removal takes access away)', async (name, destructive) => {
+    const tool = (await servedTools()).find((t) => t.name === name);
+    expect(tool?.annotations).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: destructive,
       idempotentHint: true,
       openWorldHint: true,
     });
