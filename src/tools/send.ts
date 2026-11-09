@@ -37,9 +37,10 @@ import {
   type MentionTarget,
   type QuotedMessage,
 } from '../compose.js';
-import { htmlToText, isUserMessage, normaliseMessage, SELF_CHAT, senderMri } from '../model.js';
+import { htmlToText, normaliseMessage, SELF_CHAT, senderMri } from '../model.js';
 import { resolveListed } from './conversation.js';
 import { wrapApiError } from './errors.js';
+import { MRI, recentSenders } from './people.js';
 import {
   THIRD_PARTY_NAMES_NOTE,
   untrustedField,
@@ -57,8 +58,7 @@ const TOOL = 'teams_send_message';
  */
 export { SELF_CHAT };
 
-/** Recent messages scanned for mention candidates and for the read-back. */
-const RECENT_MESSAGES = 200;
+/** Recent messages scanned for the read-back. */
 const READBACK_MESSAGES = 50;
 
 /** Candidates a mention error lists. */
@@ -66,9 +66,6 @@ const MAX_CANDIDATES = 10;
 
 /** Previewed text of a quoted message. */
 const PREVIEW_CHARS = 200;
-
-/** An MRI such as `8:orgid:<oid>` (a person) or `28:<id>` (a bot). */
-const MRI = /^\d+:\S+$/;
 
 export interface Target {
   id: string;
@@ -109,17 +106,6 @@ export async function resolveTarget(
   const raw = await chatsvc.listConversations();
   const s = await resolveListed(chatsvc, raw, me, conversation, verb);
   return { id: s.id, title: s.title, kind: s.kind, ...(s.participants !== undefined ? { participants: s.participants } : {}) };
-}
-
-/** Who has written in the conversation lately, by MRI → display name. */
-async function recentSenders(chatsvc: ChatServiceClient, conversationId: string): Promise<Map<string, string>> {
-  const out = new Map<string, string>();
-  for (const m of await chatsvc.getMessages(conversationId, { max: RECENT_MESSAGES })) {
-    const mri = senderMri(m.from);
-    const name = m.imdisplayname?.trim();
-    if (isUserMessage(m) && mri !== undefined && name && !out.has(mri)) out.set(mri, name);
-  }
-  return out;
 }
 
 /**

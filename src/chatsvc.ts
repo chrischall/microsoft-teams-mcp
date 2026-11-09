@@ -8,9 +8,11 @@
  *
  * Reads are `listConversations`, `getMessages` (which also reads the Activity
  * feed, conversation `48:notifications`), `getMessage` and
- * `fetchImage`; the writes are `sendMessage`, `setReaction`,
- * `removeReaction` and `setConsumptionHorizon`, which only the confirm-gated
- * `teams_send_message`, `teams_react` and `teams_mark_read` (and the read
+ * `fetchImage` and `getThread`; the writes are `sendMessage`, `setReaction`,
+ * `removeReaction`, `setConsumptionHorizon`, `setTopic`, `addMember` and
+ * `removeMember`, which only the confirm-gated `teams_send_message`,
+ * `teams_react`, `teams_mark_read`, `teams_rename_chat`,
+ * `teams_add_chat_members` and `teams_remove_chat_members` (and the read
  * tools' opt-in `mark_read`) call. A read never writes the read marker
  * (`consumptionhorizon`) on its own, so reading a chat through this MCP leaves
  * the user's unread badges alone unless they ask for it to be marked read.
@@ -127,6 +129,9 @@ const SEND_OUTCOME_HINT =
 const REACTION_OUTCOME_HINT =
   'The reaction change may already have been applied — check the message (teams_list_messages) before retrying.';
 
+const THREAD_OUTCOME_HINT =
+  'The change to the chat may already have been applied — check the chat (its name and members) before retrying.';
+
 const HORIZON_OUTCOME_HINT =
   'The read marker may already have moved — check the conversation (teams_list_messages) before retrying; ' +
   'moving it again to the same message is harmless.';
@@ -178,6 +183,16 @@ export interface RawConversation {
     privacy?: string;
     [key: string]: string | undefined;
   };
+}
+
+/**
+ * `GET /threads/{id}?view=msnp24Equivalent` (verified live 2026-11-09): a
+ * chat's topic and members. Members carry MRIs and roles only, no names.
+ */
+export interface RawThread {
+  id: string;
+  properties?: { topic?: string; threadType?: string; [key: string]: unknown };
+  members?: { id: string; role?: string; type?: string }[];
 }
 
 /** One entry of `GET /users/ME/conversations/{id}/messages`. */
@@ -523,6 +538,47 @@ export class ChatServiceClient {
   }
 
   /**
+   * A chat thread's topic and members (`GET /threads/{id}?view=msnp24Equivalent`,
+   * verified live 2026-11-09). Members are MRIs and roles only.
+   */
+  async getThread(id: string): Promise<RawThread> {
+    this.#requireConfigured();
+    return this.#getJson<RawThread>(`${this.#threadUrl(id)}?view=msnp24Equivalent`);
+  }
+
+  /**
+   * Rename a group chat: `PUT /threads/{id}/properties?name=topic` with
+   * `{ topic }` (verified live 2026-11-09: 200, `{}`). Teams posts a notice in
+   * the chat. A lost answer is a `WriteOutcomeUnknownError`.
+   */
+  async setTopic(id: string, topic: string): Promise<void> {
+    await this.#writeThread('PUT', `${this.#threadUrl(id)}/properties?name=topic`, { topic });
+  }
+
+  /**
+   * Add someone to a group chat: `PUT /threads/{id}/members/{mri}` with
+   * `{ role }` (verified live 2026-11-09). Repeating it is harmless.
+   */
+  async addMember(id: string, mri: string, role: 'User' | 'Admin' = 'User'): Promise<void> {
+    await this.#writeThread('PUT', `${this.#threadUrl(id)}/members/${encodeURIComponent(mri)}`, { role });
+  }
+
+  /** Remove someone from a group chat: `DELETE /threads/{id}/members/{mri}`, no body (verified live 2026-11-09). */
+  async removeMember(id: string, mri: string): Promise<void> {
+    await this.#writeThread('DELETE', `${this.#threadUrl(id)}/members/${encodeURIComponent(mri)}`);
+  }
+
+  #threadUrl(id: string): string {
+    return `${this.#baseUrl}/threads/${encodeURIComponent(id)}`;
+  }
+
+  async #writeThread(method: 'PUT' | 'DELETE', url: string, body?: unknown): Promise<void> {
+    this.#requireConfigured();
+    const { status } = await this.#send(url, 'text', undefined, { method, body, hint: THREAD_OUTCOME_HINT });
+    this.#checkWriteStatus(method, status, THREAD_OUTCOME_HINT);
+  }
+
+  /**
    * Download an inline image (`<img src>` in a message body).
    *
    * The URL comes out of message content — i.e. it is attacker-influenced —
@@ -648,10 +704,12 @@ export class ChatServiceClient {
     read: 'text' | 'bytes',
     maxBytes?: number,
     /** A write: a lost answer is a `WriteOutcomeUnknownError` carrying `hint`. */
-    write?: { method: 'POST' | 'PUT' | 'DELETE'; body: unknown; hint: string },
+    write?: { method: 'POST' | 'PUT' | 'DELETE'; body?: unknown; hint: string },
   ): Promise<{ status: number; headers: Headers; body: string | Uint8Array }> {
     let body: string | Uint8Array = '';
     const method = write?.method ?? 'GET';
+    // A write with no body (a member DELETE) sends neither a body nor a content-type.
+    const payload = write?.body !== undefined ? JSON.stringify(write.body) : undefined;
     const res = await this.#tokenManager().withAuth(async (token) => {
       const init: RequestInit = {
         method,
@@ -661,9 +719,9 @@ export class ChatServiceClient {
           // a redirect to a sign-in page instead of a status we can act on.
           behavioroverride: 'redirectAs404',
           accept: read === 'text' ? 'application/json' : '*/*',
-          ...(write ? { 'content-type': 'application/json' } : {}),
+          ...(payload !== undefined ? { 'content-type': 'application/json' } : {}),
         },
-        ...(write ? { body: JSON.stringify(write.body) } : {}),
+        ...(payload !== undefined ? { body: payload } : {}),
         // Never let a redirect carry the bearer somewhere we did not vet.
         redirect: 'error',
       };

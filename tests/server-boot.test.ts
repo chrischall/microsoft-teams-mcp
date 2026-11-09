@@ -75,6 +75,7 @@ describe('built server boots', () => {
       writeFileSync(join(dir, 'package.json'), '{"type":"module"}');
       const tools = await handshake(join(dir, 'bundle.js'), dir);
       expect(tools).toEqual([
+        'teams_add_chat_members',
         'teams_export_messages',
         'teams_get_attachment',
         'teams_get_transcript',
@@ -87,6 +88,8 @@ describe('built server boots', () => {
         'teams_list_unread_messages',
         'teams_mark_read',
         'teams_react',
+        'teams_remove_chat_members',
+        'teams_rename_chat',
         'teams_search_messages',
         'teams_send_message',
       ]);

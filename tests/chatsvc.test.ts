@@ -819,6 +819,114 @@ describe('setConsumptionHorizon', () => {
   });
 });
 
+describe('group-chat threads', () => {
+  const CONV = '19:a b@thread.v2';
+  const THREAD_URL = `${BASE}/threads/${encodeURIComponent(CONV)}`;
+  const MRI = '8:orgid:00000000-0000-0000-0000-0000000000c3';
+  const MEMBER_URL = `${THREAD_URL}/members/${encodeURIComponent(MRI)}`;
+
+  describe('getThread', () => {
+    it('GETs the encoded thread with the msnp24Equivalent view and returns its topic and members', async () => {
+      const thread = {
+        id: CONV,
+        properties: { topic: 'Project Falcon', threadType: 'chat' },
+        members: [
+          { id: MRI, type: 'ThreadMember', role: 'User' },
+          { id: `8:orgid:${ME_OID}`, type: 'ThreadMember', role: 'Admin' },
+        ],
+      };
+      const fetchImpl: FetchMock = vi.fn(async () => jsonResponse(thread));
+      const t = await client(fetchImpl).getThread(CONV);
+      expect(urlOf(fetchImpl, 0)).toBe(`${THREAD_URL}?view=msnp24Equivalent`);
+      expect(fetchImpl.mock.calls[0]?.[1]?.method).toBe('GET');
+      expect(t.properties?.topic).toBe('Project Falcon');
+      expect(t.members?.map((m) => [m.id, m.role])).toEqual([
+        [MRI, 'User'],
+        [`8:orgid:${ME_OID}`, 'Admin'],
+      ]);
+    });
+
+    it('maps a failure to an McpToolError with its status', async () => {
+      const fetchImpl: FetchMock = vi.fn(async () => jsonResponse({}, 403));
+      await expect(client(fetchImpl).getThread(CONV)).rejects.toMatchObject({ status: 403 });
+    });
+  });
+
+  describe('setTopic', () => {
+    it('PUTs { topic } to the thread topic property', async () => {
+      const fetchImpl: FetchMock = vi.fn(async () => jsonResponse({}));
+      await client(fetchImpl).setTopic(CONV, 'New name');
+      expect(urlOf(fetchImpl, 0)).toBe(`${THREAD_URL}/properties?name=topic`);
+      const init = fetchImpl.mock.calls[0]?.[1];
+      expect(init?.method).toBe('PUT');
+      expect(JSON.parse(String(init?.body))).toEqual({ topic: 'New name' });
+      expect(headersOf(fetchImpl, 0).get('content-type')).toBe('application/json');
+    });
+  });
+
+  describe('addMember', () => {
+    it('PUTs { role: "User" } to the encoded member by default', async () => {
+      const fetchImpl: FetchMock = vi.fn(async () => jsonResponse({}));
+      await client(fetchImpl).addMember(CONV, MRI);
+      expect(urlOf(fetchImpl, 0)).toBe(MEMBER_URL);
+      const init = fetchImpl.mock.calls[0]?.[1];
+      expect(init?.method).toBe('PUT');
+      expect(JSON.parse(String(init?.body))).toEqual({ role: 'User' });
+    });
+
+    it('PUTs the role it is given', async () => {
+      const fetchImpl: FetchMock = vi.fn(async () => jsonResponse({}));
+      await client(fetchImpl).addMember(CONV, MRI, 'Admin');
+      expect(JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body))).toEqual({ role: 'Admin' });
+    });
+  });
+
+  describe('removeMember', () => {
+    it('DELETEs the encoded member with no body and no content-type', async () => {
+      const fetchImpl: FetchMock = vi.fn(async () => new Response('', { status: 200 }));
+      await client(fetchImpl).removeMember(CONV, MRI);
+      expect(urlOf(fetchImpl, 0)).toBe(MEMBER_URL);
+      const init = fetchImpl.mock.calls[0]?.[1];
+      expect(init?.method).toBe('DELETE');
+      expect(init?.body).toBeUndefined();
+      expect(headersOf(fetchImpl, 0).get('content-type')).toBeNull();
+      expect(headersOf(fetchImpl, 0).get('authorization')).toMatch(/^Bearer /);
+    });
+  });
+
+  it.each([
+    ['PUT', (c: ChatServiceClient) => c.setTopic(CONV, 'x')],
+    ['PUT', (c: ChatServiceClient) => c.addMember(CONV, MRI)],
+    ['DELETE', (c: ChatServiceClient) => c.removeMember(CONV, MRI)],
+  ] as const)('reports a 503 on a %s as an unknown outcome pointing at the chat', async (method, call) => {
+    const fetchImpl: FetchMock = vi.fn(async () => jsonResponse({}, 503));
+    const err = await call(client(fetchImpl)).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(WriteOutcomeUnknownError);
+    expect(err).toMatchObject({ method });
+    expect(writeOutcomeStatus(err as WriteOutcomeUnknownError)).toBe(503);
+    expect((err as WriteOutcomeUnknownError).hint).toMatch(/check the chat/i);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    (c: ChatServiceClient) => c.setTopic(CONV, 'x'),
+    (c: ChatServiceClient) => c.addMember(CONV, MRI),
+    (c: ChatServiceClient) => c.removeMember(CONV, MRI),
+  ])('maps a 4xx to a plain McpToolError with its status (%#)', async (call) => {
+    const fetchImpl: FetchMock = vi.fn(async () => jsonResponse({}, 403));
+    const p = call(client(fetchImpl));
+    await expect(p).rejects.toMatchObject({ status: 403 });
+    await expect(p).rejects.not.toBeInstanceOf(WriteOutcomeUnknownError);
+  });
+
+  it('reports a timeout as an unknown outcome', async () => {
+    const fetchImpl: FetchMock = vi.fn(async () => {
+      throw new RequestTimeoutError('Teams', 60_000);
+    });
+    await expect(client(fetchImpl).removeMember(CONV, MRI)).rejects.toMatchObject({ outcomeUnknown: true, timedOut: true });
+  });
+});
+
 describe('ensureToken', () => {
   it('captures a token without making any API request', async () => {
     const fetchImpl: FetchMock = vi.fn();
