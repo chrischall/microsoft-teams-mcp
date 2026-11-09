@@ -27,7 +27,7 @@ loadDotenvSafely();
  * for the full rationale (`runMcp` builds a server instance per served
  * connection, so anything built inside a registrar would be rebuilt). For
  * this MCP a second `ChatServiceClient` would mean a second token capture.
- * `SharePointClient` holds its own per-host token managers, so the same reason
+ * `SharePointClient` holds its own SharePoint token manager, so the same reason
  * applies — build it once, here, beside the chat-service client — and so does
  * `SubstrateClient`, which holds the search token.
  */

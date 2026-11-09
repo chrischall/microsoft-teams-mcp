@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { McpToolError } from '@chrischall/mcp-utils';
 
 const captureRequestHeader = vi.fn();
 const start = vi.fn(async () => {});
@@ -177,5 +178,56 @@ describe('captureSharePointTokenViaFetchproxy', () => {
     captureRequestHeader.mockResolvedValue(FAKE_TOKEN);
     close.mockRejectedValueOnce(new Error('already closed'));
     await expect(captureSharePointTokenViaFetchproxy(HOST)).resolves.toBe(FAKE_TOKEN);
+  });
+});
+
+// Seen live 2026-11-09: the first file from a colleague's OneDrive region host
+// widens the declared scope, the extension queues a scope-update offer in its
+// popup, and refuses the capture meanwhile. The bridge's own advice ("revoke
+// and re-pair") is heavier than the fix: approve the queued offer.
+describe('a SharePoint host the bridge has not granted yet', () => {
+  /** The extension's refusal, as @fetchproxy/server types it. */
+  const scopeRefusal = () =>
+    Object.assign(
+      new Error(
+        '(host, path, headerName) not in declared captureHeaders — the declared scope changed since you paired, ' +
+          'so the extension is refusing the request. Revoke this MCP in the ContextMint Bridge extension popup, then re-run.',
+      ),
+      { name: 'FetchproxyScopeError' },
+    );
+
+  it('says to approve the pending scope update in the extension popup, not to revoke', async () => {
+    captureRequestHeader.mockRejectedValueOnce(scopeRefusal());
+    const err = (await captureSharePointTokenViaFetchproxy(HOST, {}).catch((e: unknown) => e)) as McpToolError;
+
+    expect(err).toBeInstanceOf(McpToolError);
+    expect(err.message).toContain(HOST);
+    expect(err.hint).toContain(HOST);
+    expect(err.hint).toMatch(/approve/i);
+    expect(err.hint).toMatch(/ContextMint Bridge/);
+    expect(err.hint).not.toMatch(/revoke/i);
+  });
+
+  it('leaves any other capture failure as the plain error it was', async () => {
+    captureRequestHeader.mockRejectedValueOnce(new Error('timed out'));
+    const err = (await captureSharePointTokenViaFetchproxy(HOST, {}).catch((e: unknown) => e)) as Error;
+
+    expect(err).not.toBeInstanceOf(McpToolError);
+    expect(err.message).toMatch(/timed out/);
+  });
+});
+
+describe('capturing from several granted hosts', () => {
+  it('waits on every host it is given and returns whichever the page calls first', async () => {
+    const OTHER = 'contosoind-my.sharepoint.com';
+    captureRequestHeader.mockImplementation(async ({ host }: { host: string }) =>
+      host === OTHER ? `Bearer ${FAKE_TOKEN}` : new Promise(() => {}),
+    );
+    await expect(captureSharePointTokenViaFetchproxy([HOST, OTHER], {})).resolves.toBe(FAKE_TOKEN);
+
+    const hosts = captureRequestHeader.mock.calls.map(([d]) => (d as { host: string }).host).sort();
+    expect(hosts).toEqual([OTHER, HOST].sort());
+    const hello = createFetchproxyTransport.mock.calls.at(-1)![0] as { captureHeaders: { host: string }[] };
+    expect(hello.captureHeaders.map((d) => d.host)).toEqual(expect.arrayContaining([HOST, OTHER]));
   });
 });

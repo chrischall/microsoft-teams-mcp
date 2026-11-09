@@ -16,8 +16,8 @@
  * into a chat when something is broken.
  *
  * A `sharepoint` note sits beside those two. Shared-file download
- * (`teams_get_attachment`) uses a SEPARATE SharePoint token, captured on demand
- * per SharePoint host and short-lived (~53 min) — so there is usually none held
+ * (`teams_get_attachment`) uses a SEPARATE SharePoint token, captured on demand,
+ * short-lived, and good on every SharePoint host of the tenant — so there is usually none held
  * until a file is opened, and this healthcheck never mints or probes one. It is
  * a static note, not a check: a healthy result does not depend on an SP token
  * existing.
@@ -40,14 +40,14 @@ const HOST_LABEL = 'teams.cloud.microsoft';
 const TITLE = 'Verify the Teams chat-service token and API end-to-end';
 
 /**
- * Static note on the SharePoint path: a separate token, captured on demand per
- * host and short-lived, that `teams_get_attachment` uses for shared-file
+ * Static note on the SharePoint path: a separate token, captured on demand and
+ * short-lived, that `teams_get_attachment` uses for shared-file
  * download. Not probed here — a healthy result never depends on it existing.
  */
 const SHAREPOINT_NOTE =
   'Shared-file download (teams_get_attachment) uses a separate SharePoint token, captured on ' +
-  'demand per SharePoint host and short-lived (~53 min). None is held until you open a file, and ' +
-  'this healthcheck neither mints nor requires one.';
+  'demand and short-lived; one token serves every SharePoint host. None is held until you download ' +
+  'a file, and this healthcheck neither mints nor requires one.';
 
 /** Static note on the search path. Not probed — a healthy result never depends on it. */
 const SUBSTRATE_NOTE =

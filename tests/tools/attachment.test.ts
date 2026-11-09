@@ -518,3 +518,133 @@ describe('teams_get_attachment never inlines more than 10 MiB', () => {
     expect(text).not.toContain('Open it in SharePoint');
   });
 });
+
+describe('teams_get_attachment finds a file by a looser name', () => {
+  const ok = () => vi.fn().mockResolvedValue({ mimeType: DOCX_MIME, data: Buffer.from('x'), size: 1 });
+
+  it.each([
+    ['ignoring case', 'EXAMPLE PLAN.DOCX'],
+    ['without its extension', 'Example plan'],
+    ['without its extension, ignoring case', 'example PLAN'],
+  ])('matches a shared file %s', async (_label, ref) => {
+    const downloadFile = ok();
+    const result = await call(chatsvcWith(), { conversation: GROUP, message_id: String(TARGET), ref }, fakeSharepoint(downloadFile));
+    expect(result.isError).toBeFalsy();
+    expect(downloadFile).toHaveBeenCalledWith(FILE_URL, MAX_FILE_BYTES);
+  });
+
+  it('matches an inline image ref ignoring case', async () => {
+    const chatsvc = chatsvcWith();
+    const result = await call(chatsvc, { conversation: GROUP, message_id: String(TARGET), ref: IMAGE_REF.toUpperCase() });
+    expect(result.isError).toBeFalsy();
+    expect(chatsvc.fetchImage).toHaveBeenCalledWith(IMAGE_URL);
+  });
+
+  it('matches a dotted name given without its extension', async () => {
+    const files = JSON.stringify([{ fileName: 'v1.2 notes.pdf', fileType: 'pdf', objectUrl: FILE_URL }]);
+    const msgs = [{ ...withAttachments(TARGET), properties: { files } }];
+    const downloadFile = ok();
+    const result = await call(chatsvcWith(msgs), { conversation: GROUP, message_id: String(TARGET), ref: 'v1.2 Notes' }, fakeSharepoint(downloadFile));
+    expect(result.isError).toBeFalsy();
+    expect(downloadFile).toHaveBeenCalledWith(FILE_URL, MAX_FILE_BYTES);
+  });
+
+  it('prefers an exact name over a looser match', async () => {
+    const files = JSON.stringify([
+      { fileName: 'report', fileType: '', objectUrl: `${FILE_URL}-bare` },
+      { fileName: 'report.csv', fileType: 'csv', objectUrl: FILE_URL },
+    ]);
+    const msgs = [{ ...withAttachments(TARGET), properties: { files } }];
+    const downloadFile = ok();
+    await call(chatsvcWith(msgs), { conversation: GROUP, message_id: String(TARGET), ref: 'report' }, fakeSharepoint(downloadFile));
+    expect(downloadFile).toHaveBeenCalledWith(`${FILE_URL}-bare`, MAX_FILE_BYTES);
+  });
+
+  it('refuses a name that matches more than one file, listing them', async () => {
+    const files = JSON.stringify([
+      { fileName: 'report.csv', fileType: 'csv', objectUrl: FILE_URL },
+      { fileName: 'report.xlsx', fileType: 'xlsx', objectUrl: `${FILE_URL}x` },
+    ]);
+    const msgs = [{ ...withAttachments(TARGET), properties: { files } }];
+    const downloadFile = ok();
+    const result = await call(chatsvcWith(msgs), { conversation: GROUP, message_id: String(TARGET), ref: 'report' }, fakeSharepoint(downloadFile));
+
+    expect(result.isError).toBe(true);
+    const text = JSON.stringify(result.content);
+    expect(text).toContain('report.csv');
+    expect(text).toContain('report.xlsx');
+    expect(downloadFile).not.toHaveBeenCalled();
+  });
+
+  it('lists the attachment names when nothing matches', async () => {
+    const result = await call(chatsvcWith(), { conversation: GROUP, message_id: String(TARGET), ref: 'nope.pdf' });
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toContain(FILE_NAME);
+  });
+});
+
+describe('teams_get_attachment with save', () => {
+  const small = Buffer.from('PK\u0003\u0004 small docx');
+  /**
+   * The caption's fields, from the result's last text block. They sit under
+   * `data` when they carry a `note` (deliverFile's), which would collide with
+   * the untrusted envelope's own `note`.
+   */
+  const captionOf = (result: { content?: unknown[] }) => {
+    const c = JSON.parse((result.content as Block[]).filter((b) => b.type === 'text').at(-1)!.text!) as {
+      data?: Record<string, unknown>;
+    } & Record<string, unknown>;
+    return c.data ?? c;
+  };
+  const docx = () => vi.fn().mockResolvedValue({ mimeType: DOCX_MIME, data: small, size: small.length });
+
+  it('writes a small shared file to TEAMS_OUTPUT_DIR and returns its path instead of the bytes', async () => {
+    const result = await call(
+      chatsvcWith(),
+      { conversation: GROUP, message_id: String(TARGET), ref: FILE_NAME, save: true },
+      fakeSharepoint(docx()),
+    );
+
+    expect(result.isError).toBeFalsy();
+    const content = result.content as Block[];
+    expect(content.map((b) => b.type)).toEqual(['text']);
+    const data = captionOf(result);
+    expect(data).toMatchObject({ via: 'disk', name: FILE_NAME, content_available: true, bytes: small.length });
+    expect(data.path).toBe(join(outDir, FILE_NAME));
+    expect(readFileSync(data.path as string)).toEqual(small);
+  });
+
+  it('writes an inline image to the same folder, named by its ref', async () => {
+    const result = await call(chatsvcWith(), { conversation: GROUP, message_id: String(TARGET), ref: IMAGE_REF, save: true });
+
+    const data = captionOf(result);
+    expect(data).toMatchObject({ via: 'disk', ref: IMAGE_REF });
+    expect(data.path).toBe(join(outDir, `${IMAGE_REF}.png`));
+    expect(readFileSync(data.path as string)).toEqual(PNG_BYTES);
+  });
+
+  it('never overwrites a file saved earlier', async () => {
+    const args = { conversation: GROUP, message_id: String(TARGET), ref: FILE_NAME, save: true };
+    const first = await call(chatsvcWith(), args, fakeSharepoint(docx()));
+    const second = await call(chatsvcWith(), args, fakeSharepoint(docx()));
+    const a = captionOf(first);
+    const b = captionOf(second);
+    expect(b.path).not.toBe(a.path);
+    expect(readdirSync(outDir)).toHaveLength(2);
+  });
+
+  it('hands back a download link instead when hosted, since the server disk is unreachable', async () => {
+    const puts = stubBlobStore();
+    const result = await call(
+      chatsvcWith(),
+      { conversation: GROUP, message_id: String(TARGET), ref: FILE_NAME, save: true },
+      fakeSharepoint(docx()),
+    );
+
+    const data = captionOf(result);
+    expect(data.via).toBe('link');
+    expect(data.downloadUrl).toMatch(new RegExp(`^${BLOB_BASE}/attachments/`));
+    expect(puts).toHaveLength(1);
+    expect(readdirSync(outDir)).toHaveLength(0);
+  });
+});

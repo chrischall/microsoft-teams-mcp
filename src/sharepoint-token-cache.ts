@@ -12,10 +12,10 @@ import { reportCacheWriteFailure } from './token-cache.js';
  * Where the captured SharePoint access tokens are cached between runs.
  *
  * A SEPARATE file from the chat-service `token.json`: a SharePoint token is a
- * different audience with a very different lifetime (~53 min vs chatsvc's ~23h),
- * and there is one per SharePoint host rather than one overall — so this file
- * holds a `Record<host, BearerTokens>`, not a single token. Deliberately its own
- * directory for the same reason `tokenCachePath` is.
+ * different audience with a different lifetime. One token serves every
+ * SharePoint host of the tenant (see {@link SharePointTokenCache.shared}), held
+ * under the `*` key; older releases kept one entry per host, which `shared()`
+ * still reads. Deliberately its own file for the same reason `tokenCachePath` is.
  */
 export function sharePointTokenCachePath(env: NodeJS.ProcessEnv = process.env): string {
   return resolveStateFile({
@@ -45,15 +45,22 @@ function validateMap(raw: unknown): HostTokenMap | null {
   return out;
 }
 
-/** A per-host cache: hand each SharePoint host its own single-token view. */
+/** The key the one shared token is stored under. */
+const SHARED_KEY = '*';
+
+/** The SharePoint token cache. */
 export interface SharePointTokenCache {
   /**
-   * A `SyncStatePersistence<BearerTokens>` over one host's slice of the shared
-   * map — the exact shape a `TokenManager` takes, so each host gets its own
-   * manager over one file. `save` merges (it never clobbers a sibling host) and
-   * `clear` deletes just this host's key.
+   * The one token every SharePoint host of the tenant accepts (verified live
+   * 2026-11-09: a token captured from one OneDrive host returned 200 on another
+   * OneDrive region host and on the team-site root), as the
+   * `SyncStatePersistence<BearerTokens>` a `TokenManager` takes.
+   *
+   * `load` falls back to the latest-expiring per-host entry an older release
+   * left, so an upgrade does not cost a capture. `save` writes the shared entry
+   * alone, dropping those leftovers, and `clear` empties the file.
    */
-  forHost(host: string): SyncStatePersistence<BearerTokens>;
+  shared(): SyncStatePersistence<BearerTokens>;
 }
 
 /**
@@ -71,8 +78,8 @@ export function createSharePointTokenCache(
   if (!parseBoolEnv('TEAMS_TOKEN_CACHE', { env, default: true })) return null;
   if (parseBoolEnv('TEAMS_DISABLE_FETCHPROXY', { env })) return null;
 
-  // One file-backed persistence for the whole map; the per-host views below read
-  // and write it. No `boundTo`: there is no single credential the whole map is
+  // One file-backed persistence for the map; the shared view below reads and
+  // writes it. No `boundTo`: there is no single credential the whole map is
   // minted from — each host's token stands or falls on its own shape.
   const file = createFileStatePersistence<HostTokenMap>({
     filePath: sharePointTokenCachePath(env),
@@ -80,31 +87,28 @@ export function createSharePointTokenCache(
   });
 
   return {
-    forHost(host: string): SyncStatePersistence<BearerTokens> {
+    shared(): SyncStatePersistence<BearerTokens> {
       return {
         load() {
-          return file.load()?.[host] ?? null;
+          const map = file.load();
+          if (!map) return null;
+          if (map[SHARED_KEY]) return map[SHARED_KEY];
+          const legacy = Object.values(map).sort((a, b) => (b.expiresAt ?? 0) - (a.expiresAt ?? 0));
+          return legacy[0] ?? null;
         },
         save(tokens: BearerTokens) {
-          // Read-modify-write the shared map so a sibling host's token survives.
           // A failed write is reported, never thrown: a SharePoint token is
           // cheap to re-capture, and a read-only data dir must not take the
           // tool down — it just loses the between-run cache.
           try {
-            const map = file.load() ?? {};
-            map[host] = tokens;
-            file.save(map);
+            file.save({ [SHARED_KEY]: tokens });
           } catch (err) {
             reportCacheWriteFailure(err);
           }
         },
         clear() {
           try {
-            const map = file.load();
-            if (map && host in map) {
-              delete map[host];
-              file.save(map);
-            }
+            if (file.load()) file.save({});
           } catch (err) {
             reportCacheWriteFailure(err);
           }

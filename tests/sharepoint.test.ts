@@ -21,10 +21,15 @@ function env(overrides: Record<string, string> = {}): NodeJS.ProcessEnv {
 
 type FetchMock = ReturnType<typeof vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>>;
 
-function client(fetchImpl: FetchMock, capture: (host: string) => Promise<string> = async () => jwt()) {
+function client(
+  fetchImpl: FetchMock,
+  capture: (hosts: string[]) => Promise<string> = async () => jwt(),
+  knownHosts: string[] = [],
+) {
   return new SharePointClient({
     env: env(),
     captureToken: capture,
+    knownHosts: () => knownHosts,
     fetchImpl: fetchImpl as unknown as typeof fetch,
   });
 }
@@ -182,7 +187,7 @@ describe('SharePointClient.downloadFile', () => {
     // driveItem GET still targets the file's own host…
     expect(urlOf(fetchImpl, 0)).toContain('https://contoso.sharepoint.com/_api/v2.1/shares/');
     // …but the token was captured from the derived -my host.
-    expect(capture).toHaveBeenCalledWith('contoso-my.sharepoint.com');
+    expect(capture).toHaveBeenCalledWith(['contoso-my.sharepoint.com']);
   });
 
   it('refuses an oversize file from the driveItem size, before streaming it', async () => {
@@ -194,7 +199,10 @@ describe('SharePointClient.downloadFile', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
-  it('captures one token per host and reuses it across files on that host', async () => {
+  // Verified live 2026-11-09: a token captured from one OneDrive host returned
+  // 200 on the other OneDrive region and on the team-site root. Per-host
+  // capture made every new host wait for the user to open a file from it.
+  it('captures one token and uses it for every SharePoint host', async () => {
     const capture = vi.fn(async () => jwt());
     // Fresh responses per call — a `Response` body can only be read once.
     const fetchImpl: FetchMock = vi.fn(async (input) =>
@@ -202,8 +210,23 @@ describe('SharePointClient.downloadFile', () => {
     );
     const c = client(fetchImpl, capture);
     await c.downloadFile(OBJECT_URL, 25 * 1024 * 1024);
-    await c.downloadFile(`https://${HOST}/personal/user_contoso_com/Documents/other.pdf`, 25 * 1024 * 1024);
+    await c.downloadFile('https://contosoind-my.sharepoint.com/personal/someone/Documents/other.pdf', 25 * 1024 * 1024);
+    await c.downloadFile('https://contoso.sharepoint.com/sites/Team/Shared Documents/deck.pptx', 25 * 1024 * 1024);
     expect(capture).toHaveBeenCalledTimes(1);
+    // Each driveItem GET still goes to its file's own host.
+    expect(urlOf(fetchImpl, 2)).toContain('https://contosoind-my.sharepoint.com/_api/v2.1/shares/');
+  });
+
+  it('captures from the hosts the bridge already granted, not a new file host', async () => {
+    // Declaring a new host would widen the bridge scope and be refused until
+    // the user approves it; the granted hosts already yield a usable token.
+    const capture = vi.fn(async () => jwt());
+    const fetchImpl = twoStep(driveItem(), bytesResponse([1]));
+    await client(fetchImpl, capture, ['contoso-my.sharepoint.com']).downloadFile(
+      'https://contosoind-my.sharepoint.com/personal/someone/Documents/other.pdf',
+      25 * 1024 * 1024,
+    );
+    expect(capture).toHaveBeenCalledWith(['contoso-my.sharepoint.com']);
   });
 });
 

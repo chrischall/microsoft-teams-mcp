@@ -202,7 +202,7 @@ describe('teams_healthcheck', () => {
     await harness.close();
   });
 
-  it('notes the SharePoint token is captured on demand per host and short-lived, without needing one to pass', async () => {
+  it('notes the SharePoint token is captured on demand, serves every SharePoint host, and is short-lived, without needing one to pass', async () => {
     // A healthy run holds a chat-service token but no SharePoint token (none is
     // minted until a shared file is opened). The note must appear and health
     // must not depend on an SP token existing.
@@ -215,7 +215,8 @@ describe('teams_healthcheck', () => {
     expect(data.ok).toBe(true);
     const sharepoint = String(data.sharepoint);
     expect(sharepoint).toMatch(/on demand/i);
-    expect(sharepoint).toMatch(/per (sharepoint )?host/i);
+    expect(sharepoint).toMatch(/every SharePoint host/i);
+    expect(sharepoint).not.toMatch(/per (sharepoint )?host/i);
     expect(sharepoint).toMatch(/short-lived/i);
     await harness.close();
   });
