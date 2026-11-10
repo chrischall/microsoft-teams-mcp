@@ -79,6 +79,7 @@ describe('built server boots', () => {
         'teams_create_group_chat',
         'teams_export_messages',
         'teams_get_attachment',
+        'teams_get_meeting_recap',
         'teams_get_transcript',
         'teams_healthcheck',
         'teams_list_activity',

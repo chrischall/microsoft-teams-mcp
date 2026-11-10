@@ -56,6 +56,17 @@ export const SUBSTRATE_CAPTURE_DECL = {
 } as const;
 
 /**
+ * The meeting-recap capture: a Meeting Collab Platform Service call
+ * (`/api/mcps/*`) the Teams tab makes when a meeting's Recap tab opens. Same
+ * host as the chat service, so no new trust domain — only a new header capture.
+ */
+export const RECAP_CAPTURE_DECL = {
+  host: 'teams.cloud.microsoft',
+  path: '/api/mcps/*',
+  headerName: 'authorization',
+} as const;
+
+/**
  * Every domain the server captures from. `sharepoint.com` is the family domain:
  * the bridge accepts any `*.sharepoint.com` host under it.
  */
@@ -77,13 +88,13 @@ export function sharePointCaptureDecl(host: string): CaptureDecl {
 }
 
 /**
- * The capture headers every hello declares: the chat-service and search
- * captures, then one per granted SharePoint host (deduplicated, sorted, and only
+ * The capture headers every hello declares: the chat-service, search and
+ * recap captures, then one per granted SharePoint host (deduplicated, sorted, and only
  * concrete SharePoint hosts), so the list is the same whichever capture runs.
  */
 export function bridgeCaptureDecls(sharePointHosts: Iterable<string>): CaptureDecl[] {
   const hosts = [...new Set([...sharePointHosts].map((h) => h.toLowerCase()).filter(isSharePointHost))].sort();
-  return [{ ...CAPTURE_DECL }, { ...SUBSTRATE_CAPTURE_DECL }, ...hosts.map(sharePointCaptureDecl)];
+  return [{ ...CAPTURE_DECL }, { ...SUBSTRATE_CAPTURE_DECL }, { ...RECAP_CAPTURE_DECL }, ...hosts.map(sharePointCaptureDecl)];
 }
 
 /** Where the remembered SharePoint hosts are kept: beside the SharePoint token cache. */

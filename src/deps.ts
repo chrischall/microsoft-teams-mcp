@@ -13,15 +13,19 @@
  *   request; the tool falls back to scanning the chat service without it), and
  *   the directory `teams_add_chat_members` / `teams_remove_chat_members` /
  *   `teams_create_group_chat` look a person up in when no one in the user's chats matches (same token).
+ * - `recap` — the meeting-recap client `teams_get_meeting_recap` reads Teams'
+ *   Recap tab through (a fourth token, captured on demand when a Recap tab opens).
  *
  * Registrars take a `Pick` of what they actually use, so tests stub only that.
  */
 import type { ChatServiceClient } from './chatsvc.js';
 import type { SharePointClient } from './sharepoint.js';
 import type { SubstrateSearch } from './substrate.js';
+import type { RecapReader } from './recap.js';
 
 export interface TeamsDeps {
   chatsvc: ChatServiceClient;
   sharepoint: SharePointClient;
   substrate: SubstrateSearch;
+  recap: RecapReader;
 }

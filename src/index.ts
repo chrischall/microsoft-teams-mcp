@@ -4,6 +4,7 @@ import { VERSION } from './version.js';
 import { ChatServiceClient } from './chatsvc.js';
 import { SharePointClient } from './sharepoint.js';
 import { SubstrateClient } from './substrate.js';
+import { RecapClient } from './recap.js';
 import type { TeamsDeps } from './deps.js';
 import { registerChatTools } from './tools/chat.js';
 import { registerChannelTools } from './tools/channels.js';
@@ -20,6 +21,7 @@ import { registerSearchTools } from './tools/search.js';
 import { registerHealthcheckTool } from './tools/healthcheck.js';
 import { registerExportTools } from './tools/export.js';
 import { registerTranscriptTools } from './tools/transcript.js';
+import { registerRecapTools } from './tools/recap.js';
 
 loadDotenvSafely();
 
@@ -30,12 +32,14 @@ loadDotenvSafely();
  * this MCP a second `ChatServiceClient` would mean a second token capture.
  * `SharePointClient` holds its own SharePoint token manager, so the same reason
  * applies — build it once, here, beside the chat-service client — and so does
- * `SubstrateClient`, which holds the search token.
+ * `SubstrateClient`, which holds the search token, and `RecapClient`, which
+ * holds the meeting-recap token.
  */
 const deps: TeamsDeps = {
   chatsvc: new ChatServiceClient(),
   sharepoint: new SharePointClient(),
   substrate: new SubstrateClient(),
+  recap: new RecapClient(),
 };
 
 await runMcp({
@@ -59,6 +63,7 @@ await runMcp({
     registerSearchTools,
     registerExportTools,
     registerTranscriptTools,
+    registerRecapTools,
     registerHealthcheckTool,
   ],
 });
