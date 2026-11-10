@@ -1,0 +1,122 @@
+{
+  "changeKey": "W/\"AAAAAAAAAAAAAAAAAAAAAAAAAA==\"",
+  "id": "100000000-0000-0000-0000-0000000000c3",
+  "participants": [],
+  "resources": [
+    {
+      "id": "00000000-0000-0000-0000-000000000101",
+      "type": "TranscriptV2",
+      "location": "https://contoso-my.sharepoint.com/personal/organizer_contoso_com/_api/v2.1/drives/b!drive/items/ITEM1/versions/current/media/transcripts/00000000-0000-0000-0000-0000000000f1/content",
+      "metadata": {
+        "webUrl": "https://contoso-my.sharepoint.com/:v:/p/organizer/Play1",
+        "organizerId": "00000000-0000-0000-0000-0000000000c3",
+        "callId": "00000000-0000-0000-0000-0000000000ca",
+        "threadId": "19:meeting_ZXhhbXBsZQ@thread.v2",
+        "startTime": "639287934631201136",
+        "duration": "00:06:17.5000000",
+        "driveId": "b!drive",
+        "driveItemId": "ITEM1",
+        "transcriptId": "00000000-0000-0000-0000-0000000000f1",
+        "isMultilingual": "false"
+      },
+      "subType": "",
+      "addedBy": "oid:00000000-0000-0000-0000-0000000000c3@00000000-0000-0000-0000-0000000000d4",
+      "additionDateTime": "2026-10-28T14:19:03.1205812Z"
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000102",
+      "type": "Recording",
+      "location": "https://contoso-my.sharepoint.com/:v:/p/organizer/Play1",
+      "metadata": {
+        "startTime": "639287934631201136",
+        "endTime": "639287938406201136",
+        "callId": "00000000-0000-0000-0000-0000000000ca",
+        "threadId": "19:meeting_ZXhhbXBsZQ@thread.v2",
+        "thumbnailUrl": "https://us-prod.asyncgw.teams.microsoft.com/v1/objects/0-wus-d3-0123456789abcdef0123456789abcdef/views/thumbnail_small"
+      },
+      "subType": "",
+      "additionDateTime": "2026-10-28T14:19:03.9472492Z"
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000103",
+      "type": "notes",
+      "location": "https://contoso-my.sharepoint.com/:fl:/g/personal/someone/Notes1",
+      "metadata": { "state": "Enabled" },
+      "subType": "",
+      "additionDateTime": "2026-10-28T13:59:46.5570814Z"
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000104",
+      "type": "AttendanceReport",
+      "location": "https://teams.microsoft.com/api/attendancereport/prod/attendancereport/file?ThreadId=19:meeting_ZXhhbXBsZQ@thread.v2&CallId=00000000-0000-0000-0000-0000000000ca",
+      "metadata": {
+        "callId": "00000000-0000-0000-0000-0000000000ca",
+        "startTime": "639287934534470000"
+      },
+      "subType": "",
+      "additionDateTime": "2026-10-28T14:34:31.83818Z"
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000105",
+      "type": "MeetingChat",
+      "location": "https://contoso-my.sharepoint.com/personal/someone/Documents/Microsoft%20Teams%20Chat%20Files/Plan.docx",
+      "metadata": {
+        "appTitle": "Word",
+        "fileTitle": "Plan.docx",
+        "fileType": "docx"
+      },
+      "subType": "Word",
+      "additionDateTime": "2026-10-28T14:05:37.1693603Z"
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000106",
+      "type": "MeetingStage",
+      "location": "https://contoso-my.sharepoint.com/:wb:/p/someone/Board1",
+      "metadata": {
+        "appTitle": "Whiteboard",
+        "fileTitle": "Team Standup",
+        "fileType": "whiteboard",
+        "shareUrl": "https://contoso-my.sharepoint.com/:wb:/p/someone/Board1Share"
+      },
+      "subType": "Whiteboard",
+      "additionDateTime": "2026-10-28T14:08:41.6978546Z"
+    },
+    {
+      "id": "00000000-0000-0000-0000-0000000000ca-1791995659-AISummary",
+      "mcoResourceId": "",
+      "type": "AISummary",
+      "metadata": {
+        "callId": "00000000-0000-0000-0000-0000000000ca",
+        "driveId": "b!drive2",
+        "driveItemId": "ITEM2",
+        "ownerId": "00000000-0000-0000-0000-0000000000e5",
+        "webUrl": ""
+      },
+      "subType": "",
+      "additionDateTime": "2026-10-28T15:20:15.6080765Z"
+    },
+    {
+      "id": "00000000-0000-0000-0000-0000000000cb_Transcript",
+      "type": "transcript",
+      "location": "https://api.cortana.ai/meetingArtifacts/api/v2/organizer(x)/thread(y)/call(z)?artifactTypes=Transcript",
+      "metadata": {
+        "callId": "00000000-0000-0000-0000-0000000000cb",
+        "startTime": "2026-10-28T14:04:57.7283481Z",
+        "state": "Started"
+      },
+      "subType": "",
+      "additionDateTime": "2026-10-28T14:05:12.384217Z"
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000109",
+      "type": "SomethingNew",
+      "location": "javascript:alert(1)",
+      "metadata": {},
+      "subType": "",
+      "additionDateTime": "2026-10-28T14:05:12Z"
+    }
+  ],
+  "invalidResources": [],
+  "deletedResources": [],
+  "countOfFilteredContentsByChatHistory": 0
+}

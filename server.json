@@ -94,6 +94,20 @@
           "isSecret": false
         },
         {
+          "name": "TEAMS_RECAP_TOKEN_FILE",
+          "description": "Where the captured meeting-recap token is cached. Defaults to ~/.microsoft-teams-mcp/recap-token.json.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "TEAMS_MCPS_REGION",
+          "description": "The region in the Teams meeting-recap API path (teams.cloud.microsoft/api/mcps/<region>). Defaults to us. Leave blank unless your tenant lives elsewhere.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
           "name": "TEAMS_SHAREPOINT_TOKEN_FILE",
           "description": "Where the captured SharePoint tokens are cached. Defaults to ~/.microsoft-teams-mcp/sharepoint-tokens.json.",
           "isRequired": false,

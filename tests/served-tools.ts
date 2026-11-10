@@ -19,6 +19,7 @@ import { registerSearchTools } from '../src/tools/search.js';
 import { registerHealthcheckTool } from '../src/tools/healthcheck.js';
 import { registerExportTools } from '../src/tools/export.js';
 import { registerTranscriptTools } from '../src/tools/transcript.js';
+import { registerRecapTools } from '../src/tools/recap.js';
 
 export async function servedTools() {
   const deps = {
@@ -28,6 +29,7 @@ export async function servedTools() {
       searchMessages: async () => ({ results: [], moreAvailable: false, unmapped: 0 }),
       suggestPeople: async () => [],
     },
+    recap: { isConfigured: () => false, readCollabObject: async () => [] },
     sharepoint: { downloadFile: async () => ({ mimeType: '', data: Buffer.alloc(0), size: 0 }) } as unknown as SharePointClient,
   };
 
@@ -47,6 +49,7 @@ export async function servedTools() {
     registerHealthcheckTool(server, deps);
     registerExportTools(server, deps);
     registerTranscriptTools(server, deps);
+    registerRecapTools(server, deps);
   });
   try {
     return (await h.client.listTools()).tools;

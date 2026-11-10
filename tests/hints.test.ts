@@ -33,6 +33,7 @@ const EXPECTED_INTENT: Record<string, string> = {
   teams_get_attachment: 'other',
   teams_export_messages: 'other',
   teams_get_transcript: 'lookup',
+  teams_get_meeting_recap: 'lookup',
   teams_send_message: 'send',
   teams_react: 'send',
   teams_rename_chat: 'send',

@@ -47,9 +47,10 @@ chat-service API and change nothing until you confirm (see
 
 The bridge remembers a pairing only for the exact set of domains it approved,
 and approving a grant replaces the stored list of header captures. So all of
-this server's captures (chat service, SharePoint, Substrate search) declare the
-**same** scope: the three domains `teams.cloud.microsoft`, `sharepoint.com` and
-`substrate.office.com`, plus the chat-service and search captures and one
+this server's captures (chat service, SharePoint, Substrate search, meeting
+recaps) declare the **same** scope: the three domains `teams.cloud.microsoft`,
+`sharepoint.com` and `substrate.office.com`, plus the chat-service, search and
+meeting-recap captures and one
 capture per SharePoint host the server has already captured from (usually just
 your own OneDrive host — see [SharePoint file download](#sharepoint-file-download)). Each capture
 still reads only the one header it needs. The SharePoint hosts are remembered
@@ -60,7 +61,9 @@ succeeds.
 Up to 0.7, each capture declared only its own domain, so the bridge asked to
 pair again (or to update its grants) whenever the server moved between chats,
 search and files. Upgrading from 0.7 asks to pair **once** more, for the
-combined scope; after that it stays paired.
+combined scope; after that it stays paired. Upgrading to the release that added
+`teams_get_meeting_recap` asks once more, because the recap capture
+(`teams.cloud.microsoft/api/mcps/*`) is new to that scope.
 
 If you run the bridge in more than one browser or browser profile, each one is a
 different extension identity, and the server trusts only the one it paired
@@ -151,6 +154,38 @@ read only from the request header, never from page storage.
 > matches word prefixes, not "display name contains". A redacted response is
 > in `tests/fixtures/substrate-query-response.json`.
 
+## Meeting recaps
+
+`teams_get_meeting_recap` reads what a meeting's **Recap** tab shows, from the
+service that tab uses: the Meeting Collab Platform Service
+(`GET https://teams.cloud.microsoft/api/mcps/<region>/collab/readcollabobject/V2/…`).
+That service accepts neither the chat-service token nor the Substrate one, so
+recaps use a **fourth token**, captured off the request the Teams tab makes
+when you open a meeting chat's Recap tab, and cached in
+`~/.microsoft-teams-mcp/recap-token.json` (it lives about an hour).
+
+- **Open a Recap tab once.** The first recap, and the first after the token
+  expires, may need you to open any meeting chat's Recap tab in Teams while the
+  capture waits (`TEAMS_CAPTURE_TIMEOUT`, default 30s).
+- **One recap per occurrence.** The meeting is found from the chat's own
+  thread (organizer, tenant and the calendar `iCalUid`); a recurring
+  meeting's occurrence is that id with its date written in. Without `date`,
+  the tool reads the chat for the days a call or recording happened and
+  returns the newest of those (up to 5 tried) whose recap holds anything.
+- **AI notes are reported, not read.** When Teams made Intelligent Recap AI
+  notes, the result says so (`ai_summary`). Their text is a per-user file that
+  Teams shows only to licensed users; reading it for anyone else was refused
+  (403) live, so the tool does not try.
+
+> **Verified live 2026-11-10** against 40 meeting chats: the URL and token
+> above, the occurrence id (bytes 16–19 of the `iCalUid` = year, month, day),
+> an empty `resources` list for an occurrence with nothing recorded, and the
+> resource types `Recording`, `TranscriptV2`, `transcript`, `notes`,
+> `AttendanceReport`, `MeetingChat`, `MeetingStage` and `AISummary`. A
+> redacted response is in `tests/fixtures/recap-collab-object.json`. The
+> region (`us`) is the one this tenant used; set `TEAMS_MCPS_REGION` if yours
+> differs.
+
 ## Install
 
 ```sh
@@ -210,6 +245,8 @@ Everything is optional — by default the token is captured from your browser.
 | `TEAMS_CAPTURE_TIMEOUT` | Seconds to wait for the Teams tab to issue a chat-service request. Defaults to `30`. The bridge deadline is derived from it (window + 15s). |
 | `TEAMS_TOKEN_CACHE` | `false` to keep the captured token in memory only. Defaults to on. |
 | `TEAMS_TOKEN_FILE` | Where the captured token is cached. Defaults to `~/.microsoft-teams-mcp/token.json`. |
+| `TEAMS_RECAP_TOKEN_FILE` | Where the captured meeting-recap token is cached. Defaults to `~/.microsoft-teams-mcp/recap-token.json`. `TEAMS_TOKEN_CACHE=false` keeps it in memory too. |
+| `TEAMS_MCPS_REGION` | The region in the meeting-recap API path (`teams.cloud.microsoft/api/mcps/<region>`). Defaults to `us`. |
 | `TEAMS_SUBSTRATE_TOKEN_FILE` | Where the captured Substrate search token is cached. Defaults to `~/.microsoft-teams-mcp/substrate-token.json`. `TEAMS_TOKEN_CACHE=false` keeps it in memory too. |
 | `TEAMS_SHAREPOINT_TOKEN_FILE` | Where the captured SharePoint token (one for every SharePoint host, used to download shared files) is cached. Defaults to `~/.microsoft-teams-mcp/sharepoint-tokens.json`. `TEAMS_TOKEN_CACHE=false` keeps them in memory too. |
 | `TEAMS_TIME_ZONE` | Default IANA time zone (e.g. `America/New_York`) for the `tz` argument of `teams_list_messages` and `teams_list_unread_messages`: each message then carries `time_local` (ISO 8601 with offset) next to its UTC `time`. Unset means no `time_local` unless `tz` is passed; a name `Intl` does not know is reported as an error. |
@@ -504,6 +541,20 @@ Everything is optional — by default the token is captured from your browser.
   (default 50, max 200). Read from the chat service, so the Activity view
   does not need to be open; it never marks anything read (`teams_mark_read`
   marks chats and channels read, not the Activity feed).
+- `teams_get_meeting_recap` — what a meeting's Recap tab shows, from its
+  meeting chat (`conversation`: the chat's id or a substring of its title):
+  `recap.recordings` (start, end, `duration`, play `url`), `recap.transcripts`
+  (start and duration — read the text with `teams_get_transcript`),
+  `recap.notes` (the Loop meeting-notes link), `recap.attendance_reports`,
+  `recap.files` (shared in the meeting chat, or on stage such as a whiteboard:
+  `shared_in`), `recap.ai_summary` (whether Teams made AI notes; their text is
+  not read) and `recap.other` (any type not listed). Sections with nothing are
+  left out. For a recurring meeting, `date` (YYYY-MM-DD, the UTC day it met)
+  picks the occurrence; by default the newest day the chat shows a call on
+  that has a recap is returned as `occurrence`, with `series` (what belongs to
+  the whole series, e.g. files shared across it) and `other_occurrences`
+  (other call days, newest first). Uses its own token (see
+  [Meeting recaps](#meeting-recaps)). Read-only.
 - `teams_get_transcript` — the transcript of a recorded Teams meeting, read from
   its meeting chat (`conversation`: the chat's id or a substring of its title).
   It reads **Teams' own copy** of the transcript — the one the meeting's Recap

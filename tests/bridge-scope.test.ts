@@ -22,6 +22,7 @@ const { BRIDGE_TRUST_DOMAINS, bridgeCaptureDecls, knownSharePointHosts, remember
 const { captureTokenViaFetchproxy, CAPTURE_DECL } = await import('../src/auth-fetchproxy.js');
 const { captureSubstrateTokenViaFetchproxy, SUBSTRATE_CAPTURE_DECL } = await import('../src/substrate-auth.js');
 const { captureSharePointTokenViaFetchproxy } = await import('../src/sharepoint-auth.js');
+const { captureRecapTokenViaFetchproxy, RECAP_CAPTURE_DECL } = await import('../src/recap-auth.js');
 
 // Opaque filler: long enough to pass the length guard, never a real token.
 const FAKE_TOKEN = 'x'.repeat(200);
@@ -49,10 +50,11 @@ describe('the one bridge scope every capture declares', () => {
     expect([...BRIDGE_TRUST_DOMAINS].sort()).toEqual(['sharepoint.com', 'substrate.office.com', 'teams.cloud.microsoft']);
   });
 
-  it('declares the chat-service and search captures, then each known SharePoint host, in a stable order', () => {
+  it('declares the chat-service, search and recap captures, then each known SharePoint host, in a stable order', () => {
     expect(bridgeCaptureDecls([SP_B, SP_A, SP_B])).toEqual([
       CAPTURE_DECL,
       SUBSTRATE_CAPTURE_DECL,
+      RECAP_CAPTURE_DECL,
       { host: SP_A, path: '/*', headerName: 'authorization' },
       { host: SP_B, path: '/*', headerName: 'authorization' },
     ]);
@@ -62,6 +64,7 @@ describe('the one bridge scope every capture declares', () => {
     expect(bridgeCaptureDecls(['evil.com', 'sharepoint.com', SP_A])).toEqual([
       CAPTURE_DECL,
       SUBSTRATE_CAPTURE_DECL,
+      RECAP_CAPTURE_DECL,
       { host: SP_A, path: '/*', headerName: 'authorization' },
     ]);
   });
@@ -70,7 +73,7 @@ describe('the one bridge scope every capture declares', () => {
   // differs from the approved one, and replaces the approved capture list on
   // every grant — so captures that each declared only their own host
   // re-prompted on every switch between chat, search and files.
-  it('is identical for the chat-service, search and SharePoint captures', async () => {
+  it('is identical for the chat-service, search, recap and SharePoint captures', async () => {
     rememberSharePointHost(SP_A, env);
 
     await captureTokenViaFetchproxy(env);
@@ -79,8 +82,10 @@ describe('the one bridge scope every capture declares', () => {
     const search = lastHello();
     await captureSharePointTokenViaFetchproxy(SP_A, env);
     const files = lastHello();
+    await captureRecapTokenViaFetchproxy(env);
+    const recap = lastHello();
 
-    for (const hello of [chat, search, files]) {
+    for (const hello of [chat, search, files, recap]) {
       expect([...hello.domains].sort()).toEqual([...BRIDGE_TRUST_DOMAINS].sort());
       expect(hello.captureHeaders).toEqual(bridgeCaptureDecls([SP_A]));
       expect([...hello.capabilities].sort()).toEqual(['capture_request_header', 'fetch']);
@@ -91,6 +96,13 @@ describe('the one bridge scope every capture declares', () => {
     await captureSubstrateTokenViaFetchproxy(env);
     expect(captureRequestHeader).toHaveBeenCalledTimes(1);
     expect(captureRequestHeader).toHaveBeenCalledWith(expect.objectContaining({ host: 'substrate.office.com' }));
+  });
+
+  it('captures the recap token off a Meeting Collab Platform call, on the Teams host', async () => {
+    await captureRecapTokenViaFetchproxy(env);
+    expect(captureRequestHeader).toHaveBeenCalledWith(
+      expect.objectContaining({ host: 'teams.cloud.microsoft', path: '/api/mcps/*' }),
+    );
   });
 });
 

@@ -82,6 +82,15 @@ env:
     help: >-
       Path to the cached Substrate search token file. Defaults to
       ~/.microsoft-teams-mcp/substrate-token.json.
+  - name: TEAMS_RECAP_TOKEN_FILE
+    required: false
+    help: >-
+      Path to the cached meeting-recap token file. Defaults to
+      ~/.microsoft-teams-mcp/recap-token.json.
+  - name: TEAMS_MCPS_REGION
+    required: false
+    help: >-
+      Meeting-recap region in the API path. Defaults to us.
   - name: TEAMS_SHAREPOINT_TOKEN_FILE
     required: false
     help: >-

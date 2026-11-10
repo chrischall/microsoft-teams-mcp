@@ -139,7 +139,9 @@ const ENV = [
   'TEAMS_CHATSVC_BASE',
   'TEAMS_CHATSVC_REGION',
   'TEAMS_DISABLE_FETCHPROXY',
+  'TEAMS_MCPS_REGION',
   'TEAMS_OUTPUT_DIR',
+  'TEAMS_RECAP_TOKEN_FILE',
   'TEAMS_SHAREPOINT_TOKEN_FILE',
   'TEAMS_SUBSTRATE_TOKEN_FILE',
   'TEAMS_TIME_ZONE',
@@ -184,13 +186,14 @@ describe('manifest tool roster', () => {
    * export (teams_export_messages, which writes files rather than returning
    * a collection).
    */
-  it('serves exactly the list/get tool names plus the export, transcript and writes', async () => {
+  it('serves exactly the list/get tool names plus the export, transcript, recap and writes', async () => {
     const registered = (await servedTools()).map((t) => t.name).sort();
     expect(registered).toEqual([
       'teams_add_chat_members',
       'teams_create_group_chat',
       'teams_export_messages',
       'teams_get_attachment',
+      'teams_get_meeting_recap',
       'teams_get_transcript',
       'teams_healthcheck',
       'teams_list_activity',
