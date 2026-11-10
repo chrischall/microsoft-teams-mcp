@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.0](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.10.0...v0.11.0) (2026-11-10)
+
+
+### Features
+
+* **meetings:** read meeting recaps — recordings, notes, attendance and shared files ([#120](https://github.com/chrischall/microsoft-teams-mcp/issues/120)) ([3628f90](https://github.com/chrischall/microsoft-teams-mcp/commit/3628f90d6dac70f9e8967ef7c5ddff788c70e674))
+
 ## [0.10.0](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.9.0...v0.10.0) (2026-11-09)
 
 
