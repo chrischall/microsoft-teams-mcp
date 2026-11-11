@@ -50,13 +50,17 @@ export function quotePrefix(content: string): string {
 const readsAs = (m: RawMessage | undefined, content: string): boolean =>
   m !== undefined && htmlToText(m.content ?? '') === htmlToText(content);
 
+/** A block-level tag, open or close: whitespace beside one never shows. */
+const BLOCK_TAG = /\s*(<\/?(?:p|div|ol|ul|li|pre|blockquote|table|thead|tbody|tr|td|th|h[1-6])>)\s*/g;
+
 /**
  * Whether two bodies are the same message: Teams stores what it is sent with
- * `\r\n` between block elements, so compare them sanitised, without the
- * whitespace between tags.
+ * `\r\n` around block elements (between them, and between an item's text and
+ * a list nested in it), so compare them sanitised, without the whitespace
+ * beside block tags.
  */
 export function sameBody(a: string, b: string): boolean {
-  const norm = (h: string) => sanitiseHtml(h).replace(/>\s+</g, '><').trim();
+  const norm = (h: string) => sanitiseHtml(h).replace(BLOCK_TAG, '$1').trim();
   return norm(a) === norm(b);
 }
 

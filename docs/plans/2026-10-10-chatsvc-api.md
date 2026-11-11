@@ -358,7 +358,8 @@ Part 1 are reused; writes go through the same `ChatServiceClient`.
 - **Inline emoji in text:** `<span contenteditable="false" title="{Title}" type="({key})" class="animated-emoticon-20-{key}" itemscope><img itemscope itemtype="http://schema.skype.com/Emoji" itemid="{key}" src="https://statics.teams.cdn.office.net/evergreen-assets/personal-expressions/v2/assets/emoticons/{key}/default/20_f.png" title="{Title}" alt="{unicode}" style="width:20px;height:20px;"></span>`.
   Plain unicode emoji in the text are also acceptable; only emit the span form
   for shortcodes the caller passes as `:key:`.
-- **Mention** (documented format, NOT captured — verify live): in content
+- **Mention** (verified live 2026-11-11 in a group chat: Teams stores the
+  spans and `properties.mentions` as sent, and reads them back): in content
   `<span itemscope itemtype="http://schema.skype.com/Mention" itemid="{n}">{displayName}</span>`,
   and `properties.mentions = JSON.stringify([{ "@type": "http://schema.skype.com/Mention", itemid: "{n}", mri: "{personMri}", mentionType: "person", displayName: "{displayName}" }])`,
   `n` = 0,1,… in order of appearance.

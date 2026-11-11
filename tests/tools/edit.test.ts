@@ -175,6 +175,18 @@ describe('teams_edit_message', () => {
     expect(editMessage).not.toHaveBeenCalled();
   });
 
+  it('counts text as unchanged when Teams put a line break before a nested list (live 2026-11-11)', async () => {
+    const { chatsvc, editMessage } = fakeWith();
+    const stored = await chatsvc.getMessage(GROUP, MINE);
+    (chatsvc.getMessage as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...stored,
+      content: '<ol>\r\n<li>top\r\n<ul>\r\n<li>inner</li></ul>\r\n</li><li>next</li></ol>',
+    });
+    const { data } = await edit(chatsvc, { conversation: GROUP, message_id: MINE, text: '1. top\n   - inner\n2. next', format: 'markdown' });
+    expect(data).toMatchObject({ status: 'unchanged' });
+    expect(editMessage).not.toHaveBeenCalled();
+  });
+
   it('changes nothing, and asks nothing, when the new text renders the same', async () => {
     const { chatsvc, editMessage } = fakeWith();
     const { data } = await edit(chatsvc, { conversation: GROUP, message_id: MINE, text: 'first draft' });

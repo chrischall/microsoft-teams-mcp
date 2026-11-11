@@ -804,7 +804,9 @@ renaming, adding and removing (`/threads/{id}/properties?name=topic` and
 `/threads/{id}/members/{mri}`) were verified live on 2026-11-09. Markdown
 sends, editing a message (`PUT …/messages/{id}`) and deleting one
 (`DELETE …/messages/{id}`) were verified live on `48:notes` on 2026-11-11;
-editing and deleting in a channel have not been tried yet. Threaded channel replies, @mentions,
+@mentions (in a Markdown send, and kept through an edit) were verified in a
+group chat the same day; editing and deleting in a channel have not been
+tried yet. Threaded channel replies,
 removing a reaction and the ✅ reaction's key follow Teams' documented or
 inferred shapes but have not been verified against a live tenant yet.
 
