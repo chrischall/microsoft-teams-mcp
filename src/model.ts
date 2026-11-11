@@ -7,7 +7,10 @@
  * "Verified live facts" section of `docs/plans/2026-10-10-chatsvc-api.md`.
  */
 import type { RawConversation, RawLastMessage, RawMessage } from './chatsvc.js';
-import { attr, bodyStructure, decodeEntities, mentionsOf, type MessageLink, type MessageMention } from './rich.js';
+import { attr, bodyStructure, decodeEntities, htmlToText, mentionsOf, type MessageLink, type MessageMention } from './rich.js';
+
+// The text of a body is rich.ts's to read; kept importable from here, where every reader looks.
+export { decodeEntities, htmlToText };
 
 export type ConversationKind = 'channel' | 'meeting' | 'oneOnOne' | 'group' | 'self';
 
@@ -420,98 +423,6 @@ export function conversationSummary(
 
 function truncate(s: string, max: number): string {
   return s.length <= max ? s : `${s.slice(0, max - 1)}…`;
-}
-
-/*
- * Placeholders that survive tag-stripping, so blockquote depth can be applied
- * after the text is decoded. Control characters never come out of entity
- * decoding (it drops them), so a message cannot forge one.
- */
-const QUOTE_OPEN = '\u0001';
-const QUOTE_CLOSE = '\u0002';
-
-export { decodeEntities };
-
-
-const stripTags = (s: string): string => s.replace(/<\/?[a-z!][^>]*>/gi, '');
-
-/**
- * One table row on one line, its `<td>`/`<th>` cells joined by ` | ` — a
- * pasted table (a file-monitor report, a status grid) otherwise runs its cells
- * together. Line breaks inside a cell become spaces so the row stays whole.
- */
-function tableRow(row: string): string {
-  const cells = [...row.matchAll(/<t[dh]\b[^>]*>([\s\S]*?)(?:<\/t[dh]\s*>|(?=<t[dh]\b)|$)/gi)].map(([, cell]) =>
-    cell
-      .replace(/[\u0001\u0002]/g, '')
-      .replace(/<br\s*\/?>|<\/?(p|div|li|h[1-6])\b[^>]*>|\r?\n/gi, ' ')
-      .trim(),
-  );
-  return cells.length > 0 ? cells.join(' | ') : row;
-}
-
-/**
- * Each list item's text prefixed by its marker — `1. `, `2. ` … (from the
- * list's `start`) in an ordered list, `- ` in a bulleted one — innermost
- * lists first, so a nested list numbers its own items.
- */
-function listMarkers(html: string): string {
-  const innermost = /<(ol|ul)\b([^>]*)>((?:(?!<\/?(?:ol|ul)\b)[\s\S])*?)<\/\1\s*>/gi;
-  let s = html;
-  for (let prev = ''; prev !== s; ) {
-    prev = s;
-    s = s.replace(innermost, (_whole, tag: string, attrs: string, body: string) => {
-      const start = Number(attr(` ${attrs}`, 'start'));
-      let n = Number.isInteger(start) && start >= 0 ? start : 1;
-      // Items become <div>s, so an enclosing list's pass never marks them again.
-      const items = body
-        .replace(/<li\b[^>]*>/gi, () => `<div>${tag.toLowerCase() === 'ol' ? `${n++}. ` : '- '}`)
-        .replace(/<\/li\s*>/gi, '</div>');
-      return `<div>${items}</div>`;
-    });
-  }
-  return s;
-}
-
-/**
- * A Teams message body as readable plain text. Links keep their target as
- * `text (url)`, inline images become `[image]` (emoji become their alt text),
- * a table row becomes one line of ` | `-separated cells, and a quoted reply's
- * lines are prefixed `> `. Never truncated: a long body comes back whole. No
- * HTML library: Teams bodies are a small, regular subset.
- */
-export function htmlToText(html: string): string {
-  let s = html.replace(/[\u0001\u0002]/g, '');
-  s = s.replace(/<(script|style)\b[\s\S]*?<\/\1\s*>/gi, '');
-  s = s.replace(/<blockquote\b[^>]*>/gi, `\n${QUOTE_OPEN}\n`).replace(/<\/blockquote\s*>/gi, `\n${QUOTE_CLOSE}\n`);
-  s = s.replace(/<img\b[^>]*>/gi, (tag) => {
-    const alt = attr(tag, 'alt');
-    return /schema\.skype\.com\/Emoji/i.test(attr(tag, 'itemtype') ?? '') && alt ? alt : '[image]';
-  });
-  s = listMarkers(s);
-  s = s.replace(/<a\b([^>]*)>([\s\S]*?)<\/a\s*>/gi, (_whole, attrs: string, inner: string) => {
-    const href = attr(` ${attrs}`, 'href');
-    const label = stripTags(inner).trim();
-    if (!href) return inner;
-    // Teams shows a pasted link as its own, often clipped, address: give it once.
-    if (label === '' || label === href || /^(https?:\/\/|www\.)/i.test(decodeEntities(label))) return href;
-    return `${inner} (${href})`;
-  });
-  s = s.replace(/<tr\b[^>]*>([\s\S]*?)<\/tr\s*>/gi, (_whole, row: string) => `\n${tableRow(row)}\n`);
-  // Block elements start and end a line (a quote's author <strong> runs
-  // straight into its <p> otherwise); the blank lines this makes collapse below.
-  s = s.replace(/<br\s*\/?>/gi, '\n').replace(/<\/?(p|div|li|tr|h[1-6])\b[^>]*>/gi, '\n');
-  s = decodeEntities(stripTags(s));
-
-  const out: string[] = [];
-  let depth = 0;
-  for (const raw of s.split(/\r?\n/)) {
-    const line = raw.replace(/[ \t ]+/g, ' ').trim();
-    if (line === QUOTE_OPEN) depth++;
-    else if (line === QUOTE_CLOSE) depth = Math.max(0, depth - 1);
-    else if (line !== '') out.push(`${'> '.repeat(depth)}${line}`);
-  }
-  return out.join('\n');
 }
 
 function fileAttachments(raw: unknown): FileAttachment[] {

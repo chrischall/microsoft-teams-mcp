@@ -76,8 +76,11 @@ function parse(html: string): Element {
       if (i > 0) stack.length = i;
       continue;
     }
-    // Implicit closes HTML itself makes: a new item ends the last, a block ends a paragraph.
+    // Implicit closes HTML itself makes: a new item, cell or row ends the
+    // last, and a block ends a paragraph.
     if ((tag === 'li' && top().tag === 'li') || (BLOCK.has(tag) && top().tag === 'p')) stack.pop();
+    if ((tag === 'td' || tag === 'th' || tag === 'tr') && (top().tag === 'td' || top().tag === 'th')) stack.pop();
+    if (tag === 'tr' && top().tag === 'tr') stack.pop();
     const el: Element = { tag, attrs: m[3], children: [] };
     top().children.push(el);
     if (!VOID.has(tag) && !m[3].trimEnd().endsWith('/')) stack.push(el);
@@ -236,6 +239,84 @@ export function bodyStructure(html: string): { contentHtml?: string; links: Mess
   const root = parse(html);
   const sanitised = serialise(root.children);
   return { ...(FORMATTING.test(sanitised) ? { contentHtml: sanitised } : {}), links: links(root) };
+}
+
+/* ----------------------------------------------------------------------------
+ * Plain text
+ * ------------------------------------------------------------------------- */
+
+/*
+ * Line markers that survive until the lines are laid out, so a quote's depth
+ * applies to every line inside it. `parse` strips them from the input, so a
+ * message cannot forge one.
+ */
+const QUOTE_OPEN = '\u0001';
+const QUOTE_CLOSE = '\u0002';
+
+/** Elements that start and end a line of text. */
+const TEXT_BLOCK = new Set(['p', 'div', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6']);
+
+/** A link as text: `label (url)`, or the address alone when that is all it shows. */
+function linkText(el: Element, label: string): string {
+  const href = attr(el.attrs, 'href');
+  if (!href) return label;
+  const url = decodeEntities(href);
+  const shown = label.trim();
+  // Teams shows a pasted link as its own, often clipped, address: give it once.
+  if (shown === '' || shown === url || /^(https?:\/\/|www\.)/i.test(shown)) return url;
+  return `${label} (${url})`;
+}
+
+/** One table row on one line, its cells joined by ` | ` (line breaks in a cell become spaces). */
+function rowText(tr: Element): string {
+  const cells = tr.children.filter((n): n is Element => typeof n !== 'string' && (n.tag === 'td' || n.tag === 'th'));
+  if (cells.length === 0) return toText(tr.children);
+  return cells.map((c) => toText(c.children).replace(/[\n\u0001\u0002]+/g, ' ').trim()).join(' | ');
+}
+
+function toText(nodes: readonly Node[]): string {
+  let out = '';
+  for (const n of nodes) {
+    if (typeof n === 'string') {
+      out += decodeEntities(n);
+      continue;
+    }
+    if (n.tag === 'br') out += '\n';
+    else if (n.tag === 'img') out += imageText(n);
+    else if (n.tag === 'a') out += linkText(n, toText(n.children));
+    else if (n.tag === 'tr') out += `\n${rowText(n)}\n`;
+    else if (n.tag === 'blockquote') out += `\n${QUOTE_OPEN}\n${toText(n.children)}\n${QUOTE_CLOSE}\n`;
+    else if (n.tag === 'ol' || n.tag === 'ul') {
+      const start = Number(attr(n.attrs, 'start'));
+      let i = n.tag === 'ol' && Number.isInteger(start) && start >= 0 ? start : 1;
+      for (const c of n.children) {
+        if (typeof c !== 'string' && c.tag === 'li') {
+          out += `\n${n.tag === 'ol' ? `${i++}. ` : '- '}${toText(c.children)}\n`;
+        } else out += toText([c]);
+      }
+    } else if (TEXT_BLOCK.has(n.tag)) out += `\n${toText(n.children)}\n`;
+    else out += toText(n.children);
+  }
+  return out;
+}
+
+/**
+ * A Teams message body as readable plain text. Links keep their target as
+ * `text (url)`, inline images become `[image]` (emoji become their character),
+ * a numbered list's items `1. `, `2. ` … and a bulleted one's `- `, a table
+ * row one line of ` | `-separated cells, and a quoted reply's lines are
+ * prefixed `> `. Never truncated: a long body comes back whole.
+ */
+export function htmlToText(html: string): string {
+  const out: string[] = [];
+  let depth = 0;
+  for (const raw of toText(parse(html).children).split(/\r?\n/)) {
+    const line = raw.replace(/[ \t\u00a0]+/g, ' ').trim();
+    if (line === QUOTE_OPEN) depth++;
+    else if (line === QUOTE_CLOSE) depth = Math.max(0, depth - 1);
+    else if (line !== '') out.push(`${'> '.repeat(depth)}${line}`);
+  }
+  return out.join('\n');
 }
 
 /* ----------------------------------------------------------------------------

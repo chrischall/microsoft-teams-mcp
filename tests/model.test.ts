@@ -234,6 +234,10 @@ describe('htmlToText', () => {
     );
   });
 
+  it('reads cells and rows left unclosed', () => {
+    expect(htmlToText('<table><tr><td>a<td>b<tr><td>c<td>d</table>')).toBe('a | b\nc | d');
+  });
+
   it('keeps a table row inside a quote quoted', () => {
     expect(htmlToText('<blockquote><table><tr><td>a</td><td>b</td></tr></table></blockquote>ok')).toBe('> a | b\nok');
   });
