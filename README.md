@@ -670,7 +670,7 @@ Everything is optional — by default the token is captured from your browser.
   `format` / `mentions` as for `teams_send_message`. A quote-reply keeps its
   quote. The preview shows the current text, the new text and the exact HTML
   that will replace it; text that renders exactly as the message already
-  does changes nothing (`status: "unchanged"`). The message is read back to
+  does, mentioning the same people, changes nothing (`status: "unchanged"`). The message is read back to
   verify the edit (`verified`).
 - `teams_delete_message` — delete one of your own messages: `conversation`
   and `message_id` (one you sent — someone else's or a system event is
