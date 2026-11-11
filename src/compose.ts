@@ -141,8 +141,8 @@ function locate(text: string, name: string, taken: readonly [number, number][]):
 }
 
 /** How a message's text is written: plain text, or the Markdown subset {@link renderMarkdown} reads. */
-export type MessageFormat = 'text' | 'markdown';
 export const MESSAGE_FORMATS = ['text', 'markdown'] as const;
+export type MessageFormat = (typeof MESSAGE_FORMATS)[number];
 
 /** Each mention's first free occurrence in `text`, in order of appearance. */
 function placeMentions(text: string, mentions: readonly MentionTarget[]): { start: number; end: number; mri: string }[] {

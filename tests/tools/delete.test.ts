@@ -94,10 +94,10 @@ describe('teams_delete_message', () => {
         method: 'DELETE',
         path: `/users/ME/conversations/${encodeURIComponent(GROUP)}/messages/${MINE}`,
         message_id: MINE,
-        text: 'oops, wrong chat',
         time: new Date(T0 + MIN).toISOString(),
       });
       expect(fenced(one.preview?.conversation)).toEqual({ id: GROUP, title: 'Project Falcon', kind: 'group' });
+      expect(fenced(one.preview?.text)).toBe('oops, wrong chat');
       expect(deleteMessage).not.toHaveBeenCalled();
     } finally {
       await h.close();

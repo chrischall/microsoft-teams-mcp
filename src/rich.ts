@@ -146,9 +146,12 @@ export function sanitiseHtml(html: string): string {
   return serialise(parse(html).children);
 }
 
-/** True when sanitised `html` carries any formatting beyond paragraphs and line breaks. */
+/** Any tag in sanitised HTML beyond paragraphs and line breaks. */
+const FORMATTING = /<(?!\/?(?:p|div|br)>)[a-z]/i;
+
+/** True when `html` carries any formatting beyond paragraphs and line breaks. */
 export function isRichHtml(html: string): boolean {
-  return /<(?!\/?(?:p|div|br)>)[a-z]/i.test(sanitiseHtml(html));
+  return FORMATTING.test(sanitiseHtml(html));
 }
 
 /** Someone @mentioned in a message. */
@@ -205,9 +208,13 @@ function walk(nodes: readonly Node[], visit: (el: Element) => void): void {
 
 /** Every http(s)/mailto link in a body with its shown text, in order, each pair once. */
 export function linksOf(html: string): MessageLink[] {
+  return links(parse(html));
+}
+
+function links(root: Element): MessageLink[] {
   const out: MessageLink[] = [];
   const seen = new Set<string>();
-  walk(parse(html).children, (el) => {
+  walk(root.children, (el) => {
     if (el.tag !== 'a') return;
     const href = safeHref(el.attrs);
     if (href === undefined) return;
@@ -218,6 +225,17 @@ export function linksOf(html: string): MessageLink[] {
     out.push({ href, text });
   });
   return out;
+}
+
+/**
+ * What a read shows of a body's structure, from one parse: its sanitised HTML
+ * when it carries formatting (`undefined` for a plain body, whose text says
+ * everything), and its links.
+ */
+export function bodyStructure(html: string): { contentHtml?: string; links: MessageLink[] } {
+  const root = parse(html);
+  const sanitised = serialise(root.children);
+  return { ...(FORMATTING.test(sanitised) ? { contentHtml: sanitised } : {}), links: links(root) };
 }
 
 /* ----------------------------------------------------------------------------

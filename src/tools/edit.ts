@@ -24,12 +24,13 @@ import {
   confirmWrite,
   McpToolError,
   toolAnnotations,
-  WriteOutcomeUnknownError,
 } from '@chrischall/mcp-utils';
-import type { ChatServiceClient, RawMessage } from '../chatsvc.js';
+import type { RawMessage } from '../chatsvc.js';
 import type { TeamsDeps } from '../deps.js';
 import { mentionsProperty, renderMessageHtml } from '../compose.js';
-import { htmlToText, isUserMessage, SELF_CHAT, senderMri } from '../model.js';
+import { htmlToText, isDeleted, SELF_CHAT } from '../model.js';
+import { sanitiseHtml } from '../rich.js';
+import { ownMessage, writeAndReadBack } from './own-message.js';
 import { wrapApiError } from './errors.js';
 import { formatParam, mentionArg, resolveMentions, resolveTarget } from './send.js';
 import { untrustedField, untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
@@ -49,41 +50,14 @@ export function quotePrefix(content: string): string {
 const readsAs = (m: RawMessage | undefined, content: string): boolean =>
   m !== undefined && htmlToText(m.content ?? '') === htmlToText(content);
 
-/** True when Teams has deleted `m` (it keeps the message, with `deletetime` set). */
-export function isDeletedMessage(m: RawMessage): boolean {
-  const del = m.properties?.deletetime;
-  return del !== undefined && del !== null && del !== '' && del !== 0;
-}
-
 /**
- * One of the user's own, person-written messages — the only kind this server
- * edits or deletes — or the reason it is not one. `verb` words the refusals
- * ("edit", "delete"). Whether it is already deleted is the caller's to judge.
+ * Whether two bodies are the same message: Teams stores what it is sent with
+ * `\r\n` between block elements, so compare them sanitised, without the
+ * whitespace between tags.
  */
-export async function ownMessage(
-  chatsvc: ChatServiceClient,
-  conversationId: string,
-  id: string,
-  me: string,
-  verb: string,
-): Promise<RawMessage> {
-  const m = await chatsvc.getMessage(conversationId, id);
-  if (m === undefined) {
-    throw new McpToolError(`There is no message ${id} in this conversation to ${verb}.`, {
-      hint: 'Take message ids from teams_list_messages.',
-    });
-  }
-  if (senderMri(m.from)?.toLowerCase() !== me.toLowerCase()) {
-    throw new McpToolError(`Message ${id} was not sent by you: you can ${verb} only your own messages.`, {
-      hint: 'Pick one of your own messages (fromMe: true in teams_list_messages).',
-    });
-  }
-  if (!isUserMessage(m)) {
-    throw new McpToolError(`Message ${id} is a system event (${m.messagetype}), not a message anyone wrote.`, {
-      hint: `Only messages you wrote can be ${verb === 'edit' ? 'edited' : `${verb}d`}.`,
-    });
-  }
-  return m;
+export function sameBody(a: string, b: string): boolean {
+  const norm = (h: string) => sanitiseHtml(h).replace(/>\s+</g, '><').trim();
+  return norm(a) === norm(b);
 }
 
 export function registerEditTools(server: McpServer, { chatsvc }: Pick<TeamsDeps, 'chatsvc'>): void {
@@ -131,7 +105,7 @@ export function registerEditTools(server: McpServer, { chatsvc }: Pick<TeamsDeps
         const me = await chatsvc.meMri();
         const target = await resolveTarget(chatsvc, conversation, me, 'edit a message in');
         const original = await ownMessage(chatsvc, target.id, message_id, me, 'edit');
-        if (isDeletedMessage(original)) {
+        if (isDeleted(original)) {
           throw new McpToolError(`Message ${message_id} has been deleted, so it cannot be edited.`, {
             hint: 'Send a new message instead (teams_send_message).',
           });
@@ -145,7 +119,7 @@ export function registerEditTools(server: McpServer, { chatsvc }: Pick<TeamsDeps
           format,
         );
         const content = quotePrefix(before) + rendered.html;
-        if (content === before) {
+        if (sameBody(content, before)) {
           return untrustedResult({ status: 'unchanged', conversation: target, message_id });
         }
 
@@ -174,7 +148,8 @@ export function registerEditTools(server: McpServer, { chatsvc }: Pick<TeamsDeps
           preview: {
             conversation: untrustedField(target),
             message_id,
-            current_text: htmlToText(before),
+            // The user's own text, but a quote-reply's quote is someone else's.
+            current_text: untrustedField(htmlToText(before)),
             text,
             format,
             ...(people.length > 0
@@ -189,48 +164,14 @@ export function registerEditTools(server: McpServer, { chatsvc }: Pick<TeamsDeps
         });
         if (gate) return gate;
 
-        let unconfirmed: WriteOutcomeUnknownError | undefined;
-        try {
-          await chatsvc.editMessage(target.id, message_id, body);
-        } catch (e) {
-          if (!(e instanceof WriteOutcomeUnknownError)) throw e;
-          unconfirmed = e;
-        }
-
-        let verified = false;
-        let readBackFailed = false;
-        try {
-          verified = readsAs(await chatsvc.getMessage(target.id, message_id), content);
-        } catch {
-          readBackFailed = true;
-        }
-
-        if (unconfirmed !== undefined && !verified) {
-          return untrustedResult({
-            status: 'unknown',
-            conversation: target,
-            message_id,
-            verified,
-            warning:
-              `Teams did not confirm this edit, and reading the message back ${readBackFailed ? 'failed' : 'did not show it'} — ` +
-              'check the message (teams_list_messages) before retrying.',
-          });
-        }
-        const warning =
-          unconfirmed !== undefined
-            ? 'Teams did not confirm this edit, but reading the message back shows it.'
-            : readBackFailed
-              ? 'Teams accepted the edit, but reading the message back failed — check the message (teams_list_messages).'
-              : !verified
-                ? 'Teams accepted the edit, but reading the message back did not show the new text — check the message (teams_list_messages).'
-                : undefined;
-        return untrustedResult({
-          status: 'edited',
-          conversation: target,
-          message_id,
-          verified,
-          ...(warning !== undefined ? { warning } : {}),
-        });
+        const { status, ...settled } = await writeAndReadBack(
+          () => chatsvc.editMessage(target.id, message_id, body),
+          () => chatsvc.getMessage(target.id, message_id),
+          (m) => readsAs(m, content),
+          'edit',
+          'the new text',
+        );
+        return untrustedResult({ status: status === 'done' ? 'edited' : 'unknown', conversation: target, message_id, ...settled });
       } catch (err) {
         throw wrapApiError(err, 'edit the message');
       }

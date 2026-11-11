@@ -115,11 +115,11 @@ describe('teams_edit_message', () => {
         method: 'PUT',
         path: `/users/ME/conversations/${encodeURIComponent(GROUP)}/messages/${MINE}`,
         message_id: MINE,
-        current_text: 'first draft',
         text: '**final**',
         format: 'markdown',
       });
       expect(fenced(one.preview?.conversation)).toEqual({ id: GROUP, title: 'Project Falcon', kind: 'group' });
+      expect(fenced(one.preview?.current_text)).toBe('first draft');
       expect(one.preview?.willSend?.content).toBe('<p><strong>final</strong></p>');
       expect(editMessage).not.toHaveBeenCalled();
     } finally {
@@ -150,6 +150,29 @@ describe('teams_edit_message', () => {
     const [, , body] = editMessage.mock.calls[0]!;
     expect(body.content).toBe(`${QUOTE_BLOCK}<p>a better answer</p>`);
     expect(JSON.parse(body.properties.qtdMsgs)).toEqual([{ messageId: THEIRS, sender: OTHER, time: Number(THEIRS) }]);
+  });
+
+  it('fences the current text, since a quote-reply carries what someone else wrote', async () => {
+    const { chatsvc } = fakeWith();
+    const h = await createTestHarness((server) => registerEditTools(server, { chatsvc }));
+    try {
+      const one = parseToolResult<PhaseOne>(await h.callTool('teams_edit_message', { conversation: GROUP, message_id: QUOTING, text: 'x' }));
+      expect(fenced(one.preview?.current_text)).toBe('> Bea Example\n> question\nmy answer');
+    } finally {
+      await h.close();
+    }
+  });
+
+  it('counts text as unchanged when Teams stored it with CRLFs between blocks', async () => {
+    const { chatsvc, editMessage } = fakeWith();
+    const stored = await chatsvc.getMessage(GROUP, MINE);
+    (chatsvc.getMessage as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...stored,
+      content: '<p><strong>Plan</strong></p>\r\n<ol>\r\n<li>one</li><li>two</li></ol>',
+    });
+    const { data } = await edit(chatsvc, { conversation: GROUP, message_id: MINE, text: '**Plan**\n\n1. one\n2. two', format: 'markdown' });
+    expect(data).toMatchObject({ status: 'unchanged' });
+    expect(editMessage).not.toHaveBeenCalled();
   });
 
   it('changes nothing, and asks nothing, when the new text renders the same', async () => {

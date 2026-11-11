@@ -20,11 +20,10 @@ import {
   confirmTokenParam,
   confirmWrite,
   toolAnnotations,
-  WriteOutcomeUnknownError,
 } from '@chrischall/mcp-utils';
 import type { TeamsDeps } from '../deps.js';
-import { htmlToText, normaliseMessage, SELF_CHAT } from '../model.js';
-import { isDeletedMessage, ownMessage } from './edit.js';
+import { htmlToText, isDeleted, normaliseMessage, SELF_CHAT } from '../model.js';
+import { ownMessage, writeAndReadBack } from './own-message.js';
 import { wrapApiError } from './errors.js';
 import { resolveTarget } from './send.js';
 import { untrustedField, untrustedResult, UNTRUSTED_DESCRIPTION_SUFFIX } from './untrusted.js';
@@ -69,7 +68,7 @@ export function registerDeleteTools(server: McpServer, { chatsvc }: Pick<TeamsDe
         const me = await chatsvc.meMri();
         const target = await resolveTarget(chatsvc, conversation, me, 'delete a message in');
         const m = await ownMessage(chatsvc, target.id, message_id, me, 'delete');
-        if (isDeletedMessage(m)) {
+        if (isDeleted(m)) {
           return untrustedResult({ status: 'already_deleted', conversation: target, message_id });
         }
 
@@ -87,55 +86,21 @@ export function registerDeleteTools(server: McpServer, { chatsvc }: Pick<TeamsDe
             conversation: untrustedField(target),
             message_id,
             time: normaliseMessage(m, me).time,
-            text: htmlToText(m.content ?? ''),
+            // The user's own text, but a quote-reply's quote is someone else's.
+            text: untrustedField(htmlToText(m.content ?? '')),
           },
           confirmToken,
         });
         if (gate) return gate;
 
-        let unconfirmed: WriteOutcomeUnknownError | undefined;
-        try {
-          await chatsvc.deleteMessage(target.id, message_id);
-        } catch (e) {
-          if (!(e instanceof WriteOutcomeUnknownError)) throw e;
-          unconfirmed = e;
-        }
-
-        let verified = false;
-        let readBackFailed = false;
-        try {
-          const back = await chatsvc.getMessage(target.id, message_id);
-          verified = back === undefined || isDeletedMessage(back);
-        } catch {
-          readBackFailed = true;
-        }
-
-        if (unconfirmed !== undefined && !verified) {
-          return untrustedResult({
-            status: 'unknown',
-            conversation: target,
-            message_id,
-            verified,
-            warning:
-              `Teams did not confirm this delete, and reading the message back ${readBackFailed ? 'failed' : 'still shows it'} — ` +
-              'check the conversation (teams_list_messages) before retrying.',
-          });
-        }
-        const warning =
-          unconfirmed !== undefined
-            ? 'Teams did not confirm this delete, but reading the message back shows it deleted.'
-            : readBackFailed
-              ? 'Teams accepted the delete, but reading the message back failed — check the conversation (teams_list_messages).'
-              : !verified
-                ? 'Teams accepted the delete, but reading the message back still shows it — check the conversation (teams_list_messages).'
-                : undefined;
-        return untrustedResult({
-          status: 'deleted',
-          conversation: target,
-          message_id,
-          verified,
-          ...(warning !== undefined ? { warning } : {}),
-        });
+        const { status, ...settled } = await writeAndReadBack(
+          () => chatsvc.deleteMessage(target.id, message_id),
+          () => chatsvc.getMessage(target.id, message_id),
+          (back) => back === undefined || isDeleted(back),
+          'delete',
+          'it deleted',
+        );
+        return untrustedResult({ status: status === 'done' ? 'deleted' : 'unknown', conversation: target, message_id, ...settled });
       } catch (err) {
         throw wrapApiError(err, 'delete the message');
       }

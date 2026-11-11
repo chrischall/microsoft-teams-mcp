@@ -7,7 +7,7 @@
  * "Verified live facts" section of `docs/plans/2026-10-10-chatsvc-api.md`.
  */
 import type { RawConversation, RawLastMessage, RawMessage } from './chatsvc.js';
-import { decodeEntities, isRichHtml, linksOf, mentionsOf, sanitiseHtml, type MessageLink, type MessageMention } from './rich.js';
+import { attr, bodyStructure, decodeEntities, mentionsOf, type MessageLink, type MessageMention } from './rich.js';
 
 export type ConversationKind = 'channel' | 'meeting' | 'oneOnOne' | 'group' | 'self';
 
@@ -200,7 +200,8 @@ export function isUserMessage(m: { messagetype?: string }): boolean {
   return USER_MESSAGE_TYPES.has(m.messagetype ?? '');
 }
 
-function isDeleted(m: { properties?: RawMessage['properties'] }): boolean {
+/** True when Teams has deleted the message (it keeps it, with `deletetime` set). */
+export function isDeleted(m: { properties?: RawMessage['properties'] }): boolean {
   const t = m.properties?.deletetime;
   return t !== undefined && t !== null && t !== '' && t !== 0;
 }
@@ -431,10 +432,6 @@ const QUOTE_CLOSE = '\u0002';
 
 export { decodeEntities };
 
-function attr(tag: string, name: string): string | undefined {
-  const m = new RegExp(`\\s${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'i').exec(tag);
-  return m ? (m[1] ?? m[2]) : undefined;
-}
 
 const stripTags = (s: string): string => s.replace(/<\/?[a-z!][^>]*>/gi, '');
 
@@ -690,9 +687,8 @@ export function normaliseMessage(m: RawMessage, meMri: string, opts: NormaliseOp
   const reactions = reactionsOf(props.emotions, meMri);
   const timeLocal = opts.timeZone !== undefined ? localIsoTime(time, opts.timeZone) : undefined;
   const deleted = isDeleted(m);
-  const rich = !deleted && isRichHtml(content);
+  const { contentHtml, links } = deleted ? { links: [] } : bodyStructure(content);
   const mentions = deleted ? [] : mentionsOf(props.mentions);
-  const links = deleted ? [] : linksOf(content);
 
   return {
     id: m.id,
@@ -701,7 +697,7 @@ export function normaliseMessage(m: RawMessage, meMri: string, opts: NormaliseOp
     sender: nonEmpty(m.imdisplayname) ?? mri ?? 'unknown',
     fromMe: mri !== undefined && mri === meMri,
     text: htmlToText(content),
-    ...(rich ? { content_html: sanitiseHtml(content) } : {}),
+    ...(contentHtml !== undefined ? { content_html: contentHtml } : {}),
     ...(mentions.length > 0 ? { mentions } : {}),
     ...(links.length > 0 ? { links } : {}),
     ...(subject !== undefined ? { subject } : {}),
