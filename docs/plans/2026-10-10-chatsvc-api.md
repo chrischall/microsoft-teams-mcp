@@ -362,6 +362,15 @@ Part 1 are reused; writes go through the same `ChatServiceClient`.
   `<span itemscope itemtype="http://schema.skype.com/Mention" itemid="{n}">{displayName}</span>`,
   and `properties.mentions = JSON.stringify([{ "@type": "http://schema.skype.com/Mention", itemid: "{n}", mri: "{personMri}", mentionType: "person", displayName: "{displayName}" }])`,
   `n` = 0,1,… in order of appearance.
+- **Rich text** (verified live 2026-11-11 on `48:notes`): a post whose
+  content uses `<strong>`, `<em>`, `<s>`, `<code>`, `<pre><code>`, nested
+  `<ol>`/`<ul>`/`<li>` and `<a href>` is stored and served back with every
+  tag kept (Teams adds `\r\n` between block elements and drops nothing).
+- **Edit** (verified live 2026-11-11 on `48:notes`):
+  `PUT {base}/users/ME/conversations/{encodeURIComponent(convId)}/messages/{msgId}`
+  body `{ content, messagetype: "RichText/Html", contenttype: "text", amsreferences: [], properties: { mentions: "[]" } }`
+  → 2xx; the message then reads back with the new content and
+  `properties.edittime` set. Not yet tried in a channel.
 - **Reaction.** `PUT {base}/users/ME/conversations/{encodeURIComponent(convId)}/messages/{msgId}/properties?name=emotions`
   body `{ "emotions": { "key": "<key>", "value": <epoch ms> } }` → 2xx.
   👍 = `like`. Known named keys: `like, heart, laugh, surprised, sad, angry,

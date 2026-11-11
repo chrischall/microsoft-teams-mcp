@@ -466,7 +466,10 @@ function listMarkers(html: string): string {
     s = s.replace(innermost, (_whole, tag: string, attrs: string, body: string) => {
       const start = Number(attr(` ${attrs}`, 'start'));
       let n = Number.isInteger(start) && start >= 0 ? start : 1;
-      const items = body.replace(/<li\b[^>]*>/gi, () => `<li>${tag.toLowerCase() === 'ol' ? `${n++}. ` : '- '}`);
+      // Items become <div>s, so an enclosing list's pass never marks them again.
+      const items = body
+        .replace(/<li\b[^>]*>/gi, () => `<div>${tag.toLowerCase() === 'ol' ? `${n++}. ` : '- '}`)
+        .replace(/<\/li\s*>/gi, '</div>');
       return `<div>${items}</div>`;
     });
   }

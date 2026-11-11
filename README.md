@@ -795,7 +795,9 @@ is harmless. Marking read (`PUT …/properties?name=consumptionhorizon`) was
 verified live on `48:notes` on 2026-10-12. A rename or membership change
 Teams does not confirm is settled the same way, by reading the chat back;
 renaming, adding and removing (`/threads/{id}/properties?name=topic` and
-`/threads/{id}/members/{mri}`) were verified live on 2026-11-09. Threaded channel replies, @mentions,
+`/threads/{id}/members/{mri}`) were verified live on 2026-11-09. Markdown
+sends and editing a message (`PUT …/messages/{id}`) were verified live on
+`48:notes` on 2026-11-11; editing in a channel has not been tried yet. Threaded channel replies, @mentions,
 removing a reaction and the ✅ reaction's key follow Teams' documented or
 inferred shapes but have not been verified against a live tenant yet.
 

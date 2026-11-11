@@ -197,6 +197,12 @@ describe('htmlToText', () => {
     expect(htmlToText('<ol start="3"><li>three</li></ol>')).toBe('3. three');
   });
 
+  it('marks a nested list item once, as Teams returns it (live 2026-11-11)', () => {
+    const html =
+      '<ul>\r\n<li>nested bullets:\r\n<ul>\r\n<li>inner item</li></ul>\r\n</li></ul>\r\n<ol>\r\n<li>one</li><li>two</li></ol>';
+    expect(htmlToText(html)).toBe('- nested bullets:\n- inner item\n1. one\n2. two');
+  });
+
   it('gives a link shown as its own (clipped) address just once', () => {
     expect(htmlToText('<a href="https://example.com/a/long/path">https://example.com/a/lo…</a>')).toBe(
       'https://example.com/a/long/path',

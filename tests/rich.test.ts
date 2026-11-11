@@ -46,6 +46,10 @@ describe('sanitiseHtml', () => {
     );
   });
 
+  it('writes CRLF line endings as LF', () => {
+    expect(sanitiseHtml('<p>a</p>\r\n<p>b</p>')).toBe('<p>a</p>\n<p>b</p>');
+  });
+
   it('drops comments and escapes stray angle brackets', () => {
     expect(sanitiseHtml('<p>a<!-- hidden -->b 1 < 2</p>')).toBe('<p>ab 1 &lt; 2</p>');
   });

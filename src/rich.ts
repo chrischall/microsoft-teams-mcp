@@ -112,7 +112,7 @@ function serialise(nodes: readonly Node[]): string {
   let out = '';
   for (const n of nodes) {
     if (typeof n === 'string') {
-      out += n.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      out += n.replace(/\r\n?/g, '\n').replace(/</g, '&lt;').replace(/>/g, '&gt;');
       continue;
     }
     const inner = () => serialise(n.children);
