@@ -371,6 +371,11 @@ Part 1 are reused; writes go through the same `ChatServiceClient`.
   body `{ content, messagetype: "RichText/Html", contenttype: "text", amsreferences: [], properties: { mentions: "[]" } }`
   → 2xx; the message then reads back with the new content and
   `properties.edittime` set. Not yet tried in a channel.
+- **Delete** (verified live 2026-11-11 on `48:notes`):
+  `DELETE {base}/users/ME/conversations/{encodeURIComponent(convId)}/messages/{msgId}`,
+  no body → 2xx. The message stays in the conversation with
+  `properties.deletetime` set and empty content (an edited message no longer
+  reads as edited). Not yet tried in a channel.
 - **Reaction.** `PUT {base}/users/ME/conversations/{encodeURIComponent(convId)}/messages/{msgId}/properties?name=emotions`
   body `{ "emotions": { "key": "<key>", "value": <epoch ms> } }` → 2xx.
   👍 = `like`. Known named keys: `like, heart, laugh, surprised, sad, angry,
