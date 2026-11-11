@@ -157,7 +157,7 @@
     "confirm_mode": {
       "type": "string",
       "title": "Write confirmation mode (optional)",
-      "description": "Optional. What the writes (teams_send_message, teams_react, teams_mark_read, teams_rename_chat, teams_add_chat_members, teams_remove_chat_members, teams_create_group_chat and the read tools' mark_read) do on a client that cannot show a confirmation prompt (claude.ai, Claude Desktop): \"ask-user\" (default: the first call returns a preview and a confirmToken, and the model must get your approval in chat before using it), \"auto\" (the model may use the token after reviewing the preview itself) or \"refuse\". An unrecognised value is treated as refuse. Leave blank for the default.",
+      "description": "Optional. What the writes (teams_send_message, teams_edit_message, teams_react, teams_mark_read, teams_rename_chat, teams_add_chat_members, teams_remove_chat_members, teams_create_group_chat and the read tools' mark_read) do on a client that cannot show a confirmation prompt (claude.ai, Claude Desktop): \"ask-user\" (default: the first call returns a preview and a confirmToken, and the model must get your approval in chat before using it), \"auto\" (the model may use the token after reviewing the preview itself) or \"refuse\". An unrecognised value is treated as refuse. Leave blank for the default.",
       "required": false
     },
     "confirm_elicitation": {
@@ -211,7 +211,11 @@
     },
     {
       "name": "teams_send_message",
-      "description": "Post a message (with quote-replies, @mentions and emoji) to any chat or channel — asks you to confirm first"
+      "description": "Post a message (plain text or Markdown, with quote-replies, @mentions and emoji) to any chat or channel — asks you to confirm first"
+    },
+    {
+      "name": "teams_edit_message",
+      "description": "Replace the text of one of your own messages (plain text or Markdown) — asks you to confirm first"
     },
     {
       "name": "teams_react",

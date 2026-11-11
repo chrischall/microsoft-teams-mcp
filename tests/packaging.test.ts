@@ -191,6 +191,7 @@ describe('manifest tool roster', () => {
     expect(registered).toEqual([
       'teams_add_chat_members',
       'teams_create_group_chat',
+      'teams_edit_message',
       'teams_export_messages',
       'teams_get_attachment',
       'teams_get_meeting_recap',
@@ -223,13 +224,13 @@ describe('write tools are documented as confirm-gated', () => {
 
   it('says in each write tool\'s manifest description that it asks to confirm first', () => {
     const tools = read('manifest.json').tools as { name: string; description: string }[];
-    for (const name of ['teams_send_message', 'teams_react', 'teams_rename_chat', 'teams_add_chat_members', 'teams_remove_chat_members', 'teams_create_group_chat']) {
+    for (const name of ['teams_send_message', 'teams_edit_message', 'teams_react', 'teams_rename_chat', 'teams_add_chat_members', 'teams_remove_chat_members', 'teams_create_group_chat']) {
       expect(tools.find((t) => t.name === name)?.description, name).toMatch(/confirm/i);
     }
   });
 
   it('README describes both writes, the confirmation flow and the self-chat to test in', () => {
-    for (const s of ['teams_send_message', 'teams_react', 'teams_rename_chat', 'teams_add_chat_members', 'teams_remove_chat_members', 'teams_create_group_chat', 'confirmToken', 'MCP_CONFIRM_MODE', '48:notes']) {
+    for (const s of ['teams_send_message', 'teams_edit_message', 'teams_react', 'teams_rename_chat', 'teams_add_chat_members', 'teams_remove_chat_members', 'teams_create_group_chat', 'confirmToken', 'MCP_CONFIRM_MODE', '48:notes']) {
       expect(readme, s).toContain(s);
     }
     expect(readme).not.toMatch(/all tools are read-only/i);

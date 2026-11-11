@@ -284,6 +284,35 @@ describe('teams_export_messages to disk (Markdown)', () => {
   });
 });
 
+describe('teams_export_messages rich text', () => {
+  const RICH =
+    '<p><b>Plan</b> for <span itemscope="" itemtype="http://schema.skype.com/Mention" itemid="0">Pat</span>:</p>' +
+    '<ol><li>one</li><li>two</li></ol><p>See <a href="https://example.com/doc">the doc</a></p>';
+  const rich = (): Record<string, RawMessage[]> => ({
+    [ALPHA]: [
+      {
+        ...said('Lee, Pat', T0, ALPHA),
+        content: RICH,
+        properties: { mentions: JSON.stringify([{ itemid: '0', mri: '8:orgid:pat', displayName: 'Pat' }]) },
+      },
+    ],
+  });
+
+  it('writes content_html, mentions and links into each JSONL record', async () => {
+    const { data } = await call(chatsvcWith(CONVS, rich()), { conversations: ALPHA });
+    const [, record] = lines(payload(data!).files[0].path);
+    expect(record.content_html).toContain('<ol><li>one</li><li>two</li></ol>');
+    expect(record.mentions).toEqual([{ mri: '8:orgid:pat', displayName: 'Pat' }]);
+    expect(record.links).toEqual([{ href: 'https://example.com/doc', text: 'the doc' }]);
+  });
+
+  it('renders the Markdown transcript with the formatting kept', async () => {
+    const { data } = await call(chatsvcWith(CONVS, rich()), { format: 'markdown', conversations: ALPHA });
+    const md = readFileSync(payload(data!).files[0].path, 'utf8');
+    expect(md).toContain('**Plan** for @Pat:\n\n1. one\n2. two\n\nSee [the doc](https://example.com/doc)');
+  });
+});
+
 describe('teams_export_messages budgets and resume', () => {
   it('stops at max_items with a cursor, and the cursor finishes the same export with no gap or repeat', async () => {
     const chatsvc = chatsvcWith();

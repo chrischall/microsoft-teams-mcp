@@ -7,6 +7,7 @@
  * "Verified live facts" section of `docs/plans/2026-10-10-chatsvc-api.md`.
  */
 import type { RawConversation, RawLastMessage, RawMessage } from './chatsvc.js';
+import { decodeEntities, isRichHtml, linksOf, mentionsOf, sanitiseHtml, type MessageLink, type MessageMention } from './rich.js';
 
 export type ConversationKind = 'channel' | 'meeting' | 'oneOnOne' | 'group' | 'self';
 
@@ -94,6 +95,16 @@ export interface NormalisedMessage {
   sender: string;
   fromMe: boolean;
   text: string;
+  /**
+   * The body as sanitised HTML (see `rich.ts`), only when it carries
+   * formatting beyond paragraphs and line breaks — bold, lists, links, code,
+   * quotes, mentions, …. Absent: `text` says everything.
+   */
+  content_html?: string;
+  /** Who was @mentioned (`properties.mentions`); absent when nobody was. */
+  mentions?: MessageMention[];
+  /** The body's http(s)/mailto links with the text they were shown as; absent when none. */
+  links?: MessageLink[];
   subject?: string;
   /** In a channel: the root post this replies to (absent on the root itself). */
   replyTo?: string;
@@ -418,27 +429,7 @@ function truncate(s: string, max: number): string {
 const QUOTE_OPEN = '\u0001';
 const QUOTE_CLOSE = '\u0002';
 
-const NAMED_ENTITIES: Record<string, string> = {
-  amp: '&',
-  lt: '<',
-  gt: '>',
-  quot: '"',
-  apos: "'",
-  nbsp: ' ',
-};
-
-export function decodeEntities(s: string): string {
-  // One pass, so `&amp;lt;` becomes `&lt;` and not `<`.
-  return s.replace(/&(?:#(\d+)|#x([0-9a-f]+)|([a-z]+));/gi, (whole, dec, hex, name) => {
-    if (name !== undefined) return NAMED_ENTITIES[name.toLowerCase()] ?? whole;
-    const code = dec !== undefined ? Number(dec) : parseInt(hex, 16);
-    if (!Number.isFinite(code) || code > 0x10ffff) return whole;
-    // Drop control characters (keeping tab/newline): they carry no text and
-    // would collide with the quote placeholders.
-    if (code < 0x20 && code !== 0x09 && code !== 0x0a) return '';
-    return String.fromCodePoint(code);
-  });
-}
+export { decodeEntities };
 
 function attr(tag: string, name: string): string | undefined {
   const m = new RegExp(`\\s${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'i').exec(tag);
@@ -463,6 +454,26 @@ function tableRow(row: string): string {
 }
 
 /**
+ * Each list item's text prefixed by its marker — `1. `, `2. ` … (from the
+ * list's `start`) in an ordered list, `- ` in a bulleted one — innermost
+ * lists first, so a nested list numbers its own items.
+ */
+function listMarkers(html: string): string {
+  const innermost = /<(ol|ul)\b([^>]*)>((?:(?!<\/?(?:ol|ul)\b)[\s\S])*?)<\/\1\s*>/gi;
+  let s = html;
+  for (let prev = ''; prev !== s; ) {
+    prev = s;
+    s = s.replace(innermost, (_whole, tag: string, attrs: string, body: string) => {
+      const start = Number(attr(` ${attrs}`, 'start'));
+      let n = Number.isInteger(start) && start >= 0 ? start : 1;
+      const items = body.replace(/<li\b[^>]*>/gi, () => `<li>${tag.toLowerCase() === 'ol' ? `${n++}. ` : '- '}`);
+      return `<div>${items}</div>`;
+    });
+  }
+  return s;
+}
+
+/**
  * A Teams message body as readable plain text. Links keep their target as
  * `text (url)`, inline images become `[image]` (emoji become their alt text),
  * a table row becomes one line of ` | `-separated cells, and a quoted reply's
@@ -477,11 +488,13 @@ export function htmlToText(html: string): string {
     const alt = attr(tag, 'alt');
     return /schema\.skype\.com\/Emoji/i.test(attr(tag, 'itemtype') ?? '') && alt ? alt : '[image]';
   });
+  s = listMarkers(s);
   s = s.replace(/<a\b([^>]*)>([\s\S]*?)<\/a\s*>/gi, (_whole, attrs: string, inner: string) => {
     const href = attr(` ${attrs}`, 'href');
     const label = stripTags(inner).trim();
     if (!href) return inner;
-    if (label === '' || label === href) return href;
+    // Teams shows a pasted link as its own, often clipped, address: give it once.
+    if (label === '' || label === href || /^(https?:\/\/|www\.)/i.test(decodeEntities(label))) return href;
     return `${inner} (${href})`;
   });
   s = s.replace(/<tr\b[^>]*>([\s\S]*?)<\/tr\s*>/gi, (_whole, row: string) => `\n${tableRow(row)}\n`);
@@ -673,6 +686,10 @@ export function normaliseMessage(m: RawMessage, meMri: string, opts: NormaliseOp
   const content = m.content ?? '';
   const reactions = reactionsOf(props.emotions, meMri);
   const timeLocal = opts.timeZone !== undefined ? localIsoTime(time, opts.timeZone) : undefined;
+  const deleted = isDeleted(m);
+  const rich = !deleted && isRichHtml(content);
+  const mentions = deleted ? [] : mentionsOf(props.mentions);
+  const links = deleted ? [] : linksOf(content);
 
   return {
     id: m.id,
@@ -681,10 +698,13 @@ export function normaliseMessage(m: RawMessage, meMri: string, opts: NormaliseOp
     sender: nonEmpty(m.imdisplayname) ?? mri ?? 'unknown',
     fromMe: mri !== undefined && mri === meMri,
     text: htmlToText(content),
+    ...(rich ? { content_html: sanitiseHtml(content) } : {}),
+    ...(mentions.length > 0 ? { mentions } : {}),
+    ...(links.length > 0 ? { links } : {}),
     ...(subject !== undefined ? { subject } : {}),
     ...(root !== undefined && root !== m.id ? { replyTo: root } : {}),
     edited: props.edittime !== undefined && props.edittime !== null && props.edittime !== '',
-    ...(isDeleted(m) ? { deleted: true as const } : {}),
+    ...(deleted ? { deleted: true as const } : {}),
     attachments: { files: fileAttachments(props.files), images: imageAttachments(content) },
     ...(reactions.length > 0 ? { reactions } : {}),
   };

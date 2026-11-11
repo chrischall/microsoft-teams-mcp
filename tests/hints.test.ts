@@ -41,6 +41,7 @@ const EXPECTED_INTENT: Record<string, string> = {
   teams_remove_chat_members: 'send',
   teams_create_group_chat: 'send',
   teams_mark_read: 'change',
+  teams_edit_message: 'change',
 };
 
 const served = async () => (await servedTools()) as unknown as Listed[];

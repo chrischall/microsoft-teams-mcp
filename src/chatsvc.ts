@@ -129,6 +129,9 @@ const SEND_OUTCOME_HINT =
 const REACTION_OUTCOME_HINT =
   'The reaction change may already have been applied — check the message (teams_list_messages) before retrying.';
 
+const EDIT_OUTCOME_HINT =
+  'The edit may already have been applied — read the message (teams_list_messages) before retrying.';
+
 const THREAD_OUTCOME_HINT =
   'The change to the chat may already have been applied — check the chat (its name and members) before retrying.';
 
@@ -486,6 +489,22 @@ export class ChatServiceClient {
     this.#checkWriteStatus('POST', status, SEND_OUTCOME_HINT);
     const id = /\/messages\/([^/?#]+)\/?(?:[?#].*)?$/.exec(headers.get('location') ?? '')?.[1];
     return id !== undefined ? { id: decodeURIComponent(id) } : {};
+  }
+
+  /**
+   * Replace one of the user's own messages: `PUT …/messages/{id}` with the
+   * new body (`teams_edit_message` builds it). An edit is idempotent, but a
+   * request that was sent and got no usable answer is still a
+   * `WriteOutcomeUnknownError`, so the tool reads the message back rather
+   * than report a plain failure for a change that may have landed.
+   */
+  async editMessage(conversationId: string, messageId: string, body: unknown): Promise<void> {
+    this.#requireConfigured();
+    const url =
+      `${this.#baseUrl}/users/ME/conversations/${encodeURIComponent(conversationId)}` +
+      `/messages/${encodeURIComponent(messageId)}`;
+    const { status } = await this.#send(url, 'text', undefined, { method: 'PUT', body, hint: EDIT_OUTCOME_HINT });
+    this.#checkWriteStatus('PUT', status, EDIT_OUTCOME_HINT);
   }
 
   /**

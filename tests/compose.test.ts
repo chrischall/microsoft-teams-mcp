@@ -139,6 +139,102 @@ describe('renderMessageHtml', () => {
   });
 });
 
+describe('renderMessageHtml (markdown)', () => {
+  const md = (text: string, mentions: { text: string; mri: string }[] = []) => renderMessageHtml(text, mentions, 'markdown');
+  const MENTION = (n: number, name: string) =>
+    `<span itemscope itemtype="http://schema.skype.com/Mention" itemid="${n}">${name}</span>`;
+
+  it('renders bold, italic and strike', () => {
+    expect(md('**bold** and _it_ and *it2* and ~~gone~~').html).toBe(
+      '<p><strong>bold</strong> and <em>it</em> and <em>it2</em> and <s>gone</s></p>',
+    );
+  });
+
+  it('leaves underscores inside words and a lone asterisk alone', () => {
+    expect(md('snake_case_name costs 2 * 3').html).toBe('<p>snake_case_name costs 2 * 3</p>');
+  });
+
+  it('keeps line breaks in a paragraph and splits paragraphs on a blank line', () => {
+    expect(md('a\nb\n\nc').html).toBe('<p>a<br>b</p><p>c</p>');
+  });
+
+  it('renders numbered and bulleted lists, keeping a numbered list\'s start', () => {
+    expect(md('Steps:\n1. one\n2. two\n\n- a\n* b').html).toBe(
+      '<p>Steps:</p><ol><li>one</li><li>two</li></ol><ul><li>a</li><li>b</li></ul>',
+    );
+    expect(md('3. three\n4. four').html).toBe('<ol start="3"><li>three</li><li>four</li></ol>');
+  });
+
+  it('nests an indented list under its item', () => {
+    expect(md('1. top\n   - inner\n   - more\n2. next').html).toBe(
+      '<ol><li>top<ul><li>inner</li><li>more</li></ul></li><li>next</li></ol>',
+    );
+  });
+
+  it('renders a link with its text, escaping the address', () => {
+    expect(md('see [the **doc**](https://example.com/a?b=1&c=2)').html).toBe(
+      '<p>see <a href="https://example.com/a?b=1&amp;c=2">the <strong>doc</strong></a></p>',
+    );
+  });
+
+  it('leaves a link to anything but http(s) or mailto as literal text', () => {
+    expect(md('[x](javascript:alert(1))').html).toBe('<p>[x](javascript:alert(1))</p>');
+  });
+
+  it('renders inline code verbatim and escaped', () => {
+    expect(md('run `a<b && **c**` now').html).toBe('<p>run <code>a&lt;b &amp;&amp; **c**</code> now</p>');
+  });
+
+  it('renders a fenced code block verbatim', () => {
+    expect(md('before\n```js\nif (a < b) {\n  go(); // **x**\n}\n```\nafter').html).toBe(
+      '<p>before</p><pre><code>if (a &lt; b) {\n  go(); // **x**\n}</code></pre><p>after</p>',
+    );
+  });
+
+  it('escapes raw HTML and leaves unsupported markdown as text', () => {
+    expect(md('<b>x</b> <img src=x onerror=alert(1)>').html).toBe(
+      '<p>&lt;b&gt;x&lt;/b&gt; &lt;img src=x onerror=alert(1)&gt;</p>',
+    );
+    expect(md('# not a heading\n> not a quote\n![img](https://example.com/i.png)').html).toBe(
+      '<p># not a heading<br>&gt; not a quote<br>!<a href="https://example.com/i.png">img</a></p>',
+    );
+  });
+
+  it('honours backslash escapes', () => {
+    expect(md('\\*not italic\\* and \\_nor this\\_').html).toBe('<p>*not italic* and _nor this_</p>');
+  });
+
+  it('renders :shortcodes: as emoji outside code only', () => {
+    const { html } = md(':smile: **hi** `:smile:`');
+    expect(html).toContain('itemid="smile"');
+    expect(html).toContain('<strong>hi</strong>');
+    expect(html).toContain('<code>:smile:</code>');
+    expect(md(':1f389_partypopper:').html).toContain('itemid="1f389_partypopper"');
+  });
+
+  it('places mentions inside formatting and lists, numbered in order of appearance', () => {
+    const { html, mentions } = md('**@Bea** see:\n1. ask @Al', [
+      { text: 'Al', mri: THIRD },
+      { text: 'Bea', mri: OTHER },
+    ]);
+    expect(html).toBe(`<p><strong>${MENTION(0, 'Bea')}</strong> see:</p><ol><li>ask ${MENTION(1, 'Al')}</li></ol>`);
+    expect(mentions).toEqual([
+      { itemid: '0', mri: OTHER, displayName: 'Bea' },
+      { itemid: '1', mri: THIRD, displayName: 'Al' },
+    ]);
+  });
+
+  it('cannot be tricked into a mention by private-use characters in the text', () => {
+    expect(md('0 x').html).toBe('<p>0 x</p>');
+  });
+
+  it('reads back with the structure kept', () => {
+    expect(htmlToText(md('**Plan**\n1. one\n2. two\n\nsee [doc](https://example.com)').html)).toBe(
+      'Plan\n1. one\n2. two\nsee doc (https://example.com)',
+    );
+  });
+});
+
 describe('mentionsProperty', () => {
   it('is the documented JSON string', () => {
     expect(JSON.parse(mentionsProperty([{ itemid: '0', mri: OTHER, displayName: 'Bea' }]))).toEqual([

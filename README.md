@@ -36,7 +36,7 @@ By default nothing here marks anything read. Reading a chat through this
 server leaves your Teams unread badges exactly as they were — unless you ask
 for it: `teams_mark_read`, or `mark_read: true` on `teams_list_messages`
 / `teams_list_unread_messages`, moves your read marker forward. The writes —
-`teams_send_message`, `teams_react`, marking read, renaming a group chat
+`teams_send_message`, `teams_edit_message`, `teams_react`, marking read, renaming a group chat
 or adding and removing its members (`teams_rename_chat`,
 `teams_add_chat_members`, `teams_remove_chat_members`), and starting a new
 one (`teams_create_group_chat`) — go through the same
@@ -323,7 +323,15 @@ Everything is optional — by default the token is captured from your browser.
   `limit` (default 50, max 500).
 - `teams_list_messages` — read any chat or channel by id or name,
   oldest first: sender, time (UTC, ISO 8601), text, subject, edited/deleted
-  flags and attachments. A channel comes back as threads (root post + replies).
+  flags and attachments. A formatted message also carries `content_html` —
+  its body as sanitised HTML (bold, italic, lists, links, code, quotes,
+  headings, tables and @mention spans; every other tag and attribute
+  dropped) — and any message with them carries `mentions`
+  (`[{mri, displayName}]`, who was @mentioned) and `links`
+  (`[{href, text}]`, each link with the text it was shown as). A plain
+  message has none of the three: its `text` says everything. In `text` a
+  numbered list keeps its numbers (`1. `, `2. `) and a bulleted one its `- `.
+  A channel comes back as threads (root post + replies).
   A thread whose root post is older than the window (a reply came in after
   `since`, `limit` or `after_message_id` cut the read) still shows its root:
   it is fetched by id and marked `outside_window: true` — context only, not
@@ -585,8 +593,11 @@ Everything is optional — by default the token is captured from your browser.
   conversation, and a note that the content is untrusted third-party text),
   then one record per message, oldest first, each carrying its conversation's
   `id`, `kind`, `title`, `team` (channels) and `participants` (chats: the
-  people seen writing, other than you) — or `format: "markdown"` for readable
-  transcripts, channels threaded under their root posts. `conversations`
+  people seen writing, other than you) and the message's `content_html`,
+  `mentions` and `links` when it has them — or `format: "markdown"` for readable
+  transcripts, channels threaded under their root posts, a formatted message
+  rendered as Markdown (bold, italic, lists, links with their text, code,
+  quotes, tables, mentions as `@name`). `conversations`
   (ids or names, one or an array; omit for every conversation), `kinds`
   (`chat`, `channel`, `meeting`), `since` / `until` (by arrival; default all
   history), `tz`. Each call stops at `max_items` messages (default 5000, max
@@ -632,14 +643,29 @@ Everything is optional — by default the token is captured from your browser.
 **Write** (each asks you to confirm first — see [Writes](#writes)):
 
 - `teams_send_message` — post as you to any chat or channel, by id or name.
-  `text` is plain text: it is escaped, newlines are kept, and `:key:`
-  shortcodes (`:smile:`, `:1f389_partypopper:`) become Teams emoji.
+  `text` is plain text by default: it is escaped, newlines are kept, and
+  `:key:` shortcodes (`:smile:`, `:1f389_partypopper:`) become Teams emoji.
+  `format: "markdown"` reads it as Markdown instead: `**bold**`, `*italic*`,
+  `~~strike~~`, `` `inline code` ``, fenced code blocks, bulleted (`- `) and
+  numbered (`1. `) lists nested by indenting, `[link text](https://…)`
+  (http, https and mailto only), blank-line paragraphs and line breaks;
+  emoji and mentions work as in plain text. Anything else — raw HTML,
+  headings, quotes, images — is escaped and shown as written. The preview's
+  `willSend.content` is the exact HTML that will be posted.
   `reply_to` posts into a channel post's thread — it must be a root post in
   that channel, not a reply (in a chat it quote-replies that message); `quote` quote-replies a message anywhere; `mentions`
   @-mentions people by MRI or by a display name matched among the
   conversation's recent senders (an ambiguous name is refused with the
   candidates). The result says whether the post was found again by reading
   the conversation back (`verified`).
+- `teams_edit_message` — replace the text of one of your own messages:
+  `conversation`, `message_id` (one you sent — someone else's, a deleted
+  message or a system event is refused before any preview), `text`, and
+  `format` / `mentions` as for `teams_send_message`. A quote-reply keeps its
+  quote. The preview shows the current text, the new text and the exact HTML
+  that will replace it; text that renders exactly as the message already
+  does changes nothing (`status: "unchanged"`). The message is read back to
+  verify the edit (`verified`).
 - `teams_react` — add or (with `remove: true`) withdraw your reaction on a
   message: an emoji or name (`thumbsup`/👍, `heart`/❤️, `laugh`/😆,
   `surprised`/😮, `sad`/😢, `angry`/😡, `checkmark`/✅) or any raw Teams
@@ -722,13 +748,13 @@ read-only, and nothing marks anything read unless you ask it to.
 
 ## Writes
 
-A post, a reaction, a rename, a membership change and a new group chat are
+A post, an edit, a reaction, a rename, a membership change and a new group chat are
 visible to everyone in the conversation, and marking read clears your unread badges, so each
 write asks you first. A
 client that can show a confirmation prompt (Claude Code) shows one. On a
 client that cannot, the first call changes nothing and returns a
 `confirmation-required` preview — the conversation, the exact text, any
-mentions, the quoted message, the reaction, the message your read marker
+mentions, the quoted message, a message's current and new text, the reaction, the message your read marker
 moves to and where it was, a chat's current and new name, or who is added or
 removed, with everything other people wrote (titles,
 names, quoted text) fenced as untrusted — plus a `confirmToken`; only a
@@ -751,7 +777,7 @@ as the real guard on what gets posted.
 
 **Try it in your own notes first.** The conversation `48:notes` (also by the
 name `notes` or `self`) is your Teams self-chat ("notes to self"): sending,
-reacting and marking read accept it (the group-chat tools do not — it has no
+editing, reacting and marking read accept it (the group-chat tools do not — it has no
 one else in it), `teams_list_messages` reads it, nobody else sees it, and
 it is the safe place to see what a message or reaction will look like. Every
 other `48:` system conversation (calendar and the like) is refused.
@@ -761,7 +787,8 @@ timeout, a dropped connection or a 5xx after the request went out), the
 result is `status: "unknown"` — the message may already be there, so read the
 conversation before sending again. A 4xx is a refusal and stays an error. A
 reaction Teams does not confirm is settled by reading the message back, and
-is `status: "unknown"` only when that does not show the change. A read-marker
+is `status: "unknown"` only when that does not show the change; so is an
+edit. A read-marker
 move Teams does not confirm is `status: "unknown"` (`marked_read: false` with a
 `mark_read_warning` from the read tools); moving it again to the same message
 is harmless. Marking read (`PUT …/properties?name=consumptionhorizon`) was

@@ -192,6 +192,17 @@ describe('htmlToText', () => {
     );
   });
 
+  it('numbers an ordered list and bullets an unordered one', () => {
+    expect(htmlToText('<p>Do:</p><ol><li>one</li><li>two</li></ol><ul><li>a</li></ul>')).toBe('Do:\n1. one\n2. two\n- a');
+    expect(htmlToText('<ol start="3"><li>three</li></ol>')).toBe('3. three');
+  });
+
+  it('gives a link shown as its own (clipped) address just once', () => {
+    expect(htmlToText('<a href="https://example.com/a/long/path">https://example.com/a/lo…</a>')).toBe(
+      'https://example.com/a/long/path',
+    );
+  });
+
   it('leaves plain text with a bare < alone', () => {
     expect(htmlToText('a < b and c > d')).toBe('a < b and c > d');
   });
@@ -260,9 +271,44 @@ describe('normaliseMessage', () => {
       sender: 'Another Person',
       fromMe: false,
       text: '> Example Person\n> Original question\nHere is the answer',
+      content_html: expect.stringContaining('<blockquote>'),
       edited: true,
       attachments: { files: [], images: [] },
     });
+  });
+
+  it('carries no content_html, mentions or links for a plain message', () => {
+    const n = normaliseMessage({ id: '1', messagetype: 'RichText/Html', content: '<p>just<br>text</p>' }, ME);
+    expect(n).not.toHaveProperty('content_html');
+    expect(n).not.toHaveProperty('mentions');
+    expect(n).not.toHaveProperty('links');
+  });
+
+  it('carries sanitised content_html, structured mentions and links for a rich message', () => {
+    const n = normaliseMessage(
+      {
+        id: '2',
+        messagetype: 'RichText/Html',
+        content:
+          '<p style="x">Hi <span itemscope="" itemtype="http://schema.skype.com/Mention" itemid="0">Alex Example</span>, ' +
+          '<b>read</b> <a href="https://example.com/doc" target="_blank">the doc</a></p><script>x()</script>',
+        properties: {
+          mentions: JSON.stringify([{ itemid: '0', mri: '8:orgid:aaa', mentionType: 'person', displayName: 'Alex Example' }]),
+        },
+      },
+      ME,
+    );
+    expect(n.content_html).toBe(
+      '<p>Hi <span itemtype="http://schema.skype.com/Mention" itemid="0">Alex Example</span>, ' +
+        '<b>read</b> <a href="https://example.com/doc">the doc</a></p>',
+    );
+    expect(n.mentions).toEqual([{ mri: '8:orgid:aaa', displayName: 'Alex Example' }]);
+    expect(n.links).toEqual([{ href: 'https://example.com/doc', text: 'the doc' }]);
+  });
+
+  it('carries no content_html for a deleted message', () => {
+    const n = normaliseMessage({ id: '3', content: '<b>x</b>', properties: { deletetime: 5 } }, ME);
+    expect(n).not.toHaveProperty('content_html');
   });
 
   it('marks a deleted message', () => {

@@ -12,6 +12,7 @@ import { registerChangesTools } from '../src/tools/changes.js';
 import { registerAttachmentTools } from '../src/tools/attachment.js';
 import { registerSendTools } from '../src/tools/send.js';
 import { registerReactTools } from '../src/tools/react.js';
+import { registerEditTools } from '../src/tools/edit.js';
 import { registerMarkReadTools } from '../src/tools/markread.js';
 import { registerGroupChatTools } from '../src/tools/group-chat.js';
 import { registerActivityTools } from '../src/tools/activity.js';
@@ -42,6 +43,7 @@ export async function servedTools() {
     registerAttachmentTools(server, deps);
     registerSendTools(server, deps);
     registerReactTools(server, deps);
+    registerEditTools(server, deps);
     registerMarkReadTools(server, deps);
     registerGroupChatTools(server, deps);
     registerActivityTools(server, deps);

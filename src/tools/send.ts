@@ -29,6 +29,7 @@ import type { TeamsDeps } from '../deps.js';
 import {
   buildSendBody,
   clipText,
+  MESSAGE_FORMATS,
   mentionsProperty,
   newClientMessageId,
   qtdMsgsProperty,
@@ -67,6 +68,15 @@ const MAX_CANDIDATES = 10;
 /** Previewed text of a quoted message. */
 const PREVIEW_CHARS = 200;
 
+/** How `text` is read: shared by `teams_send_message` and `teams_edit_message`. */
+export const formatParam = z
+  .enum(MESSAGE_FORMATS)
+  .optional()
+  .describe(
+    'How text is written (default "text"). text: plain text, escaped. markdown: **bold**, *italic*, ~~strike~~, ' +
+      '`code`, fenced code blocks, - and 1. lists (nested by indenting), [text](https://…) links; nothing else is markup.',
+  );
+
 export interface Target {
   id: string;
   title: string;
@@ -75,7 +85,7 @@ export interface Target {
   participants?: string[];
 }
 
-const mentionArg = z.object({
+export const mentionArg = z.object({
   name_in_text: z
     .string()
     .min(1)
@@ -113,7 +123,7 @@ export async function resolveTarget(
  * recent sender (exactly, else as a substring, ignoring case). Ambiguous or
  * unknown is an error naming the candidates — never a guess.
  */
-async function resolveMentions(
+export async function resolveMentions(
   chatsvc: ChatServiceClient,
   conversationId: string,
   mentions: readonly { name_in_text: string; person: string }[],
@@ -211,8 +221,11 @@ export function registerSendTools(server: McpServer, { chatsvc }: Pick<TeamsDeps
       title: 'Send a Teams message',
       description:
         'Post a message as the signed-in user to any chat or channel, by id (from teams_list_conversations / ' +
-        'teams_list_channels) or by name. text is plain text: it is escaped, newlines are kept, ' +
-        'and :key: shortcodes (e.g. :smile:, :1f389_partypopper:) become Teams emoji. reply_to in a ' +
+        'teams_list_channels) or by name. text is plain text by default: it is escaped, newlines are kept, ' +
+        'and :key: shortcodes (e.g. :smile:, :1f389_partypopper:) become Teams emoji. format "markdown" ' +
+        'reads text as Markdown instead: **bold**, *italic*, ~~strike~~, `inline code`, ``` code blocks ```, ' +
+        'bulleted (- item) and numbered (1. item) lists, [link text](https://…), blank-line paragraphs and ' +
+        'line breaks; raw HTML, headings, quotes and images are escaped and shown as written. reply_to in a ' +
         'channel posts into that root post\'s thread; in a chat it quote-replies that message. quote ' +
         'quote-replies a message in any conversation. mentions @-mention people: name_in_text must appear ' +
         'in text, and person is an MRI or a display name matched among recent senders (ambiguous names ' +
@@ -235,7 +248,11 @@ export function registerSendTools(server: McpServer, { chatsvc }: Pick<TeamsDeps
             `The conversation id (or "${SELF_CHAT}" — also by the name "notes" or "self" — for the self-chat), ` +
               "or a case-insensitive substring of the chat title, channel name, team name or an untitled chat's participant names.",
           ),
-        text: z.string().min(1).describe('The message, as plain text. Newlines are kept; :key: shortcodes become emoji.'),
+        text: z
+          .string()
+          .min(1)
+          .describe('The message: plain text (newlines kept, :key: shortcodes become emoji), or Markdown with format "markdown".'),
+        format: formatParam,
         reply_to: z
           .string()
           .min(1)
@@ -246,7 +263,7 @@ export function registerSendTools(server: McpServer, { chatsvc }: Pick<TeamsDeps
         confirmToken: confirmTokenParam,
       },
     },
-    async ({ conversation, text, reply_to, quote, mentions, confirmToken }, ctx) => {
+    async ({ conversation, text, format = 'text', reply_to, quote, mentions, confirmToken }, ctx) => {
       try {
         const [me, meName] = await Promise.all([chatsvc.meMri(), chatsvc.meDisplayName()]);
         const target = await resolveTarget(chatsvc, conversation, me);
@@ -271,6 +288,7 @@ export function registerSendTools(server: McpServer, { chatsvc }: Pick<TeamsDeps
         const rendered = renderMessageHtml(
           text,
           people.map((p) => p.target),
+          format,
         );
         const content = (q ? quoteHtml(q) : '') + rendered.html;
         const properties = {
@@ -301,6 +319,7 @@ export function registerSendTools(server: McpServer, { chatsvc }: Pick<TeamsDeps
           preview: {
             conversation: untrustedField(target),
             text,
+            format,
             ...(inChannel && reply_to !== undefined ? { thread_root: reply_to } : {}),
             ...(people.length > 0
               ? {
