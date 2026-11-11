@@ -7,6 +7,10 @@
  * "Verified live facts" section of `docs/plans/2026-10-10-chatsvc-api.md`.
  */
 import type { RawConversation, RawLastMessage, RawMessage } from './chatsvc.js';
+import { attr, bodyStructure, decodeEntities, htmlToText, mentionsOf, type MessageLink, type MessageMention } from './rich.js';
+
+// The text of a body is rich.ts's to read; kept importable from here, where every reader looks.
+export { decodeEntities, htmlToText };
 
 export type ConversationKind = 'channel' | 'meeting' | 'oneOnOne' | 'group' | 'self';
 
@@ -94,6 +98,16 @@ export interface NormalisedMessage {
   sender: string;
   fromMe: boolean;
   text: string;
+  /**
+   * The body as sanitised HTML (see `rich.ts`), only when it carries
+   * formatting beyond paragraphs and line breaks — bold, lists, links, code,
+   * quotes, mentions, …. Absent: `text` says everything.
+   */
+  content_html?: string;
+  /** Who was @mentioned (`properties.mentions`); absent when nobody was. */
+  mentions?: MessageMention[];
+  /** The body's http(s)/mailto links with the text they were shown as; absent when none. */
+  links?: MessageLink[];
   subject?: string;
   /** In a channel: the root post this replies to (absent on the root itself). */
   replyTo?: string;
@@ -189,7 +203,8 @@ export function isUserMessage(m: { messagetype?: string }): boolean {
   return USER_MESSAGE_TYPES.has(m.messagetype ?? '');
 }
 
-function isDeleted(m: { properties?: RawMessage['properties'] }): boolean {
+/** True when Teams has deleted the message (it keeps it, with `deletetime` set). */
+export function isDeleted(m: { properties?: RawMessage['properties'] }): boolean {
   const t = m.properties?.deletetime;
   return t !== undefined && t !== null && t !== '' && t !== 0;
 }
@@ -410,97 +425,6 @@ function truncate(s: string, max: number): string {
   return s.length <= max ? s : `${s.slice(0, max - 1)}…`;
 }
 
-/*
- * Placeholders that survive tag-stripping, so blockquote depth can be applied
- * after the text is decoded. Control characters never come out of entity
- * decoding (it drops them), so a message cannot forge one.
- */
-const QUOTE_OPEN = '\u0001';
-const QUOTE_CLOSE = '\u0002';
-
-const NAMED_ENTITIES: Record<string, string> = {
-  amp: '&',
-  lt: '<',
-  gt: '>',
-  quot: '"',
-  apos: "'",
-  nbsp: ' ',
-};
-
-export function decodeEntities(s: string): string {
-  // One pass, so `&amp;lt;` becomes `&lt;` and not `<`.
-  return s.replace(/&(?:#(\d+)|#x([0-9a-f]+)|([a-z]+));/gi, (whole, dec, hex, name) => {
-    if (name !== undefined) return NAMED_ENTITIES[name.toLowerCase()] ?? whole;
-    const code = dec !== undefined ? Number(dec) : parseInt(hex, 16);
-    if (!Number.isFinite(code) || code > 0x10ffff) return whole;
-    // Drop control characters (keeping tab/newline): they carry no text and
-    // would collide with the quote placeholders.
-    if (code < 0x20 && code !== 0x09 && code !== 0x0a) return '';
-    return String.fromCodePoint(code);
-  });
-}
-
-function attr(tag: string, name: string): string | undefined {
-  const m = new RegExp(`\\s${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'i').exec(tag);
-  return m ? (m[1] ?? m[2]) : undefined;
-}
-
-const stripTags = (s: string): string => s.replace(/<\/?[a-z!][^>]*>/gi, '');
-
-/**
- * One table row on one line, its `<td>`/`<th>` cells joined by ` | ` — a
- * pasted table (a file-monitor report, a status grid) otherwise runs its cells
- * together. Line breaks inside a cell become spaces so the row stays whole.
- */
-function tableRow(row: string): string {
-  const cells = [...row.matchAll(/<t[dh]\b[^>]*>([\s\S]*?)(?:<\/t[dh]\s*>|(?=<t[dh]\b)|$)/gi)].map(([, cell]) =>
-    cell
-      .replace(/[\u0001\u0002]/g, '')
-      .replace(/<br\s*\/?>|<\/?(p|div|li|h[1-6])\b[^>]*>|\r?\n/gi, ' ')
-      .trim(),
-  );
-  return cells.length > 0 ? cells.join(' | ') : row;
-}
-
-/**
- * A Teams message body as readable plain text. Links keep their target as
- * `text (url)`, inline images become `[image]` (emoji become their alt text),
- * a table row becomes one line of ` | `-separated cells, and a quoted reply's
- * lines are prefixed `> `. Never truncated: a long body comes back whole. No
- * HTML library: Teams bodies are a small, regular subset.
- */
-export function htmlToText(html: string): string {
-  let s = html.replace(/[\u0001\u0002]/g, '');
-  s = s.replace(/<(script|style)\b[\s\S]*?<\/\1\s*>/gi, '');
-  s = s.replace(/<blockquote\b[^>]*>/gi, `\n${QUOTE_OPEN}\n`).replace(/<\/blockquote\s*>/gi, `\n${QUOTE_CLOSE}\n`);
-  s = s.replace(/<img\b[^>]*>/gi, (tag) => {
-    const alt = attr(tag, 'alt');
-    return /schema\.skype\.com\/Emoji/i.test(attr(tag, 'itemtype') ?? '') && alt ? alt : '[image]';
-  });
-  s = s.replace(/<a\b([^>]*)>([\s\S]*?)<\/a\s*>/gi, (_whole, attrs: string, inner: string) => {
-    const href = attr(` ${attrs}`, 'href');
-    const label = stripTags(inner).trim();
-    if (!href) return inner;
-    if (label === '' || label === href) return href;
-    return `${inner} (${href})`;
-  });
-  s = s.replace(/<tr\b[^>]*>([\s\S]*?)<\/tr\s*>/gi, (_whole, row: string) => `\n${tableRow(row)}\n`);
-  // Block elements start and end a line (a quote's author <strong> runs
-  // straight into its <p> otherwise); the blank lines this makes collapse below.
-  s = s.replace(/<br\s*\/?>/gi, '\n').replace(/<\/?(p|div|li|tr|h[1-6])\b[^>]*>/gi, '\n');
-  s = decodeEntities(stripTags(s));
-
-  const out: string[] = [];
-  let depth = 0;
-  for (const raw of s.split(/\r?\n/)) {
-    const line = raw.replace(/[ \t ]+/g, ' ').trim();
-    if (line === QUOTE_OPEN) depth++;
-    else if (line === QUOTE_CLOSE) depth = Math.max(0, depth - 1);
-    else if (line !== '') out.push(`${'> '.repeat(depth)}${line}`);
-  }
-  return out.join('\n');
-}
-
 function fileAttachments(raw: unknown): FileAttachment[] {
   let parsed: unknown = raw;
   if (typeof raw === 'string') {
@@ -673,6 +597,9 @@ export function normaliseMessage(m: RawMessage, meMri: string, opts: NormaliseOp
   const content = m.content ?? '';
   const reactions = reactionsOf(props.emotions, meMri);
   const timeLocal = opts.timeZone !== undefined ? localIsoTime(time, opts.timeZone) : undefined;
+  const deleted = isDeleted(m);
+  const { contentHtml, links } = deleted ? { links: [] } : bodyStructure(content);
+  const mentions = deleted ? [] : mentionsOf(props.mentions);
 
   return {
     id: m.id,
@@ -681,10 +608,13 @@ export function normaliseMessage(m: RawMessage, meMri: string, opts: NormaliseOp
     sender: nonEmpty(m.imdisplayname) ?? mri ?? 'unknown',
     fromMe: mri !== undefined && mri === meMri,
     text: htmlToText(content),
+    ...(contentHtml !== undefined ? { content_html: contentHtml } : {}),
+    ...(mentions.length > 0 ? { mentions } : {}),
+    ...(links.length > 0 ? { links } : {}),
     ...(subject !== undefined ? { subject } : {}),
     ...(root !== undefined && root !== m.id ? { replyTo: root } : {}),
     edited: props.edittime !== undefined && props.edittime !== null && props.edittime !== '',
-    ...(isDeleted(m) ? { deleted: true as const } : {}),
+    ...(deleted ? { deleted: true as const } : {}),
     attachments: { files: fileAttachments(props.files), images: imageAttachments(content) },
     ...(reactions.length > 0 ? { reactions } : {}),
   };

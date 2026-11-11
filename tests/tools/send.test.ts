@@ -128,6 +128,45 @@ afterEach(() => {
   }
 });
 
+describe('teams_send_message — markdown', () => {
+  it('renders markdown to Teams HTML, shows it in the preview, and keeps mentions working', async () => {
+    const { chatsvc, sendMessage } = fakeWith();
+    const text = '**Plan** for @Bea:\n1. ship `v2`\n2. read [the doc](https://example.com/doc)';
+    const { preview, data } = await sendConfirmed(chatsvc, {
+      conversation: GROUP,
+      text,
+      format: 'markdown',
+      mentions: [{ name_in_text: 'Bea', person: 'Bea Example' }],
+    });
+    const html =
+      '<p><strong>Plan</strong> for <span itemscope itemtype="http://schema.skype.com/Mention" itemid="0">Bea</span>:</p>' +
+      '<ol><li>ship <code>v2</code></li><li>read <a href="https://example.com/doc">the doc</a></li></ol>';
+    expect(preview?.preview?.format).toBe('markdown');
+    expect((preview?.preview?.willSend as { content?: string })?.content).toBe(html);
+    const [, body] = sendMessage.mock.calls[0]!;
+    expect(body.content).toBe(html);
+    expect(JSON.parse(body.properties.mentions as string)).toEqual([
+      expect.objectContaining({ itemid: '0', mri: OTHER, displayName: 'Bea' }),
+    ]);
+    expect(payload(data)).toMatchObject({ status: 'sent', verified: true });
+  });
+
+  it('treats text as plain text by default, exactly as before', async () => {
+    const { chatsvc, sendMessage } = fakeWith();
+    const { preview } = await sendConfirmed(chatsvc, { conversation: GROUP, text: '**not bold**\n1. not a list' });
+    expect(preview?.preview?.format).toBe('text');
+    const [, body] = sendMessage.mock.calls[0]!;
+    expect(body.content).toBe('<p>**not bold**<br>1. not a list</p>');
+  });
+
+  it('never passes raw HTML through in markdown', async () => {
+    const { chatsvc, sendMessage } = fakeWith();
+    await sendConfirmed(chatsvc, { conversation: GROUP, text: '<script>x()</script> **b**', format: 'markdown' });
+    const [, body] = sendMessage.mock.calls[0]!;
+    expect(body.content).toBe('<p>&lt;script&gt;x()&lt;/script&gt; <strong>b</strong></p>');
+  });
+});
+
 describe('teams_send_message — confirm gate', () => {
   it('phase 1 previews the conversation and rendered text and sends nothing', async () => {
     const { chatsvc, sendMessage } = fakeWith();
@@ -495,9 +534,12 @@ describe('teams_send_message — mentions and emoji', () => {
     expect(first.isError).toBeFalsy();
   });
 
-  it('renders a :key: shortcode as an emoji span', async () => {
+  it('renders a built-in :key: as an emoji span, and a unicode-style key or common name as its character', async () => {
     const { chatsvc, sendMessage } = fakeWith();
-    await sendConfirmed(chatsvc, { conversation: GROUP, text: 'shipped :1f389_partypopper:' });
-    expect(sendMessage.mock.calls[0]![1].content).toContain('itemid="1f389_partypopper"');
+    await sendConfirmed(chatsvc, { conversation: GROUP, text: 'shipped :party: :1f680_rocket: :rocket:' });
+    const content = sendMessage.mock.calls[0]![1].content;
+    expect(content).toContain('itemid="party"');
+    expect(content).toContain('🚀 🚀');
+    expect(content).not.toContain('1f680_rocket');
   });
 });

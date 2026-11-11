@@ -460,7 +460,10 @@ export function registerConversationTools(server: McpServer, { chatsvc }: Pick<T
         'Read the messages of any chat or channel the signed-in user is in, by id (from ' +
         'teams_list_conversations / teams_list_channels) or by name, without opening it in ' +
         'Teams. "48:notes" (or the name "notes" / "self") is the user\'s own notes self-chat. Messages come oldest first, each with id, time (UTC, ISO 8601), sender, fromMe, ' +
-        'text (never truncated; table cells separated by " | "), subject, edited/deleted flags and attachments; a channel is returned as threads, ' +
+        'text (never truncated; table cells separated by " | "; lists numbered or bulleted), subject, edited/deleted flags and attachments; ' +
+        'a formatted message also carries content_html (its body as sanitised HTML: bold, lists, links, code, quotes, mentions), ' +
+        'mentions ([{mri, displayName}], who was @mentioned) and links ([{href, text}]), each absent when there is none; ' +
+        'a channel is returned as threads, ' +
         'each root post with its replies. A root older than the window is fetched and marked outside_window: ' +
         'true (it is context, not counted or cursored); up to ' +
         `${MAX_ROOT_FETCHES} roots are fetched per call, and any beyond that or that cannot be fetched is ` +

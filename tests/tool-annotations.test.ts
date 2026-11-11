@@ -14,7 +14,7 @@ import { servedTools } from './served-tools.js';
  */
 describe('every tool declares what it does', () => {
   it('covers the full served surface (guards against a registrar being dropped)', async () => {
-    expect(await servedTools()).toHaveLength(19);
+    expect(await servedTools()).toHaveLength(21);
   });
 
   it('sets an explicit boolean readOnlyHint and openWorldHint on all of them', async () => {
@@ -44,6 +44,8 @@ describe('every tool declares what it does', () => {
     expect(writes).toEqual([
       'teams_add_chat_members',
       'teams_create_group_chat',
+      'teams_delete_message',
+      'teams_edit_message',
       'teams_list_messages',
       'teams_list_unread_messages',
       'teams_mark_read',
@@ -60,6 +62,16 @@ describe('every tool declares what it does', () => {
       readOnlyHint: false,
       destructiveHint: true,
       idempotentHint: false,
+      openWorldHint: true,
+    });
+  });
+
+  it('publishes an edit as destructive and idempotent (the old text is gone; the same edit twice is one edit)', async () => {
+    const edit = (await servedTools()).find((t) => t.name === 'teams_edit_message');
+    expect(edit?.annotations).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
       openWorldHint: true,
     });
   });

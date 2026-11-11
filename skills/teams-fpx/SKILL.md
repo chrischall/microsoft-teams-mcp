@@ -113,13 +113,15 @@ this read and the Outlook one. The group needs the signed-in Teams tab: with
 no browser bridge it answers "Microsoft Teams needs your browser open" for
 this source rather than guessing.
 
-## Writes (sending, reacting, marking read)
+## Writes (sending, editing, deleting, reacting, marking read)
 
-Everything above only reads. To post a message or a reaction, prefer the
-MCP's **`teams_send_message`** and **`teams_react`**: they show the user a
-preview and post nothing until it is confirmed, verify the result by reading
-it back, and report a post Teams did not acknowledge as `unknown` rather
-than letting it be resent blindly.
+Everything above only reads. To post a message (plain text or Markdown with
+`format: "markdown"`) or a reaction, or to edit or delete one of the user's
+own messages, prefer the MCP's **`teams_send_message`**,
+**`teams_edit_message`**, **`teams_delete_message`** and **`teams_react`**:
+they show the user a preview and change nothing until it is confirmed,
+verify the result by reading it back, and report a write Teams did not
+acknowledge as `unknown` rather than letting it be repeated blindly.
 
 From a shell the chat service takes the same token
 (`POST …/conversations/<id>/messages`, and

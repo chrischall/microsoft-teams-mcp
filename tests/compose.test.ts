@@ -3,7 +3,7 @@ import { McpToolError } from '@chrischall/mcp-utils';
 import {
   buildSendBody,
   clipText,
-  emojiSpan,
+  emojiHtml,
   escapeHtml,
   mentionsProperty,
   newClientMessageId,
@@ -23,9 +23,9 @@ describe('escapeHtml', () => {
   });
 });
 
-describe('emojiSpan', () => {
+describe('emojiHtml', () => {
   it('renders a known named key as the captured emoji span', () => {
-    expect(emojiSpan('smile')).toBe(
+    expect(emojiHtml('smile')).toBe(
       '<span contenteditable="false" title="Smile" type="(smile)" class="animated-emoticon-20-smile" itemscope>' +
         '<img itemscope itemtype="http://schema.skype.com/Emoji" itemid="smile" ' +
         'src="https://statics.teams.cdn.office.net/evergreen-assets/personal-expressions/v2/assets/emoticons/smile/default/20_f.png" ' +
@@ -33,16 +33,30 @@ describe('emojiSpan', () => {
     );
   });
 
-  it('derives the character and title of a unicode-style key', () => {
-    const span = emojiSpan('1f389_partypopper')!;
-    expect(span).toContain('alt="🎉"');
-    expect(span).toContain('title="partypopper"');
-    expect(span).toContain('itemid="1f389_partypopper"');
+  it('renders a unicode-style key as its plain character, never an image Teams may not have', () => {
+    // Live 2026-11-11: Teams' CDN has no image for 1f680_rocket, so a span showed a broken image.
+    expect(emojiHtml('1f680_rocket')).toBe('🚀');
+    expect(emojiHtml('1f389_partypopper')).toBe('🎉');
+    expect(emojiHtml('1f468-200d-1f4bb_technologist')).toBe('👨\u200d💻');
+  });
+
+  it('renders a common name as its plain character', () => {
+    expect(emojiHtml('rocket')).toBe('🚀');
+    expect(emojiHtml('tada')).toBe('🎉');
+    expect(emojiHtml('thumbsup')).toBe('👍');
+    expect(emojiHtml('white_check_mark')).toBe('✅');
+  });
+
+  it('keeps the captured span for every built-in name (all 12 images exist on Teams\' CDN, checked 2026-11-11)', () => {
+    for (const key of ['like', 'heart', 'laugh', 'surprised', 'sad', 'angry', 'smile', 'wink', 'cool', 'hearteyes', 'fire', 'party']) {
+      expect(emojiHtml(key), key).toContain(`itemid="${key}"`);
+    }
   });
 
   it('returns undefined for a key it cannot render', () => {
-    expect(emojiSpan('notakey')).toBeUndefined();
-    expect(emojiSpan('30')).toBeUndefined();
+    expect(emojiHtml('notakey')).toBeUndefined();
+    expect(emojiHtml('30')).toBeUndefined();
+    expect(emojiHtml('110000_toohigh')).toBeUndefined();
   });
 });
 
@@ -136,6 +150,110 @@ describe('renderMessageHtml', () => {
     ]);
     expect(mentions.map((m) => m.mri)).toEqual([THIRD, OTHER]);
     expect(html.match(/schema\.skype\.com\/Mention/g)).toHaveLength(2);
+  });
+});
+
+describe('renderMessageHtml (markdown)', () => {
+  const md = (text: string, mentions: { text: string; mri: string }[] = []) => renderMessageHtml(text, mentions, 'markdown');
+  const MENTION = (n: number, name: string) =>
+    `<span itemscope itemtype="http://schema.skype.com/Mention" itemid="${n}">${name}</span>`;
+
+  it('renders bold, italic and strike', () => {
+    expect(md('**bold** and _it_ and *it2* and ~~gone~~').html).toBe(
+      '<p><strong>bold</strong> and <em>it</em> and <em>it2</em> and <s>gone</s></p>',
+    );
+  });
+
+  it('leaves underscores inside words and a lone asterisk alone', () => {
+    expect(md('snake_case_name costs 2 * 3').html).toBe('<p>snake_case_name costs 2 * 3</p>');
+  });
+
+  it('keeps line breaks in a paragraph and splits paragraphs on a blank line', () => {
+    expect(md('a\nb\n\nc').html).toBe('<p>a<br>b</p><p>c</p>');
+  });
+
+  it('renders numbered and bulleted lists, keeping a numbered list\'s start', () => {
+    expect(md('Steps:\n1. one\n2. two\n\n- a\n* b').html).toBe(
+      '<p>Steps:</p><ol><li>one</li><li>two</li></ol><ul><li>a</li><li>b</li></ul>',
+    );
+    expect(md('3. three\n4. four').html).toBe('<ol start="3"><li>three</li><li>four</li></ol>');
+  });
+
+  it('nests an indented list under its item', () => {
+    expect(md('1. top\n   - inner\n   - more\n2. next').html).toBe(
+      '<ol><li>top<ul><li>inner</li><li>more</li></ul></li><li>next</li></ol>',
+    );
+  });
+
+  it('continues an item on an indented line, and switches list kind at a nested level', () => {
+    expect(md('1. first\n   still first\n2. second').html).toBe('<ol><li>first<br>still first</li><li>second</li></ol>');
+    expect(md('1. top\n   - bullet\n   1. numbered').html).toBe(
+      '<ol><li>top<ul><li>bullet</li></ul><ol><li>numbered</li></ol></li></ol>',
+    );
+    expect(md('- a\n1. b').html).toBe('<ul><li>a</li></ul><ol><li>b</li></ol>');
+  });
+
+  it('renders a link with its text, escaping the address', () => {
+    expect(md('see [the **doc**](https://example.com/a?b=1&c=2)').html).toBe(
+      '<p>see <a href="https://example.com/a?b=1&amp;c=2">the <strong>doc</strong></a></p>',
+    );
+  });
+
+  it('leaves a link to anything but http(s) or mailto as literal text', () => {
+    expect(md('[x](javascript:alert(1))').html).toBe('<p>[x](javascript:alert(1))</p>');
+  });
+
+  it('renders inline code verbatim and escaped', () => {
+    expect(md('run `a<b && **c**` now').html).toBe('<p>run <code>a&lt;b &amp;&amp; **c**</code> now</p>');
+  });
+
+  it('renders a fenced code block verbatim', () => {
+    expect(md('before\n```js\nif (a < b) {\n  go(); // **x**\n}\n```\nafter').html).toBe(
+      '<p>before</p><pre><code>if (a &lt; b) {\n  go(); // **x**\n}</code></pre><p>after</p>',
+    );
+  });
+
+  it('escapes raw HTML and leaves unsupported markdown as text', () => {
+    expect(md('<b>x</b> <img src=x onerror=alert(1)>').html).toBe(
+      '<p>&lt;b&gt;x&lt;/b&gt; &lt;img src=x onerror=alert(1)&gt;</p>',
+    );
+    expect(md('# not a heading\n> not a quote\n![img](https://example.com/i.png)').html).toBe(
+      '<p># not a heading<br>&gt; not a quote<br>!<a href="https://example.com/i.png">img</a></p>',
+    );
+  });
+
+  it('honours backslash escapes', () => {
+    expect(md('\\*not italic\\* and \\_nor this\\_').html).toBe('<p>*not italic* and _nor this_</p>');
+  });
+
+  it('renders :shortcodes: as emoji outside code only', () => {
+    const { html } = md(':smile: **hi** `:smile:`');
+    expect(html).toContain('itemid="smile"');
+    expect(html).toContain('<strong>hi</strong>');
+    expect(html).toContain('<code>:smile:</code>');
+    expect(md(':1f389_partypopper: :rocket:_ship_').html).toBe('<p>🎉 🚀<em>ship</em></p>');
+  });
+
+  it('places mentions inside formatting and lists, numbered in order of appearance', () => {
+    const { html, mentions } = md('**@Bea** see:\n1. ask @Al', [
+      { text: 'Al', mri: THIRD },
+      { text: 'Bea', mri: OTHER },
+    ]);
+    expect(html).toBe(`<p><strong>${MENTION(0, 'Bea')}</strong> see:</p><ol><li>ask ${MENTION(1, 'Al')}</li></ol>`);
+    expect(mentions).toEqual([
+      { itemid: '0', mri: OTHER, displayName: 'Bea' },
+      { itemid: '1', mri: THIRD, displayName: 'Al' },
+    ]);
+  });
+
+  it('cannot be tricked into a mention by private-use characters in the text', () => {
+    expect(md('0 x').html).toBe('<p>0 x</p>');
+  });
+
+  it('reads back with the structure kept', () => {
+    expect(htmlToText(md('**Plan**\n1. one\n2. two\n\nsee [doc](https://example.com)').html)).toBe(
+      'Plan\n1. one\n2. two\nsee doc (https://example.com)',
+    );
   });
 });
 

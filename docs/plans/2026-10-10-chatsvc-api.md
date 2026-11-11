@@ -358,10 +358,25 @@ Part 1 are reused; writes go through the same `ChatServiceClient`.
 - **Inline emoji in text:** `<span contenteditable="false" title="{Title}" type="({key})" class="animated-emoticon-20-{key}" itemscope><img itemscope itemtype="http://schema.skype.com/Emoji" itemid="{key}" src="https://statics.teams.cdn.office.net/evergreen-assets/personal-expressions/v2/assets/emoticons/{key}/default/20_f.png" title="{Title}" alt="{unicode}" style="width:20px;height:20px;"></span>`.
   Plain unicode emoji in the text are also acceptable; only emit the span form
   for shortcodes the caller passes as `:key:`.
-- **Mention** (documented format, NOT captured — verify live): in content
+- **Mention** (verified live 2026-11-11 in a group chat: Teams stores the
+  spans and `properties.mentions` as sent, and reads them back): in content
   `<span itemscope itemtype="http://schema.skype.com/Mention" itemid="{n}">{displayName}</span>`,
   and `properties.mentions = JSON.stringify([{ "@type": "http://schema.skype.com/Mention", itemid: "{n}", mri: "{personMri}", mentionType: "person", displayName: "{displayName}" }])`,
   `n` = 0,1,… in order of appearance.
+- **Rich text** (verified live 2026-11-11 on `48:notes`): a post whose
+  content uses `<strong>`, `<em>`, `<s>`, `<code>`, `<pre><code>`, nested
+  `<ol>`/`<ul>`/`<li>` and `<a href>` is stored and served back with every
+  tag kept (Teams adds `\r\n` between block elements and drops nothing).
+- **Edit** (verified live 2026-11-11 on `48:notes`):
+  `PUT {base}/users/ME/conversations/{encodeURIComponent(convId)}/messages/{msgId}`
+  body `{ content, messagetype: "RichText/Html", contenttype: "text", amsreferences: [], properties: { mentions: "[]" } }`
+  → 2xx; the message then reads back with the new content and
+  `properties.edittime` set. Not yet tried in a channel.
+- **Delete** (verified live 2026-11-11 on `48:notes`):
+  `DELETE {base}/users/ME/conversations/{encodeURIComponent(convId)}/messages/{msgId}`,
+  no body → 2xx. The message stays in the conversation with
+  `properties.deletetime` set and empty content (an edited message no longer
+  reads as edited). Not yet tried in a channel.
 - **Reaction.** `PUT {base}/users/ME/conversations/{encodeURIComponent(convId)}/messages/{msgId}/properties?name=emotions`
   body `{ "emotions": { "key": "<key>", "value": <epoch ms> } }` → 2xx.
   👍 = `like`. Known named keys: `like, heart, laugh, surprised, sad, angry,
