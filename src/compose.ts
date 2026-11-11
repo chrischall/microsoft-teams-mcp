@@ -6,22 +6,16 @@
  * markup, which follows the documented Skype format and is NOT yet captured
  * live. The caller's text is always escaped: the only markup a message can
  * carry is what these builders emit (paragraph, line breaks, mention spans,
- * emoji spans, the quote block), so a caller cannot smuggle HTML into a post.
+ * emoji spans, the quote block) and, for `markdown` text, what the Markdown
+ * renderer in `@chrischall/mcp-utils/rich` emits, so a caller cannot smuggle
+ * HTML into a post.
  */
 import { randomInt } from 'node:crypto';
 import { McpToolError } from '@chrischall/mcp-utils';
+import { escapeHtml, renderMarkdown } from '@chrischall/mcp-utils/rich';
 
-const HTML_ESCAPES: Record<string, string> = {
-  '&': '&amp;',
-  '<': '&lt;',
-  '>': '&gt;',
-  '"': '&quot;',
-  "'": '&#39;',
-};
-
-export function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => HTML_ESCAPES[c]);
-}
+/** `s` safe as HTML text or inside a quoted attribute (`'` → `&#39;`). */
+export { escapeHtml };
 
 /**
  * Teams' short legacy emoji keys, rendered as Teams' own animated emoji span,
@@ -205,7 +199,14 @@ function locate(text: string, name: string, taken: readonly [number, number][]):
   return find(`@${name}`, false, false) ?? find(`@${name}`, true, false) ?? find(name, true, true);
 }
 
-/** How a message's text is written: plain text, or the Markdown subset {@link renderMarkdown} reads. */
+/**
+ * How a message's text is written: plain text, or Markdown — the subset
+ * `renderMarkdown` in `@chrischall/mcp-utils/rich` reads: paragraphs (a blank
+ * line between them; a single newline is a line break), **bold**, *italic*,
+ * ~~strike~~, `inline code`, fenced code blocks, nested bulleted and numbered
+ * lists, [links](https://…) with their text, and :key: emoji. Anything else —
+ * raw HTML, headings, quotes, images — is escaped and shown as written.
+ */
 export const MESSAGE_FORMATS = ['text', 'markdown'] as const;
 export type MessageFormat = (typeof MESSAGE_FORMATS)[number];
 
@@ -232,16 +233,14 @@ const mentionSpan = (n: number, shown: string): string =>
   `<span itemscope itemtype="http://schema.skype.com/Mention" itemid="${n}">${escapeHtml(shown)}</span>`;
 
 /*
- * Private-use placeholders the Markdown renderer carries through untouched:
- * a mention (MENTION_OPEN n MENTION_CLOSE) and a piece already rendered to
- * HTML (HOLE_OPEN n HOLE_CLOSE). The caller's text has them stripped first,
- * so it cannot forge one.
+ * Private-use placeholders for a mention (MENTION_OPEN n MENTION_CLOSE),
+ * carried through the Markdown renderer as ordinary text. They sit above the
+ * renderer's own reserved range (U+E000–U+E00F, which it strips), and the
+ * caller's text has U+E010–U+E01F stripped first, so it cannot forge one.
  */
-const MENTION_OPEN = '';
-const MENTION_CLOSE = '';
-const HOLE_OPEN = '';
-const HOLE_CLOSE = '';
-const PLACEHOLDER_CHARS = /[-]/g;
+const MENTION_OPEN = '\ue010';
+const MENTION_CLOSE = '\ue011';
+const PLACEHOLDER_CHARS = /[\ue010-\ue01f]/g;
 
 /**
  * The message body as Teams HTML, with each mention's first free occurrence
@@ -249,7 +248,7 @@ const PLACEHOLDER_CHARS = /[-]/g;
  * 0, 1, … in order of appearance in the text.
  *
  * `text` format: one paragraph of escaped text, newlines as `<br>`.
- * `markdown` format: the subset {@link renderMarkdown} reads.
+ * `markdown` format: the subset described at {@link MESSAGE_FORMATS}.
  */
 export function renderMessageHtml(
   text: string,
@@ -272,7 +271,7 @@ export function renderMessageHtml(
       at = p.end;
     });
     src += clean(text.slice(at));
-    const html = renderMarkdown(src).replace(
+    const html = renderMarkdown(src, { shortcode: emojiHtml }).replace(
       new RegExp(`${MENTION_OPEN}(\\d+)${MENTION_CLOSE}`, 'g'),
       (_w, n: string) => mentionSpan(Number(n), out[Number(n)].displayName),
     );
@@ -288,150 +287,6 @@ export function renderMessageHtml(
   });
   html += renderPlain(text.slice(at));
   return { html: `<p>${html}</p>`, mentions: out };
-}
-
-/* ----------------------------------------------------------------------------
- * Markdown → Teams HTML
- * ------------------------------------------------------------------------- */
-
-/** Link targets a message may carry. */
-const SAFE_HREF = /^(https?:\/\/|mailto:)/i;
-
-/**
- * Inline Markdown → HTML: `code`, [text](url) (http, https, mailto only),
- * **bold** / __bold__, *italic* / _italic_, ~~strike~~, backslash escapes,
- * :key: emoji, newlines as `<br>`. Everything else is escaped text.
- */
-function renderInline(src: string): string {
-  const holes: string[] = [];
-  const hole = (html: string) => `${HOLE_OPEN}${holes.push(html) - 1}${HOLE_CLOSE}`;
-  const token =
-    /(`+)([\s\S]*?[^`])\1(?!`)|\[([^\]\n]+)\]\(\s*([^\s()]+(?:\([^\s()]*\)[^\s()]*)*)\s*\)|\\([\\`*_{}[\]()#+\-.!~>|:])/g;
-  let s = src.replace(token, (whole, _ticks, code: string, label: string, href: string, escaped: string) => {
-    if (code !== undefined) return hole(`<code>${escapeHtml(code.replace(/^ (.*[^ ].*) $/s, '$1'))}</code>`);
-    if (escaped !== undefined) return hole(escapeHtml(escaped));
-    if (!SAFE_HREF.test(href)) return whole;
-    return hole(`<a href="${escapeHtml(href)}">${renderInline(label)}</a>`);
-  });
-  // Emoji before escaping and emphasis, so a key's "_" is never read as italic.
-  s = s.replace(/:([a-z0-9_-]+):/g, (whole, key: string) => {
-    const span = emojiHtml(key);
-    return span === undefined ? whole : hole(span);
-  });
-  s = escapeHtml(s)
-    .replace(/\*\*(?=\S)([\s\S]*?\S)\*\*/g, '<strong>$1</strong>')
-    .replace(/(^|[^\w])__(?=\S)([\s\S]*?\S)__(?!\w)/g, '$1<strong>$2</strong>')
-    .replace(/~~(?=\S)([\s\S]*?\S)~~/g, '<s>$1</s>')
-    .replace(/(^|[^\w*])\*(?=[^\s*])([\s\S]*?[^\s*])\*(?![\w*])/g, '$1<em>$2</em>')
-    .replace(/(^|[^\w])_(?=[^\s_])([\s\S]*?[^\s_])_(?!\w)/g, '$1<em>$2</em>')
-    .replace(/\n/g, '<br>');
-  const fill = new RegExp(`${HOLE_OPEN}(\\d+)${HOLE_CLOSE}`, 'g');
-  return s.replace(fill, (_w, n: string) => holes[Number(n)]);
-}
-
-interface ListNode {
-  indent: number;
-  ordered: boolean;
-  start: number;
-  items: { lines: string[]; children: ListNode[] }[];
-}
-
-const LIST_ITEM = /^( *)([-*+]|\d{1,9}[.)])[ \t]+(.*)$/;
-
-function renderList(list: ListNode): string {
-  const tag = list.ordered ? 'ol' : 'ul';
-  const start = list.ordered && list.start !== 1 ? ` start="${list.start}"` : '';
-  const items = list.items.map((i) => `<li>${renderInline(i.lines.join('\n'))}${i.children.map(renderList).join('')}</li>`);
-  return `<${tag}${start}>${items.join('')}</${tag}>`;
-}
-
-/**
- * Consecutive list lines (items, and indented lines continuing one) as one
- * list, nested by indentation. Returns the HTML and the lines used.
- */
-function parseList(lines: readonly string[], from: number): { html: string; next: number } {
-  const roots: ListNode[] = [];
-  const stack: ListNode[] = [];
-  let i = from;
-  for (; i < lines.length; i++) {
-    const line = lines[i];
-    const m = LIST_ITEM.exec(line);
-    if (m === null) {
-      // An indented line continues the last item; anything else ends the list.
-      const last = stack.at(-1)?.items.at(-1);
-      if (line.trim() !== '' && /^\s/.test(line) && last !== undefined) {
-        last.lines.push(line.trim());
-        continue;
-      }
-      break;
-    }
-    const indent = m[1].length;
-    const ordered = /\d/.test(m[2]);
-    while (stack.length > 0 && indent < stack[stack.length - 1].indent) stack.pop();
-    let top = stack.at(-1);
-    if (top !== undefined && indent >= top.indent + 2 && top.items.length > 0) {
-      const nested: ListNode = { indent, ordered, start: ordered ? Number.parseInt(m[2], 10) : 1, items: [] };
-      top.items[top.items.length - 1].children.push(nested);
-      stack.push(nested);
-      top = nested;
-    } else if (top === undefined || top.ordered !== ordered) {
-      const fresh: ListNode = { indent, ordered, start: ordered ? Number.parseInt(m[2], 10) : 1, items: [] };
-      if (top !== undefined && stack.length > 1) {
-        stack.pop();
-        stack[stack.length - 1].items.at(-1)!.children.push(fresh);
-      } else {
-        roots.push(fresh);
-        stack.length = 0;
-      }
-      stack.push(fresh);
-      top = fresh;
-    }
-    top.items.push({ lines: [m[3]], children: [] });
-  }
-  return { html: roots.map(renderList).join(''), next: i };
-}
-
-/**
- * The Markdown subset a message may use, as Teams HTML: paragraphs (a blank
- * line between them; a single newline is a line break), **bold**, *italic*,
- * ~~strike~~, `inline code`, fenced code blocks, bulleted (`-`, `*`, `+`) and
- * numbered (`1.`) lists nested by indentation, [links](https://…) with their
- * text, and :key: emoji. Anything else — raw HTML, headings, quotes, images —
- * is escaped and shown as written.
- */
-export function renderMarkdown(src: string): string {
-  const lines = src.replace(/\r\n?/g, '\n').split('\n');
-  const out: string[] = [];
-  let para: string[] = [];
-  const flush = () => {
-    if (para.length > 0) out.push(`<p>${renderInline(para.join('\n'))}</p>`);
-    para = [];
-  };
-  for (let i = 0; i < lines.length; ) {
-    const line = lines[i];
-    const fence = /^ {0,3}(`{3,}|~{3,})/.exec(line);
-    if (fence !== null) {
-      flush();
-      const close = new RegExp(`^ {0,3}${fence[1][0] === '`' ? '`' : '~'}{${fence[1].length},}\\s*$`);
-      const code: string[] = [];
-      for (i++; i < lines.length && !close.test(lines[i]); i++) code.push(lines[i]);
-      i++; // the closing fence (or past the end)
-      out.push(`<pre><code>${escapeHtml(code.join('\n'))}</code></pre>`);
-      continue;
-    }
-    if (LIST_ITEM.test(line)) {
-      flush();
-      const { html, next } = parseList(lines, i);
-      out.push(html);
-      i = next;
-      continue;
-    }
-    if (line.trim() === '') flush();
-    else para.push(line);
-    i++;
-  }
-  flush();
-  return out.join('');
 }
 
 /** `properties.mentions` — a JSON STRING, like every `properties` value. */

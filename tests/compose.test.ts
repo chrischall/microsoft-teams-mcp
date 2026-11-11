@@ -247,7 +247,10 @@ describe('renderMessageHtml (markdown)', () => {
   });
 
   it('cannot be tricked into a mention by private-use characters in the text', () => {
-    expect(md('0 x').html).toBe('<p>0 x</p>');
+    // This module's mention placeholders (U+E010/U+E011) …
+    expect(md('\ue0100\ue011 x').html).toBe('<p>0 x</p>');
+    // … and the Markdown renderer's own reserved range (U+E000–U+E00F).
+    expect(md('\ue0000\ue001 \ue0020\ue003 x').html).toBe('<p>0 0 x</p>');
   });
 
   it('reads back with the structure kept', () => {
