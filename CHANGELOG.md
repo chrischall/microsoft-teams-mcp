@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.12.0](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.11.0...v0.12.0) (2026-11-11)
+
+
+### Features
+
+* **messages:** send and read rich text, and edit or delete your own messages ([#122](https://github.com/chrischall/microsoft-teams-mcp/issues/122)) ([258677a](https://github.com/chrischall/microsoft-teams-mcp/commit/258677a71e7df2a83e39b78101b9649d16894563))
+
+
+### Bug Fixes
+
+* **messages:** drop hidden text and read lists, tables and links more cleanly ([#126](https://github.com/chrischall/microsoft-teams-mcp/issues/126)) ([a0b9d34](https://github.com/chrischall/microsoft-teams-mcp/commit/a0b9d34c9b4b97c46352aab5529e05b380a7f037))
+* **messages:** edit a message whose only change is who a mention points to ([#125](https://github.com/chrischall/microsoft-teams-mcp/issues/125)) ([5c32b01](https://github.com/chrischall/microsoft-teams-mcp/commit/5c32b0142fe3672f1f7e8293df1c245e9457c429))
+
 ## [0.11.0](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.10.0...v0.11.0) (2026-11-10)
 
 
