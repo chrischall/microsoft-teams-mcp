@@ -144,6 +144,20 @@ describe('teams_delete_message', () => {
     expect(missed.data).toMatchObject({ status: 'unknown', verified: false });
   });
 
+  it('warns, without failing, when the read-back itself fails', async () => {
+    const { chatsvc } = fakeWith();
+    const getMessage = vi.mocked(chatsvc.getMessage);
+    const real = getMessage.getMockImplementation()!;
+    // Each confirm phase reads the message once; the third read is the read-back.
+    let n = 0;
+    getMessage.mockImplementation(async (c: string, id: string) => {
+      if (++n > 2) throw new Error('network down');
+      return real(c, id);
+    });
+    const { data } = await del(chatsvc, { conversation: GROUP, message_id: MINE });
+    expect(data).toMatchObject({ status: 'deleted', verified: false, warning: expect.stringMatching(/reading the message back failed/) });
+  });
+
   it('is declared a destructive, idempotent write', async () => {
     const { chatsvc } = fakeWith();
     const h = await createTestHarness((server) => registerDeleteTools(server, { chatsvc }));

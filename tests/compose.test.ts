@@ -171,6 +171,14 @@ describe('renderMessageHtml (markdown)', () => {
     );
   });
 
+  it('continues an item on an indented line, and switches list kind at a nested level', () => {
+    expect(md('1. first\n   still first\n2. second').html).toBe('<ol><li>first<br>still first</li><li>second</li></ol>');
+    expect(md('1. top\n   - bullet\n   1. numbered').html).toBe(
+      '<ol><li>top<ul><li>bullet</li></ul><ol><li>numbered</li></ol></li></ol>',
+    );
+    expect(md('- a\n1. b').html).toBe('<ul><li>a</li></ul><ol><li>b</li></ol>');
+  });
+
   it('renders a link with its text, escaping the address', () => {
     expect(md('see [the **doc**](https://example.com/a?b=1&c=2)').html).toBe(
       '<p>see <a href="https://example.com/a?b=1&amp;c=2">the <strong>doc</strong></a></p>',

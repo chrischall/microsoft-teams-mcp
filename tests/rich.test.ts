@@ -140,6 +140,15 @@ describe('htmlToMarkdown', () => {
     );
   });
 
+  it('renders images as [image] (emoji as their character) and plain spans as their text', () => {
+    expect(
+      htmlToMarkdown(
+        '<p><span style="x">see</span> <img src="https://us-api.asm.skype.com/v1/objects/x/views/imgo"> ' +
+          '<img itemtype="http://schema.skype.com/Emoji" alt="🙂"></p>',
+      ),
+    ).toBe('see [image] 🙂');
+  });
+
   it('keeps line breaks inside a paragraph and decodes entities', () => {
     expect(htmlToMarkdown('<p>a &amp; b<br>c&nbsp;d</p>')).toBe('a & b\nc d');
   });
