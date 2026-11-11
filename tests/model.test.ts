@@ -228,7 +228,8 @@ describe('htmlToText', () => {
       'Overnight file monitor:\n' +
         'File | Status | Last seen\n' +
         'orders_2026-10-11.csv | Arrived | 02:14\n' +
-        'invoices.csv | Missing |\n' +
+        // An empty cell is skipped rather than shown as a dangling " |".
+        'invoices.csv | Missing\n' +
         'refunds.csv | Late | 04:50\n' +
         'Ping me if invoices stays missing.',
     );
