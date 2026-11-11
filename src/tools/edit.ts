@@ -29,7 +29,7 @@ import type { RawMessage } from '../chatsvc.js';
 import type { TeamsDeps } from '../deps.js';
 import { mentionsProperty, renderMessageHtml } from '../compose.js';
 import { htmlToText, isDeleted, SELF_CHAT } from '../model.js';
-import { sanitiseHtml } from '../rich.js';
+import { mentionsOf, sanitiseHtml } from '../rich.js';
 import { ownMessage, writeAndReadBack } from './own-message.js';
 import { wrapApiError } from './errors.js';
 import { formatParam, mentionArg, resolveMentions, resolveTarget } from './send.js';
@@ -75,7 +75,7 @@ export function registerEditTools(server: McpServer, { chatsvc }: Pick<TeamsDeps
         "(someone else's, a deleted one or a system event is refused). text replaces the whole message: plain " +
         'text by default, or Markdown with format "markdown" (as teams_send_message reads it). mentions ' +
         '@-mention people as in teams_send_message. A quote-reply keeps its quote. Text that renders exactly as ' +
-        'the message already does changes nothing (status "unchanged"). Everyone in the conversation sees the ' +
+        'the message already does, mentioning the same people, changes nothing (status "unchanged"). Everyone in the conversation sees the ' +
         'message marked edited. The result says whether reading the message back shows the edit (verified); ' +
         'status "unknown" means Teams did not confirm it and the read-back did not show it — check the message ' +
         `before retrying. conversation "${SELF_CHAT}" (or "notes" / "self") is the user's own notes self-chat — ` +
@@ -123,7 +123,10 @@ export function registerEditTools(server: McpServer, { chatsvc }: Pick<TeamsDeps
           format,
         );
         const content = quotePrefix(before) + rendered.html;
-        if (sameBody(content, before)) {
+        // A mention span names only who it shows, so the people are compared too.
+        const mentionedNow = rendered.mentions.map((m) => m.mri.toLowerCase());
+        const mentionedBefore = mentionsOf(original.properties?.mentions).map((m) => m.mri.toLowerCase());
+        if (sameBody(content, before) && mentionedNow.join('\n') === mentionedBefore.join('\n')) {
           return untrustedResult({ status: 'unchanged', conversation: target, message_id });
         }
 

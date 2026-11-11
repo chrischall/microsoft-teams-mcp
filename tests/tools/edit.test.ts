@@ -6,6 +6,8 @@ import { UNTRUSTED_CONTENT_NOTE } from '../../src/tools/untrusted.js';
 import type { ChatServiceClient, RawMessage } from '../../src/chatsvc.js';
 import { OTHER, fakeChatsvc, rawConv, rawMsg } from './fake-chatsvc.js';
 
+const THIRD = '8:orgid:00000000-0000-0000-0000-0000000000c3';
+
 const T0 = 1_760_000_000_000;
 const MIN = 60_000;
 const GROUP = '19:group0001@thread.v2';
@@ -185,6 +187,22 @@ describe('teams_edit_message', () => {
     const { data } = await edit(chatsvc, { conversation: GROUP, message_id: MINE, text: '1. top\n   - inner\n2. next', format: 'markdown' });
     expect(data).toMatchObject({ status: 'unchanged' });
     expect(editMessage).not.toHaveBeenCalled();
+  });
+
+  it('edits, not "unchanged", when the same text now mentions a different person', async () => {
+    const { chatsvc, editMessage } = fakeWith();
+    const stored = await chatsvc.getMessage(GROUP, MINE);
+    vi.mocked(chatsvc.getMessage).mockResolvedValue({
+      ...stored!,
+      content: '<p>ask <span itemscope itemtype="http://schema.skype.com/Mention" itemid="0">Sam</span></p>',
+      properties: { mentions: JSON.stringify([{ itemid: '0', mri: THIRD, mentionType: 'person', displayName: 'Sam' }]) },
+    });
+    const args = { conversation: GROUP, message_id: MINE, text: 'ask @Sam' };
+    const same = await edit(chatsvc, { ...args, mentions: [{ name_in_text: 'Sam', person: THIRD }] });
+    expect(same.data).toMatchObject({ status: 'unchanged' });
+    await edit(chatsvc, { ...args, mentions: [{ name_in_text: 'Sam', person: OTHER }] });
+    expect(editMessage).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(editMessage.mock.calls[0]![2].properties.mentions)).toEqual([expect.objectContaining({ mri: OTHER })]);
   });
 
   it('changes nothing, and asks nothing, when the new text renders the same', async () => {
