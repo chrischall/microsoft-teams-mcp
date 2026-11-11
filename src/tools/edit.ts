@@ -49,28 +49,38 @@ export function quotePrefix(content: string): string {
 const readsAs = (m: RawMessage | undefined, content: string): boolean =>
   m !== undefined && htmlToText(m.content ?? '') === htmlToText(content);
 
-/** The message to edit, or the reason it cannot be edited. */
-async function ownMessage(chatsvc: ChatServiceClient, conversationId: string, id: string, me: string): Promise<RawMessage> {
+/** True when Teams has deleted `m` (it keeps the message, with `deletetime` set). */
+export function isDeletedMessage(m: RawMessage): boolean {
+  const del = m.properties?.deletetime;
+  return del !== undefined && del !== null && del !== '' && del !== 0;
+}
+
+/**
+ * One of the user's own, person-written messages — the only kind this server
+ * edits or deletes — or the reason it is not one. `verb` words the refusals
+ * ("edit", "delete"). Whether it is already deleted is the caller's to judge.
+ */
+export async function ownMessage(
+  chatsvc: ChatServiceClient,
+  conversationId: string,
+  id: string,
+  me: string,
+  verb: string,
+): Promise<RawMessage> {
   const m = await chatsvc.getMessage(conversationId, id);
   if (m === undefined) {
-    throw new McpToolError(`There is no message ${id} in this conversation to edit.`, {
+    throw new McpToolError(`There is no message ${id} in this conversation to ${verb}.`, {
       hint: 'Take message ids from teams_list_messages.',
     });
   }
   if (senderMri(m.from)?.toLowerCase() !== me.toLowerCase()) {
-    throw new McpToolError(`Message ${id} was not sent by you: you can edit only your own messages.`, {
-      hint: 'Pick one of your own messages (fromMe: true in teams_list_messages), or send a new message instead.',
-    });
-  }
-  const del = m.properties?.deletetime;
-  if (del !== undefined && del !== null && del !== '' && del !== 0) {
-    throw new McpToolError(`Message ${id} has been deleted, so it cannot be edited.`, {
-      hint: 'Send a new message instead (teams_send_message).',
+    throw new McpToolError(`Message ${id} was not sent by you: you can ${verb} only your own messages.`, {
+      hint: 'Pick one of your own messages (fromMe: true in teams_list_messages).',
     });
   }
   if (!isUserMessage(m)) {
     throw new McpToolError(`Message ${id} is a system event (${m.messagetype}), not a message anyone wrote.`, {
-      hint: 'Only messages you wrote can be edited.',
+      hint: `Only messages you wrote can be ${verb === 'edit' ? 'edited' : `${verb}d`}.`,
     });
   }
   return m;
@@ -120,7 +130,12 @@ export function registerEditTools(server: McpServer, { chatsvc }: Pick<TeamsDeps
       try {
         const me = await chatsvc.meMri();
         const target = await resolveTarget(chatsvc, conversation, me, 'edit a message in');
-        const original = await ownMessage(chatsvc, target.id, message_id, me);
+        const original = await ownMessage(chatsvc, target.id, message_id, me, 'edit');
+        if (isDeletedMessage(original)) {
+          throw new McpToolError(`Message ${message_id} has been deleted, so it cannot be edited.`, {
+            hint: 'Send a new message instead (teams_send_message).',
+          });
+        }
         const before = original.content ?? '';
 
         const people = await resolveMentions(chatsvc, target.id, mentions ?? []);

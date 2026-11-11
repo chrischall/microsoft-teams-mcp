@@ -14,7 +14,7 @@ import { servedTools } from './served-tools.js';
  */
 describe('every tool declares what it does', () => {
   it('covers the full served surface (guards against a registrar being dropped)', async () => {
-    expect(await servedTools()).toHaveLength(20);
+    expect(await servedTools()).toHaveLength(21);
   });
 
   it('sets an explicit boolean readOnlyHint and openWorldHint on all of them', async () => {
@@ -44,6 +44,7 @@ describe('every tool declares what it does', () => {
     expect(writes).toEqual([
       'teams_add_chat_members',
       'teams_create_group_chat',
+      'teams_delete_message',
       'teams_edit_message',
       'teams_list_messages',
       'teams_list_unread_messages',

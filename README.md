@@ -36,7 +36,7 @@ By default nothing here marks anything read. Reading a chat through this
 server leaves your Teams unread badges exactly as they were — unless you ask
 for it: `teams_mark_read`, or `mark_read: true` on `teams_list_messages`
 / `teams_list_unread_messages`, moves your read marker forward. The writes —
-`teams_send_message`, `teams_edit_message`, `teams_react`, marking read, renaming a group chat
+`teams_send_message`, `teams_edit_message`, `teams_delete_message`, `teams_react`, marking read, renaming a group chat
 or adding and removing its members (`teams_rename_chat`,
 `teams_add_chat_members`, `teams_remove_chat_members`), and starting a new
 one (`teams_create_group_chat`) — go through the same
@@ -666,6 +666,12 @@ Everything is optional — by default the token is captured from your browser.
   that will replace it; text that renders exactly as the message already
   does changes nothing (`status: "unchanged"`). The message is read back to
   verify the edit (`verified`).
+- `teams_delete_message` — delete one of your own messages: `conversation`
+  and `message_id` (one you sent — someone else's or a system event is
+  refused before any preview). One already deleted is reported as
+  `status: "already_deleted"` with nothing asked or sent. The preview shows
+  the message that will go; the message is read back to verify it is
+  deleted (`verified`). This MCP cannot bring a deleted message back.
 - `teams_react` — add or (with `remove: true`) withdraw your reaction on a
   message: an emoji or name (`thumbsup`/👍, `heart`/❤️, `laugh`/😆,
   `surprised`/😮, `sad`/😢, `angry`/😡, `checkmark`/✅) or any raw Teams
@@ -748,7 +754,7 @@ read-only, and nothing marks anything read unless you ask it to.
 
 ## Writes
 
-A post, an edit, a reaction, a rename, a membership change and a new group chat are
+A post, an edit, a delete, a reaction, a rename, a membership change and a new group chat are
 visible to everyone in the conversation, and marking read clears your unread badges, so each
 write asks you first. A
 client that can show a confirmation prompt (Claude Code) shows one. On a
@@ -777,7 +783,7 @@ as the real guard on what gets posted.
 
 **Try it in your own notes first.** The conversation `48:notes` (also by the
 name `notes` or `self`) is your Teams self-chat ("notes to self"): sending,
-editing, reacting and marking read accept it (the group-chat tools do not — it has no
+editing, deleting, reacting and marking read accept it (the group-chat tools do not — it has no
 one else in it), `teams_list_messages` reads it, nobody else sees it, and
 it is the safe place to see what a message or reaction will look like. Every
 other `48:` system conversation (calendar and the like) is refused.
@@ -788,7 +794,7 @@ result is `status: "unknown"` — the message may already be there, so read the
 conversation before sending again. A 4xx is a refusal and stays an error. A
 reaction Teams does not confirm is settled by reading the message back, and
 is `status: "unknown"` only when that does not show the change; so is an
-edit. A read-marker
+edit or a delete. A read-marker
 move Teams does not confirm is `status: "unknown"` (`marked_read: false` with a
 `mark_read_warning` from the read tools); moving it again to the same message
 is harmless. Marking read (`PUT …/properties?name=consumptionhorizon`) was

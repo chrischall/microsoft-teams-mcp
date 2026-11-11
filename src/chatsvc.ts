@@ -132,6 +132,9 @@ const REACTION_OUTCOME_HINT =
 const EDIT_OUTCOME_HINT =
   'The edit may already have been applied — read the message (teams_list_messages) before retrying.';
 
+const DELETE_OUTCOME_HINT =
+  'The message may already have been deleted — read the conversation (teams_list_messages) before retrying.';
+
 const THREAD_OUTCOME_HINT =
   'The change to the chat may already have been applied — check the chat (its name and members) before retrying.';
 
@@ -505,6 +508,22 @@ export class ChatServiceClient {
       `/messages/${encodeURIComponent(messageId)}`;
     const { status } = await this.#send(url, 'text', undefined, { method: 'PUT', body, hint: EDIT_OUTCOME_HINT });
     this.#checkWriteStatus('PUT', status, EDIT_OUTCOME_HINT);
+  }
+
+  /**
+   * Delete one of the user's own messages: `DELETE …/messages/{id}`. Teams
+   * keeps a deleted message in the conversation with `properties.deletetime`
+   * set and no content. Deleting twice leaves it deleted, but a request that
+   * was sent and got no usable answer is still a `WriteOutcomeUnknownError`,
+   * so the tool reads the message back to settle it.
+   */
+  async deleteMessage(conversationId: string, messageId: string): Promise<void> {
+    this.#requireConfigured();
+    const url =
+      `${this.#baseUrl}/users/ME/conversations/${encodeURIComponent(conversationId)}` +
+      `/messages/${encodeURIComponent(messageId)}`;
+    const { status } = await this.#send(url, 'text', undefined, { method: 'DELETE', hint: DELETE_OUTCOME_HINT });
+    this.#checkWriteStatus('DELETE', status, DELETE_OUTCOME_HINT);
   }
 
   /**

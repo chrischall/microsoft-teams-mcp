@@ -656,6 +656,33 @@ describe('editMessage', () => {
   });
 });
 
+describe('deleteMessage', () => {
+  it('DELETEs the encoded message with no body', async () => {
+    const fetchImpl: FetchMock = vi.fn(async () => new Response('', { status: 200 }));
+    await client(fetchImpl).deleteMessage('19:a b@thread.v2', '1760000000000');
+    expect(urlOf(fetchImpl, 0)).toBe(
+      `${BASE}/users/ME/conversations/${encodeURIComponent('19:a b@thread.v2')}/messages/1760000000000`,
+    );
+    const init = fetchImpl.mock.calls[0]?.[1];
+    expect(init?.method).toBe('DELETE');
+    expect(init?.body).toBeUndefined();
+  });
+
+  it('reports a dropped connection as an unknown outcome', async () => {
+    const fetchImpl: FetchMock = vi.fn(async () => {
+      throw new TypeError('fetch failed');
+    });
+    await expect(client(fetchImpl).deleteMessage('c', '1')).rejects.toBeInstanceOf(WriteOutcomeUnknownError);
+  });
+
+  it.each([400, 403, 404])('maps a %i refusal to a plain error with its status', async (status) => {
+    const fetchImpl: FetchMock = vi.fn(async () => jsonResponse({}, status));
+    const p = client(fetchImpl).deleteMessage('c', '1');
+    await expect(p).rejects.toMatchObject({ status });
+    await expect(p).rejects.not.toBeInstanceOf(WriteOutcomeUnknownError);
+  });
+});
+
 describe('sendMessage', () => {
   const BODY = { content: '<p>hi</p>', clientmessageid: '1234567890123456789' };
 

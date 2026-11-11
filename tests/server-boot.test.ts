@@ -77,6 +77,7 @@ describe('built server boots', () => {
       expect(tools).toEqual([
         'teams_add_chat_members',
         'teams_create_group_chat',
+        'teams_delete_message',
         'teams_edit_message',
         'teams_export_messages',
         'teams_get_attachment',
