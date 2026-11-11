@@ -644,7 +644,13 @@ Everything is optional — by default the token is captured from your browser.
 
 - `teams_send_message` — post as you to any chat or channel, by id or name.
   `text` is plain text by default: it is escaped, newlines are kept, and
-  `:key:` shortcodes (`:smile:`, `:1f389_partypopper:`) become Teams emoji.
+  `:key:` shortcodes become emoji: Teams' own animated ones for `like`,
+  `heart`, `laugh`, `surprised`, `sad`, `angry`, `smile`, `wink`, `cool`,
+  `hearteyes`, `fire` and `party`, and the plain character for about 50
+  common names (`:rocket:`, `:tada:`, `:thumbsup:`, `:eyes:`,
+  `:white_check_mark:`, …) and for unicode-style keys
+  (`:1f680_rocket:`). Teams has no animated image for many code points, so
+  only the twelve names it is known to have get one.
   `format: "markdown"` reads it as Markdown instead: `**bold**`, `*italic*`,
   `~~strike~~`, `` `inline code` ``, fenced code blocks, bulleted (`- `) and
   numbered (`1. `) lists nested by indenting, `[link text](https://…)`

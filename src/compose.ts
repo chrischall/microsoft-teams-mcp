@@ -24,10 +24,11 @@ export function escapeHtml(s: string): string {
 }
 
 /**
- * Teams' short legacy emoji keys this module can render, with the title Teams
- * shows and the character used as the `alt` fallback. The keys are the
- * observed ones; the titles and characters are best-effort (they only affect
- * hover text and copy-paste, never which emoji renders).
+ * Teams' short legacy emoji keys, rendered as Teams' own animated emoji span,
+ * with the title Teams shows and the character used as the `alt` fallback.
+ * The keys are the observed ones, and each has an image on Teams' emoji CDN
+ * (all 12 checked 2026-11-11); the titles and characters only affect hover
+ * text and copy-paste.
  */
 const NAMED_EMOJI: Record<string, { title: string; char: string }> = {
   like: { title: 'Like', char: '👍' },
@@ -45,40 +46,104 @@ const NAMED_EMOJI: Record<string, { title: string; char: string }> = {
 };
 
 /**
+ * Common shortcode names (the GitHub/Slack spellings) sent as the plain
+ * character, which Teams always shows — unlike an image span, whose image
+ * Teams may not have.
+ */
+const PLAIN_EMOJI: Record<string, string> = {
+  rocket: '🚀',
+  tada: '🎉',
+  thumbsup: '👍',
+  thumbsdown: '👎',
+  clap: '👏',
+  raised_hands: '🙌',
+  pray: '🙏',
+  muscle: '💪',
+  wave: '👋',
+  eyes: '👀',
+  thinking: '🤔',
+  joy: '😂',
+  sweat_smile: '😅',
+  grin: '😁',
+  slightly_smiling_face: '🙂',
+  upside_down: '🙃',
+  shrug: '🤷',
+  facepalm: '🤦',
+  white_check_mark: '✅',
+  heavy_check_mark: '✔️',
+  x: '❌',
+  warning: '⚠️',
+  bangbang: '‼️',
+  question: '❓',
+  bulb: '💡',
+  star: '⭐',
+  sparkles: '✨',
+  zap: '⚡',
+  boom: '💥',
+  '100': '💯',
+  robot: '🤖',
+  brain: '🧠',
+  coffee: '☕',
+  chart_with_upwards_trend: '📈',
+  chart_with_downwards_trend: '📉',
+  memo: '📝',
+  calendar: '📅',
+  lock: '🔒',
+  bug: '🐛',
+  wrench: '🔧',
+  hammer: '🔨',
+  package: '📦',
+  ship: '🚢',
+  hourglass: '⌛',
+  stopwatch: '⏱️',
+  point_right: '👉',
+  point_up: '☝️',
+  ok_hand: '👌',
+  crossed_fingers: '🤞',
+  see_no_evil: '🙈',
+  skull: '💀',
+  partying_face: '🥳',
+  exploding_head: '🤯',
+  mind_blown: '🤯',
+};
+
+/**
  * A unicode-style key: lowercase hex code point(s), `_`, the character's name
- * squashed to `[a-z0-9]` (`1f389_partypopper`). Multi-code-point keys are
- * assumed `-`-joined — unverified, so such a key at worst renders as Teams'
- * missing-emoji image.
+ * squashed to `[a-z0-9]` (`1f389_partypopper`); a multi-code-point key is
+ * `-`-joined.
  */
 const UNICODE_KEY = /^([0-9a-f]{4,6}(?:-[0-9a-f]{4,6})*)_([a-z0-9]+)$/;
 
 /**
- * The captured inline-emoji span for `key`, or `undefined` when the key is
- * neither a known short name nor unicode-style — the caller then leaves the
- * `:key:` as plain text (so "10:30:45" is never mangled).
+ * The HTML for the `:key:` shortcode, or `undefined` when the key is none
+ * this module knows — the caller then leaves the `:key:` as plain text (so
+ * "10:30:45" is never mangled).
+ *
+ * A built-in name ({@link NAMED_EMOJI}) is Teams' animated emoji span. A
+ * common name ({@link PLAIN_EMOJI}) or a unicode-style key is the plain
+ * character: Teams' emoji CDN has no image for many code points (live
+ * 2026-11-11, `1f680_rocket` is a 404 and showed as a broken image), and a
+ * plain character always shows.
  */
-export function emojiSpan(key: string): string | undefined {
-  let title: string;
-  let char: string;
+export function emojiHtml(key: string): string | undefined {
   const named = NAMED_EMOJI[key];
   if (named !== undefined) {
-    ({ title, char } = named);
-  } else {
-    const m = UNICODE_KEY.exec(key);
-    if (m === null) return undefined;
-    const points = m[1].split('-').map((h) => parseInt(h, 16));
-    if (points.some((p) => p > 0x10ffff)) return undefined;
-    char = String.fromCodePoint(...points);
-    title = m[2];
+    const t = escapeHtml(named.title);
+    // `key` is one of the names above, so it is safe in a URL and attribute.
+    return (
+      `<span contenteditable="false" title="${t}" type="(${key})" class="animated-emoticon-20-${key}" itemscope>` +
+      `<img itemscope itemtype="http://schema.skype.com/Emoji" itemid="${key}" ` +
+      `src="https://statics.teams.cdn.office.net/evergreen-assets/personal-expressions/v2/assets/emoticons/${key}/default/20_f.png" ` +
+      `title="${t}" alt="${escapeHtml(named.char)}" style="width:20px;height:20px;"></span>`
+    );
   }
-  // `key` is [a-z0-9_-] by construction here, so it is safe in a URL and attribute.
-  const t = escapeHtml(title);
-  return (
-    `<span contenteditable="false" title="${t}" type="(${key})" class="animated-emoticon-20-${key}" itemscope>` +
-    `<img itemscope itemtype="http://schema.skype.com/Emoji" itemid="${key}" ` +
-    `src="https://statics.teams.cdn.office.net/evergreen-assets/personal-expressions/v2/assets/emoticons/${key}/default/20_f.png" ` +
-    `title="${t}" alt="${escapeHtml(char)}" style="width:20px;height:20px;"></span>`
-  );
+  const plain = Object.hasOwn(PLAIN_EMOJI, key) ? PLAIN_EMOJI[key] : undefined;
+  if (plain !== undefined) return plain;
+  const m = UNICODE_KEY.exec(key);
+  if (m === null) return undefined;
+  const points = m[1].split('-').map((h) => parseInt(h, 16));
+  if (points.some((p) => p > 0x10ffff)) return undefined;
+  return escapeHtml(String.fromCodePoint(...points));
 }
 
 /**
@@ -91,7 +156,7 @@ function renderPlain(text: string): string {
   let at = 0;
   const shortcode = /:([a-z0-9_-]+):/g;
   for (let m = shortcode.exec(text); m !== null; m = shortcode.exec(text)) {
-    const span = emojiSpan(m[1]);
+    const span = emojiHtml(m[1]);
     if (span === undefined) {
       shortcode.lastIndex = m.index + m[0].length - 1;
       continue;
@@ -250,7 +315,7 @@ function renderInline(src: string): string {
   });
   // Emoji before escaping and emphasis, so a key's "_" is never read as italic.
   s = s.replace(/:([a-z0-9_-]+):/g, (whole, key: string) => {
-    const span = emojiSpan(key);
+    const span = emojiHtml(key);
     return span === undefined ? whole : hole(span);
   });
   s = escapeHtml(s)

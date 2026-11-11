@@ -534,9 +534,12 @@ describe('teams_send_message — mentions and emoji', () => {
     expect(first.isError).toBeFalsy();
   });
 
-  it('renders a :key: shortcode as an emoji span', async () => {
+  it('renders a built-in :key: as an emoji span, and a unicode-style key or common name as its character', async () => {
     const { chatsvc, sendMessage } = fakeWith();
-    await sendConfirmed(chatsvc, { conversation: GROUP, text: 'shipped :1f389_partypopper:' });
-    expect(sendMessage.mock.calls[0]![1].content).toContain('itemid="1f389_partypopper"');
+    await sendConfirmed(chatsvc, { conversation: GROUP, text: 'shipped :party: :1f680_rocket: :rocket:' });
+    const content = sendMessage.mock.calls[0]![1].content;
+    expect(content).toContain('itemid="party"');
+    expect(content).toContain('🚀 🚀');
+    expect(content).not.toContain('1f680_rocket');
   });
 });

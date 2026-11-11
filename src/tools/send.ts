@@ -222,7 +222,9 @@ export function registerSendTools(server: McpServer, { chatsvc }: Pick<TeamsDeps
       description:
         'Post a message as the signed-in user to any chat or channel, by id (from teams_list_conversations / ' +
         'teams_list_channels) or by name. text is plain text by default: it is escaped, newlines are kept, ' +
-        'and :key: shortcodes (e.g. :smile:, :1f389_partypopper:) become Teams emoji. format "markdown" ' +
+        'and :key: shortcodes become emoji: Teams\' animated ones for like, heart, laugh, surprised, sad, angry, smile, ' +
+        'wink, cool, hearteyes, fire and party; the plain character for common names (:rocket:, :tada:, :thumbsup:, ' +
+        ':eyes:, :white_check_mark:, …) and unicode-style keys (:1f680_rocket:). format "markdown" ' +
         'reads text as Markdown instead: **bold**, *italic*, ~~strike~~, `inline code`, ``` code blocks ```, ' +
         'bulleted (- item) and numbered (1. item) lists, [link text](https://…), blank-line paragraphs and ' +
         'line breaks; raw HTML, headings, quotes and images are escaped and shown as written. reply_to in a ' +

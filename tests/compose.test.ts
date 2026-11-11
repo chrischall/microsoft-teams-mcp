@@ -3,7 +3,7 @@ import { McpToolError } from '@chrischall/mcp-utils';
 import {
   buildSendBody,
   clipText,
-  emojiSpan,
+  emojiHtml,
   escapeHtml,
   mentionsProperty,
   newClientMessageId,
@@ -23,9 +23,9 @@ describe('escapeHtml', () => {
   });
 });
 
-describe('emojiSpan', () => {
+describe('emojiHtml', () => {
   it('renders a known named key as the captured emoji span', () => {
-    expect(emojiSpan('smile')).toBe(
+    expect(emojiHtml('smile')).toBe(
       '<span contenteditable="false" title="Smile" type="(smile)" class="animated-emoticon-20-smile" itemscope>' +
         '<img itemscope itemtype="http://schema.skype.com/Emoji" itemid="smile" ' +
         'src="https://statics.teams.cdn.office.net/evergreen-assets/personal-expressions/v2/assets/emoticons/smile/default/20_f.png" ' +
@@ -33,16 +33,30 @@ describe('emojiSpan', () => {
     );
   });
 
-  it('derives the character and title of a unicode-style key', () => {
-    const span = emojiSpan('1f389_partypopper')!;
-    expect(span).toContain('alt="🎉"');
-    expect(span).toContain('title="partypopper"');
-    expect(span).toContain('itemid="1f389_partypopper"');
+  it('renders a unicode-style key as its plain character, never an image Teams may not have', () => {
+    // Live 2026-11-11: Teams' CDN has no image for 1f680_rocket, so a span showed a broken image.
+    expect(emojiHtml('1f680_rocket')).toBe('🚀');
+    expect(emojiHtml('1f389_partypopper')).toBe('🎉');
+    expect(emojiHtml('1f468-200d-1f4bb_technologist')).toBe('👨\u200d💻');
+  });
+
+  it('renders a common name as its plain character', () => {
+    expect(emojiHtml('rocket')).toBe('🚀');
+    expect(emojiHtml('tada')).toBe('🎉');
+    expect(emojiHtml('thumbsup')).toBe('👍');
+    expect(emojiHtml('white_check_mark')).toBe('✅');
+  });
+
+  it('keeps the captured span for every built-in name (all 12 images exist on Teams\' CDN, checked 2026-11-11)', () => {
+    for (const key of ['like', 'heart', 'laugh', 'surprised', 'sad', 'angry', 'smile', 'wink', 'cool', 'hearteyes', 'fire', 'party']) {
+      expect(emojiHtml(key), key).toContain(`itemid="${key}"`);
+    }
   });
 
   it('returns undefined for a key it cannot render', () => {
-    expect(emojiSpan('notakey')).toBeUndefined();
-    expect(emojiSpan('30')).toBeUndefined();
+    expect(emojiHtml('notakey')).toBeUndefined();
+    expect(emojiHtml('30')).toBeUndefined();
+    expect(emojiHtml('110000_toohigh')).toBeUndefined();
   });
 });
 
@@ -217,7 +231,7 @@ describe('renderMessageHtml (markdown)', () => {
     expect(html).toContain('itemid="smile"');
     expect(html).toContain('<strong>hi</strong>');
     expect(html).toContain('<code>:smile:</code>');
-    expect(md(':1f389_partypopper:').html).toContain('itemid="1f389_partypopper"');
+    expect(md(':1f389_partypopper: :rocket:_ship_').html).toBe('<p>🎉 🚀<em>ship</em></p>');
   });
 
   it('places mentions inside formatting and lists, numbered in order of appearance', () => {
