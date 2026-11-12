@@ -203,6 +203,17 @@ describe('teams_get_attachment converts PDF, Excel and PowerPoint files', () => 
     expectNoOriginalInline(content);
   });
 
+  it("convert: 'auto' adds page images for a scan (a page with no text), or says why it cannot", async () => {
+    const { result, content } = await getFile('Scan.pdf', PDF_MIME, makePdf(['']));
+    expect(result.isError).toBeFalsy();
+    expectNoOriginalInline(content);
+    const notes = (captionOf(content).converted as { notes: string[] }).notes;
+    expect(notes.some((n) => /little or no text layer/.test(n))).toBe(true);
+    const pageImages = content.filter((b) => b.type === 'image' && /^image\/(png|jpeg)$/.test(b.mimeType ?? ''));
+    // Page images need @napi-rs/canvas; without it the degrade is a note, never silence.
+    expect(pageImages.length > 0 || notes.some((n) => /page images unavailable/.test(n))).toBe(true);
+  });
+
   it("convert: 'text' never renders page images, even for a scan", async () => {
     const { content } = await getFile('Scan.pdf', PDF_MIME, makePdf(['']), { convert: 'text' });
     expect(content.some((b) => b.type === 'image')).toBe(false);
