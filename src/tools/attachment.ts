@@ -118,26 +118,25 @@ export function registerAttachmentTools(
     {
       title: 'Get a Teams message attachment',
       description:
-        'Fetch one attachment of a Teams chat or channel message, as listed by ' +
-        'teams_list_messages / teams_list_unread_messages. ref names it: an inline image\'s ref ' +
-        '(attachments.images[].ref) or a shared file\'s name (attachments.files[].name), matched ignoring case ' +
-        'and spacing (a Unicode space such as the one macOS puts before AM/PM matches a plain one) and, for a ' +
-        'file, with or without its extension. An inline image is returned as the image itself. A ' +
-        'shared file is downloaded from SharePoint and returned as its contents: an image as the image, anything ' +
-        'else as an embedded resource carrying the bytes. Anything over 10 MiB comes back instead as a signed, ' +
-        'expiring download link (downloadUrl) on a hosted install, or saved to a fresh file (path) under ' +
-        `${EXPORT_OUTPUT_ENV}, else ~/Downloads/${EXPORT_SERVER_NAME}, on a local one; the caption's via ` +
-        'says which. save: true does the same for any size — use it when the user wants the file itself rather ' +
-        'than its contents read here. A shared PDF, Excel workbook or PowerPoint deck is also read for you ' +
-        '(convert, default "auto"): a PDF as Markdown (page images for a scan), a workbook as CSV per sheet, a deck ' +
-        'as per-slide Markdown plus its pictures — returned beside a download link or saved file for the original, ' +
-        "which is then never inlined; the caption's converted lists what came back, and a file that will not " +
-        'convert is handed over as before with the reason in conversion_error. The first download may need your Teams tab reloaded to capture a ' +
-        'short-lived SharePoint token, which then serves every SharePoint host; a file your account ' +
-        'cannot open, or one that could not be fetched, comes back as metadata and its open link ' +
-        'instead of failing. Its caption names the conversation beside its id: title (as teams_list_conversations ' +
-        'names it — an untitled group chat by its participants, a 1:1 by the other person) and participants. ' +
-        'Does not mark anything read.' +
+        'Fetch one attachment of a Teams chat or channel message, as listed by teams_list_messages / ' +
+        "teams_list_unread_messages. ref names it: an inline image's ref (attachments.images[].ref) or a shared " +
+        "file's name (attachments.files[].name), matched ignoring case and spacing (a Unicode space such as the " +
+        'one macOS puts before AM/PM matches a plain one) and, for a file, with or without its extension. ' +
+        'An inline image is returned as the image itself. A shared file is downloaded from SharePoint and ' +
+        'returned as its contents: an image as the image, anything else as an embedded resource carrying the ' +
+        'bytes. Over 10 MiB it comes back instead as a signed, expiring download link (downloadUrl) on a hosted ' +
+        `install, or saved to a fresh file (path) under ${EXPORT_OUTPUT_ENV}, else ` +
+        `~/Downloads/${EXPORT_SERVER_NAME}, on a local one; the caption's via says which. save: true does the same ` +
+        'for any size — use it when the user wants the file itself rather than its contents read here. ' +
+        'A shared PDF, Excel workbook or PowerPoint deck is also read for you (see convert): its Markdown, CSV ' +
+        'or images come back with the original as a link or saved file, never inlined beside them; the ' +
+        "caption's converted lists what came back, and a file that will not convert is handed over as above " +
+        'with the reason in conversion_error. ' +
+        'The first download may need your Teams tab reloaded to capture a short-lived SharePoint token, which ' +
+        'then serves every SharePoint host; a file your account cannot open, or one that could not be fetched, ' +
+        'comes back as metadata and its open link instead of failing. The caption names the conversation beside ' +
+        'its id: title (as teams_list_conversations names it — an untitled group chat by its participants, a 1:1 ' +
+        'by the other person) and participants. Does not mark anything read.' +
         UNTRUSTED_DESCRIPTION_SUFFIX,
       annotations: toolAnnotations({ readOnly: true, openWorld: true }),
       _meta: workMeta('other', { aliases: ['attachment', 'image', 'file', 'screenshot'] }),
@@ -189,7 +188,8 @@ export function registerAttachmentTools(
           if (!mimeType.startsWith('image/')) {
             throw new McpToolError(`The attachment ${image.ref} is not an image (the image store returned ${mimeType}).`);
           }
-          const delivered = await deliver(data, imageFileName(image.ref, mimeType), mimeType, save);
+          const fileName = imageFileName(image.ref, mimeType);
+          const delivered = await deliver(data, fileName, mimeType, save ? SAVE_ROUTE : {});
           const caption = untrustedResult({
             ref: image.ref,
             message_id,
@@ -223,7 +223,7 @@ async function downloadSharedFile(
   sharepoint: Pick<TeamsDeps['sharepoint'], 'downloadFile'>,
   file: FileAttachment,
   message: NormalisedMessage,
-  ids: { conversation: string; message_id: string },
+  ids: MessageIds,
   naming: Promise<ConversationNameFields>,
   save: boolean,
   convert: ConvertOption,
@@ -232,7 +232,7 @@ async function downloadSharedFile(
     return untrustedResult({ ...file, content_available: false, hint: FILE_HINT });
   }
 
-  let downloaded: { mimeType: string; data: Buffer; size: number };
+  let downloaded: Downloaded;
   try {
     downloaded = await sharepoint.downloadFile(file.url, MAX_FILE_BYTES);
   } catch (err) {
@@ -245,6 +245,7 @@ async function downloadSharedFile(
   // caller asked for the file itself (save) or for no conversion.
   let conversionError: string | undefined;
   if (!save && convert !== 'none' && detectConvertible(file.name, downloaded.mimeType) !== undefined) {
+    const signal = currentCallSignal();
     try {
       const converted = await convertAttachment({
         // A plain Uint8Array copy: pdf.js refuses a Buffer ("provide binary
@@ -255,7 +256,7 @@ async function downloadSharedFile(
         mimeType: downloaded.mimeType,
         mode: convert,
         limits: CONVERT_LIMITS,
-        ...(currentCallSignal() !== undefined ? { signal: currentCallSignal() } : {}),
+        ...(signal !== undefined ? { signal } : {}),
       });
       if (converted !== undefined) {
         return convertedResult(converted, file, downloaded, message, ids, naming);
@@ -263,7 +264,7 @@ async function downloadSharedFile(
     } catch (err) {
       // A cancelled call stays cancelled; anything else (a corrupt file, a
       // missing peer, an input over the cap) falls back to plain delivery.
-      if (currentCallSignal()?.aborted) throw err;
+      if (signal?.aborted) throw err;
       conversionError = err instanceof Error && err.message !== '' ? err.message : String(err);
     }
   }
@@ -273,7 +274,7 @@ async function downloadSharedFile(
   // keep the open link in the hint so the file is still reachable.
   let delivered: DeliveredFile;
   try {
-    delivered = await deliver(downloaded.data, file.name, downloaded.mimeType, save);
+    delivered = await deliver(downloaded.data, file.name, downloaded.mimeType, save ? SAVE_ROUTE : {});
   } catch (err) {
     if (err instanceof McpToolError && file.openUrl !== undefined) {
       throw new McpToolError(err.message, {
@@ -286,23 +287,13 @@ async function downloadSharedFile(
   }
 
   const caption = untrustedResult({
-      name: file.name,
-      ...(file.type !== undefined ? { type: file.type } : {}),
-      ...(file.openUrl !== undefined ? { openUrl: file.openUrl } : {}),
-      // The degrade path carries `content_available: false`; a successful
-      // download must carry the matching `true` so a caller keying on the field
-      // does not read a downloaded file as unavailable.
-      content_available: true,
-      mimeType: delivered.mimeType,
-      bytes: downloaded.size,
-      ...deliveryFields(delivered),
-      ...(conversionError !== undefined ? { conversion_error: conversionError } : {}),
-      sender: message.sender,
-      time: message.time,
-      message_id: ids.message_id,
-      conversation: ids.conversation,
-      ...(await naming),
-    });
+    ...fileFields(file),
+    mimeType: delivered.mimeType,
+    bytes: downloaded.size,
+    ...deliveryFields(delivered),
+    ...(conversionError !== undefined ? { conversion_error: conversionError } : {}),
+    ...(await messageFields(message, ids, naming)),
+  });
 
   // An embedded resource's `uri` is the file's open link (its SharePoint object
   // url otherwise) — an identifier, not a re-fetch — rather than deliverFile's
@@ -324,9 +315,9 @@ async function downloadSharedFile(
 async function convertedResult(
   converted: ConvertResult,
   file: FileAttachment,
-  downloaded: { mimeType: string; data: Buffer; size: number },
+  downloaded: Downloaded,
   message: NormalisedMessage,
-  ids: { conversation: string; message_id: string },
+  ids: MessageIds,
   naming: Promise<ConversationNameFields>,
 ): Promise<CallToolResult> {
   const blocks = convertedToContent(converted);
@@ -341,15 +332,10 @@ async function convertedResult(
 
   let original: Record<string, unknown>;
   try {
-    const delivered = await deliverFile({
-      bytes: downloaded.data,
-      fileName: file.name,
-      mimeType: downloaded.mimeType,
-      keyPrefix: 'attachments',
+    // Never inline: with no link or disk route, deliverFile throws instead.
+    const delivered = await deliver(downloaded.data, file.name, downloaded.mimeType, {
       prefer: isHostedEnv() ? 'link' : 'disk',
-      // Never inline: with no link or disk route, deliverFile throws instead.
       inlineMaxBytes: 0,
-      ...(isHostedEnv() ? {} : { disk: { dir: downloadDir() } }),
     });
     original = { mimeType: delivered.mimeType, ...deliveryFields(delivered) };
   } catch (err) {
@@ -361,10 +347,7 @@ async function convertedResult(
   }
 
   const caption = untrustedResult({
-    name: file.name,
-    ...(file.type !== undefined ? { type: file.type } : {}),
-    ...(file.openUrl !== undefined ? { openUrl: file.openUrl } : {}),
-    content_available: true,
+    ...fileFields(file),
     bytes: downloaded.size,
     ...original,
     converted: {
@@ -373,14 +356,16 @@ async function convertedResult(
       parts: converted.parts.map((p) => p.name),
       notes: converted.notes,
     },
-    sender: message.sender,
-    time: message.time,
-    message_id: ids.message_id,
-    conversation: ids.conversation,
-    ...(await naming),
+    ...(await messageFields(message, ids, naming)),
   });
   return { content: [...header.content, ...blocks, ...caption.content] };
 }
+
+/** A shared file's downloaded bytes, as `SharePointClient.downloadFile` returns them. */
+type Downloaded = { mimeType: string; data: Buffer; size: number };
+
+/** The ids a caption repeats back: the conversation and the message in it. */
+type MessageIds = { conversation: string; message_id: string };
 
 type FoundAttachment =
   | { kind: 'image'; image: NormalisedMessage['attachments']['images'][number] }
@@ -453,22 +438,29 @@ function findAttachment(message: NormalisedMessage, ref: string, messageId: stri
   });
 }
 
+/** The routes `deliver` may be steered by: a preferred route, and the inline cap. */
+type DeliverRoute = { prefer?: 'disk' | 'link'; inlineMaxBytes?: number };
+
+/**
+ * `save` asks for a file rather than the contents; on a hosted install
+ * deliverFile turns the disk route into a link, saying why in `note`.
+ */
+const SAVE_ROUTE: DeliverRoute = { prefer: 'disk' };
+
 /**
  * Hand bytes back by the first route that reaches the caller (`deliverFile`):
  * inline up to 10 MiB, else a signed link from the blob store (hosted), else a
  * fresh, never-overwriting file in the download folder — offered only on a
  * local install, since a hosted runner's disk is unreachable from the session.
- * `save` puts the download folder first (a link when hosted).
+ * `route` reorders or narrows that (save, a converted file's original).
  */
-function deliver(bytes: Buffer, fileName: string, mimeType: string, save: boolean): Promise<DeliveredFile> {
+function deliver(bytes: Buffer, fileName: string, mimeType: string, route: DeliverRoute = {}): Promise<DeliveredFile> {
   return deliverFile({
     bytes,
     fileName,
     mimeType,
     keyPrefix: 'attachments',
-    // `save` asks for a file rather than the contents; on a hosted install
-    // deliverFile turns the disk route into a link, saying why in `note`.
-    ...(save ? { prefer: 'disk' as const } : {}),
+    ...route,
     ...(isHostedEnv() ? {} : { disk: { dir: downloadDir() } }),
   });
 }
@@ -502,6 +494,35 @@ type ConversationNameFields = { title?: string; participants?: string[] };
 function nameFields(n: ConversationName | undefined): ConversationNameFields {
   if (n === undefined) return {};
   return { title: n.title, ...(n.participants !== undefined ? { participants: n.participants } : {}) };
+}
+
+/**
+ * A downloaded shared file's identity, for its caption. The degrade path
+ * carries `content_available: false`; a downloaded file carries the matching
+ * `true` so a caller keying on the field does not read it as unavailable.
+ */
+function fileFields(file: FileAttachment): Record<string, unknown> {
+  return {
+    name: file.name,
+    ...(file.type !== undefined ? { type: file.type } : {}),
+    ...(file.openUrl !== undefined ? { openUrl: file.openUrl } : {}),
+    content_available: true,
+  };
+}
+
+/** Whose message the file came from and where, for its caption — the conversation named beside its id. */
+async function messageFields(
+  message: NormalisedMessage,
+  ids: MessageIds,
+  naming: Promise<ConversationNameFields>,
+): Promise<Record<string, unknown>> {
+  return {
+    sender: message.sender,
+    time: message.time,
+    message_id: ids.message_id,
+    conversation: ids.conversation,
+    ...(await naming),
+  };
 }
 
 /** The host of the file's url, for the degrade hint; a stand-in if it will not parse. */
