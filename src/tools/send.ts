@@ -38,7 +38,7 @@ import {
   type MentionTarget,
   type QuotedMessage,
 } from '../compose.js';
-import { htmlToText, normaliseMessage, SELF_CHAT, senderMri } from '../model.js';
+import { htmlToText, localIsoTime, normaliseMessage, SELF_CHAT, senderMri } from '../model.js';
 import { resolveListed } from './conversation.js';
 import { wrapApiError } from './errors.js';
 import { MRI, recentSenders } from './people.js';
@@ -49,6 +49,7 @@ import {
   UNTRUSTED_DESCRIPTION_SUFFIX,
 } from './untrusted.js';
 import { workMeta } from './hints.js';
+import { resolveTimeZone } from './timezone.js';
 
 const TOOL = 'teams_send_message';
 
@@ -67,6 +68,9 @@ const MAX_CANDIDATES = 10;
 
 /** Previewed text of a quoted message. */
 const PREVIEW_CHARS = 200;
+
+/** Quoted text carried in the preview's one-line `quoting`. */
+const QUOTING_LINE_CHARS = 80;
 
 /** How `text` is read: shared by `teams_send_message` and `teams_edit_message`. */
 export const formatParam = z
@@ -166,7 +170,11 @@ export async function resolveMentions(
 }
 
 /** The message a quote points at, read for its sender and text. */
-async function quoted(chatsvc: ChatServiceClient, conversationId: string, id: string): Promise<QuotedMessage> {
+async function quoted(
+  chatsvc: ChatServiceClient,
+  conversationId: string,
+  id: string,
+): Promise<QuotedMessage & { time?: string }> {
   const m = await chatsvc.getMessage(conversationId, id);
   if (m === undefined) {
     throw new McpToolError(`There is no message ${id} in this conversation to quote.`, {
@@ -174,7 +182,43 @@ async function quoted(chatsvc: ChatServiceClient, conversationId: string, id: st
     });
   }
   const mri = senderMri(m.from) ?? '';
-  return { id: m.id, senderMri: mri, senderName: m.imdisplayname?.trim() || mri, text: htmlToText(m.content ?? '') };
+  const time = m.originalarrivaltime ?? m.composetime;
+  return {
+    id: m.id,
+    senderMri: mri,
+    senderName: m.imdisplayname?.trim() || mri,
+    text: htmlToText(m.content ?? ''),
+    ...(time ? { time } : {}),
+  };
+}
+
+/**
+ * When a quoted message was sent, to the minute: in TEAMS_TIME_ZONE when one is
+ * set ("2026-11-12 12:31 America/New_York"), else UTC. A bad TEAMS_TIME_ZONE
+ * falls back to UTC here — it must not stop a preview.
+ */
+function quotedWhen(iso: string | undefined): string | undefined {
+  if (iso === undefined || Number.isNaN(Date.parse(iso))) return undefined;
+  let zone: string | undefined;
+  try {
+    zone = resolveTimeZone(undefined);
+  } catch {
+    zone = undefined;
+  }
+  const local = zone !== undefined ? localIsoTime(iso, zone) : undefined;
+  if (zone !== undefined && local !== undefined) return `${local.slice(0, 16).replace('T', ' ')} ${zone}`;
+  return `${new Date(iso).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
+}
+
+/**
+ * The preview's plain-words `quoting` line: `none`, or the quoted sender, when
+ * and the start of what they wrote. Sender and text are other people's, so each
+ * is JSON-quoted (on one line, its own quotes escaped) as the title is in the summary.
+ */
+function quotingLine(q: (QuotedMessage & { time?: string }) | undefined): string {
+  if (q === undefined) return 'none';
+  const when = quotedWhen(q.time);
+  return `${JSON.stringify(q.senderName)}${when ? `, ${when}` : ''}: ${JSON.stringify(clipText(q.text, QUOTING_LINE_CHARS, '…'))}`;
 }
 
 /**
@@ -227,9 +271,13 @@ export function registerSendTools(server: McpServer, { chatsvc }: Pick<TeamsDeps
         ':eyes:, :white_check_mark:, …) and unicode-style keys (:1f680_rocket:). format "markdown" ' +
         'reads text as Markdown instead: **bold**, *italic*, ~~strike~~, `inline code`, ``` code blocks ```, ' +
         'bulleted (- item) and numbered (1. item) lists, [link text](https://…), blank-line paragraphs and ' +
-        'line breaks; raw HTML, headings, quotes and images are escaped and shown as written. reply_to in a ' +
-        'channel posts into that root post\'s thread; in a chat it quote-replies that message. quote ' +
-        'quote-replies a message in any conversation. mentions @-mention people: name_in_text must appear ' +
+        'line breaks; raw HTML, headings, quotes and images are escaped and shown as written. By default ' +
+        'nothing is quoted. reply_to in a channel posts into that root post\'s thread (a thread reply, no ' +
+        'quote); in a chat, reply_to and quote are the same thing: both quote-reply that message, so the ' +
+        'post opens with a quote of it. quote quote-replies a message in any conversation. Pass reply_to ' +
+        'or quote only when the user asked for a reply or a quote; when the request is ambiguous (they ' +
+        'mention a message\'s timestamp, or say "reply" in a chat), ask them whether they want it quoted ' +
+        'rather than guessing. mentions @-mention people: name_in_text must appear ' +
         'in text, and person is an MRI or a display name matched among recent senders (ambiguous names ' +
         `are refused with the candidates). conversation "${SELF_CHAT}" (or "notes" / "self") is the user's own notes self-chat — ` +
         'use it to try this tool without anyone else seeing; other 48: system conversations are refused. ' +
@@ -237,7 +285,8 @@ export function registerSendTools(server: McpServer, { chatsvc }: Pick<TeamsDeps
         'reading the conversation back (verified); status "unknown" means Teams did not confirm it — check ' +
         'the conversation before retrying. ' +
         CONFIRM_FLOW_SENTENCE +
-        ' The preview shows the conversation and exactly what would be posted. ' +
+        ' The preview shows the conversation and exactly what would be posted, says in plain words what ' +
+        'is quoted (quoting: the sender, time and text, or "none"), and warns when reply_to is set. ' +
         CONFIRM_INJECTION_RULE +
         UNTRUSTED_DESCRIPTION_SUFFIX,
       annotations: toolAnnotations({ readOnly: false, destructive: true, idempotent: false, openWorld: true }),
@@ -259,8 +308,11 @@ export function registerSendTools(server: McpServer, { chatsvc }: Pick<TeamsDeps
           .string()
           .min(1)
           .optional()
-          .describe('A message id. Channel: the root post to reply under (threaded). Chat: the message to quote-reply.'),
-        quote: z.string().min(1).optional().describe('A message id to quote-reply, in any conversation.'),
+          .describe(
+            'A message id. Channel: the root post to reply under (threaded, no quote). Chat: the message to ' +
+              'quote-reply — the same as quote. Only when the user asked for a reply or quote.',
+          ),
+        quote: z.string().min(1).optional().describe('A message id to quote-reply, in any conversation. Only when the user asked for a quote.'),
         mentions: z.array(mentionArg).max(20).optional().describe('People to @-mention in text.'),
         confirmToken: confirmTokenParam,
       },
@@ -293,6 +345,16 @@ export function registerSendTools(server: McpServer, { chatsvc }: Pick<TeamsDeps
           format,
         );
         const content = (q ? quoteHtml(q) : '') + rendered.html;
+        const quoting = quotingLine(q);
+        // reply_to is easy to pass by reflex; it changes what is posted, so the preview says so.
+        const replyWarning =
+          reply_to === undefined
+            ? undefined
+            : inChannel
+              ? `reply_to is set: this posts into the thread under root post ${reply_to}, not as a new post ` +
+                'in the channel. Drop reply_to unless the user asked to reply in that thread.'
+              : `reply_to is set: in a chat it quote-replies message ${reply_to}, so the post opens with a ` +
+                'quote of it (see quoting). Drop reply_to unless the user asked for a quote.';
         const properties = {
           ...(rendered.mentions.length > 0 ? { mentions: mentionsProperty(rendered.mentions) } : {}),
           ...(q ? { qtdMsgs: qtdMsgsProperty(q) } : {}),
@@ -310,7 +372,10 @@ export function registerSendTools(server: McpServer, { chatsvc }: Pick<TeamsDeps
           action: 'chat.send_message',
           message: 'Review and confirm this Teams message before it is posted:',
           // The title is someone else's text: JSON-quoted so it cannot break out of its quotes.
-          summary: `Post a message to ${target.kind} ${JSON.stringify(target.title)}`,
+          summary:
+            `Post a message to ${target.kind} ${JSON.stringify(target.title)}` +
+            (q ? `, quoting ${JSON.stringify(q.senderName)}` : ', no quote') +
+            (inChannel && reply_to !== undefined ? `, in the thread under ${reply_to}` : ''),
           // The signed-in user, so an approval minted under one account never posts as another.
           account: me,
           target: postTo,
@@ -320,6 +385,8 @@ export function registerSendTools(server: McpServer, { chatsvc }: Pick<TeamsDeps
           // result is; `text` is the caller's own.
           preview: {
             conversation: untrustedField(target),
+            quoting,
+            ...(replyWarning ? { warning: replyWarning } : {}),
             text,
             format,
             ...(inChannel && reply_to !== undefined ? { thread_root: reply_to } : {}),
@@ -335,7 +402,7 @@ export function registerSendTools(server: McpServer, { chatsvc }: Pick<TeamsDeps
                 }
               : {}),
             ...(q
-              ? { quoting: untrustedField({ id: q.id, sender: q.senderName, preview: clipText(q.text, PREVIEW_CHARS) }) }
+              ? { quoted_message: untrustedField({ id: q.id, sender: q.senderName, preview: clipText(q.text, PREVIEW_CHARS) }) }
               : {}),
             note: 'clientmessageid and the timestamps are filled in when the message is posted.',
           },

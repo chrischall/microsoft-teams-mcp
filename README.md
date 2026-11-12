@@ -686,8 +686,18 @@ Everything is optional — by default the token is captured from your browser.
   emoji and mentions work as in plain text. Anything else — raw HTML,
   headings, quotes, images — is escaped and shown as written. The preview's
   `willSend.content` is the exact HTML that will be posted.
-  `reply_to` posts into a channel post's thread — it must be a root post in
-  that channel, not a reply (in a chat it quote-replies that message); `quote` quote-replies a message anywhere; `mentions`
+  Nothing is quoted by default. `reply_to` posts into a channel post's
+  thread — it must be a root post in that channel, not a reply. In a chat,
+  `reply_to` and `quote` are the same thing: both quote-reply that message.
+  `quote` quote-replies a message anywhere. Pass either only when the user
+  asked for a reply or a quote; when that is ambiguous (a message's
+  timestamp, or "reply" in a chat), ask. The preview says what is quoted in
+  plain words — `quoting: "Bea Example", 2026-11-12 12:31 UTC: "…"` (the
+  time in `TEAMS_TIME_ZONE` when set) or `quoting: "none"` — and its summary
+  ends `, quoting "<sender>"` or `, no quote`. Setting `reply_to` adds a
+  `warning` saying what it does (a thread reply in a channel, a quote in a
+  chat). The fenced details of the quoted message are in `quoted_message`.
+  `mentions`
   @-mentions people by MRI or by a display name matched among the
   conversation's recent senders (an ambiguous name is refused with the
   candidates). The result says whether the post was found again by reading
