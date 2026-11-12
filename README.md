@@ -533,6 +533,30 @@ Everything is optional — by default the token is captured from your browser.
   metadata and its open link instead of failing. The caption names the
   conversation beside its id (`title`, plus `participants` for an untitled
   chat), titled as `teams_list_conversations` titles it.
+
+  A shared **PDF, Excel workbook (.xlsx/.xlsm) or PowerPoint deck (.pptx)** is
+  also read for you, since a hosted client can only show the model images —
+  `convert` picks how:
+
+  | `convert` | PDF | Workbook | Deck |
+  | --- | --- | --- | --- |
+  | `auto` (default) | Markdown (`## Page N`), plus page images when it has little text (a scan) | one CSV per sheet | per-slide Markdown (title, text, tables, speaker notes) plus its embedded pictures |
+  | `text` | Markdown only, never page images | as `auto` | as `auto` |
+  | `images` | page images only | as `auto` | as `auto` |
+  | `none` | no conversion: the file is handed over as above | | |
+
+  The converted blocks come first, fenced by an untrusted-content header that
+  counts them (the file's text is someone else's, like any message), then the
+  caption, whose `converted` lists `format`, `count` (pages / sheets / slides),
+  the `parts` returned and any `notes` (what was cut or skipped — text is capped
+  at 200 KiB and images at 8 MiB, never silently). The original is still handed
+  over — a download link when hosted, a saved file (`path`) on a local install —
+  but never inlined beside its conversion. A file that will not convert (corrupt,
+  say) is handed over as before, with the reason in `conversion_error`. `save:
+  true` skips conversion: it asks for the file itself. Page images need the
+  native `@napi-rs/canvas` package, installed with the npm package; where it is
+  missing (the `.mcpb` bundle ships no `node_modules`) a PDF comes back as text
+  with a note saying page images are unavailable.
 - `teams_list_activity` — the Activity feed (the bell icon), newest first:
   mentions (including @team / @everyone), reactions, replies, meeting
   notices and missed calls across every chat and channel. Each row has its
