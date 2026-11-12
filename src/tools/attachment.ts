@@ -18,7 +18,8 @@
  *   open link, degrading gracefully rather than failing the tool.
  *
  * `ref` is matched exactly, else ignoring case, else (a file) ignoring case and
- * extension; a loose match naming more than one attachment is refused. `save`
+ * extension, else ignoring differences in spacing (Unicode and zero-width
+ * spaces); a loose match naming more than one attachment is refused. `save`
  * asks for a file in the download folder rather than the contents.
  *
  * Either kind is handed back through `deliverFile` (mcp-utils): inline up to
@@ -85,7 +86,8 @@ export function registerAttachmentTools(
         'Fetch one attachment of a Teams chat or channel message, as listed by ' +
         'teams_list_messages / teams_list_unread_messages. ref names it: an inline image\'s ref ' +
         '(attachments.images[].ref) or a shared file\'s name (attachments.files[].name), matched ignoring case ' +
-        'and, for a file, with or without its extension. An inline image is returned as the image itself. A ' +
+        'and spacing (a Unicode space such as the one macOS puts before AM/PM matches a plain one) and, for a ' +
+        'file, with or without its extension. An inline image is returned as the image itself. A ' +
         'shared file is downloaded from SharePoint and returned as its contents: an image as the image, anything ' +
         'else as an embedded resource carrying the bytes. Anything over 10 MiB comes back instead as a signed, ' +
         'expiring download link (downloadUrl) on a hosted install, or saved to a fresh file (path) under ' +
@@ -111,7 +113,7 @@ export function registerAttachmentTools(
           .min(1)
           .describe(
             "An inline image's ref (attachments.images[].ref) or a shared file's name (attachments.files[].name). " +
-              'Case is ignored, and a file may be named without its extension.',
+              'Case and spacing are ignored, and a file may be named without its extension.',
           ),
         save: z
           .boolean()
@@ -253,6 +255,25 @@ function withoutExtension(name: string): string {
   return dot > 0 ? name.slice(0, dot) : name;
 }
 
+/** Zero-width characters a name can carry that no caller would ever type. */
+const ZERO_WIDTH = /[\u200b-\u200d\u2060\ufeff]/g;
+/** Space-like characters JSON.stringify leaves as-is, so a hint would show them as a plain space. */
+const INVISIBLE = /[\u00a0\u2000-\u200d\u202f\u205f\u2060\u3000\ufeff]/g;
+
+/**
+ * A name compared loosely: NFKC (U+202F, NBSP and the other Unicode spaces
+ * become a plain space), zero-width characters dropped, runs of whitespace
+ * collapsed, trimmed, lowercased.
+ */
+function looseName(name: string): string {
+  return name.normalize('NFKC').replace(ZERO_WIDTH, '').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+/** Escape invisible spacing (as `\u202f`) so a hint shows why a name that looks right did not match. */
+function showInvisibles(s: string): string {
+  return s.replace(INVISIBLE, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
+}
+
 /**
  * The attachment `ref` names. An exact match wins; failing that, one matched
  * ignoring case; failing that, a file matched ignoring case and its extension
@@ -267,10 +288,15 @@ function findAttachment(message: NormalisedMessage, ref: string, messageId: stri
   ];
   const nameOf = (a: FoundAttachment) => (a.kind === 'image' ? a.image.ref : a.file.name);
   const lower = ref.toLowerCase();
+  const loose = looseName(ref);
   const rules: ((a: FoundAttachment) => boolean)[] = [
     (a) => nameOf(a) === ref,
     (a) => nameOf(a).toLowerCase() === lower,
     (a) => a.kind === 'file' && withoutExtension(a.file.name).toLowerCase() === lower,
+    // Whitespace-loose last: a name that differs from ref only in its spaces
+    // (macOS screenshots put U+202F before AM/PM; a caller types a plain space).
+    (a) => looseName(nameOf(a)) === loose,
+    (a) => a.kind === 'file' && looseName(withoutExtension(a.file.name)) === loose,
   ];
   for (const rule of rules) {
     const hits = all.filter(rule);
@@ -281,7 +307,7 @@ function findAttachment(message: NormalisedMessage, ref: string, messageId: stri
       });
     }
   }
-  const names = files.map((f) => JSON.stringify(f.name));
+  const names = files.map((f) => showInvisibles(JSON.stringify(f.name)));
   throw new McpToolError(`Message ${messageId} has no attachment "${ref}".`, {
     hint:
       `It has ${images.length} inline image(s) and ${files.length} shared file(s)` +

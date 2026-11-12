@@ -549,6 +549,45 @@ describe('teams_get_attachment finds a file by a looser name', () => {
     expect(downloadFile).toHaveBeenCalledWith(FILE_URL, MAX_FILE_BYTES);
   });
 
+  // macOS screenshot names carry U+202F (narrow no-break space) before AM/PM;
+  // a caller typing the name sends a plain space. Verified live 2026-11-12: the
+  // refusal's own hint listed a name that looked identical to the ref.
+  it.each([
+    ['a narrow no-break space', 'Screenshot 2026-11-11 at 11.13.39\u202fAM.png', 'Screenshot 2026-11-11 at 11.13.39 AM.png'],
+    ['a no-break space', 'Q3\u00a0plan.pdf', 'Q3 plan.pdf'],
+    ['a zero-width space', 'budget\u200b.xlsx', 'budget.xlsx'],
+    ['a doubled space', 'two  spaces.txt', 'two spaces.txt'],
+    ['a narrow no-break space, without its extension', 'Shot 9.41.02\u202fPM.png', 'shot 9.41.02 pm'],
+    ['a plain space for a name with one, given U+202F', 'At 1 PM.png', 'At 1\u202fPM.png'],
+  ])('matches a name with %s when the ref differs only in whitespace', async (_label, fileName, ref) => {
+    const files = JSON.stringify([{ fileName, fileType: 'png', objectUrl: FILE_URL }]);
+    const msgs = [{ ...withAttachments(TARGET), properties: { files } }];
+    const downloadFile = ok();
+    const result = await call(chatsvcWith(msgs), { conversation: GROUP, message_id: String(TARGET), ref }, fakeSharepoint(downloadFile));
+    expect(result.isError).toBeFalsy();
+    expect(downloadFile).toHaveBeenCalledWith(FILE_URL, MAX_FILE_BYTES);
+  });
+
+  it('refuses a whitespace-loose ref that matches more than one file', async () => {
+    const files = JSON.stringify([
+      { fileName: 'a\u202fb.png', fileType: 'png', objectUrl: FILE_URL },
+      { fileName: 'a\u00a0b.png', fileType: 'png', objectUrl: `${FILE_URL}2` },
+    ]);
+    const msgs = [{ ...withAttachments(TARGET), properties: { files } }];
+    const downloadFile = ok();
+    const result = await call(chatsvcWith(msgs), { conversation: GROUP, message_id: String(TARGET), ref: 'a b.png' }, fakeSharepoint(downloadFile));
+    expect(result.isError).toBe(true);
+    expect(downloadFile).not.toHaveBeenCalled();
+  });
+
+  it('names an invisible character in the no-match hint, so the caller can see why', async () => {
+    const files = JSON.stringify([{ fileName: 'Shot 1.02\u202fPM.png', fileType: 'png', objectUrl: FILE_URL }]);
+    const msgs = [{ ...withAttachments(TARGET), properties: { files } }];
+    const result = await call(chatsvcWith(msgs), { conversation: GROUP, message_id: String(TARGET), ref: 'nope.png' });
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toContain('\\\\u202f');
+  });
+
   it('prefers an exact name over a looser match', async () => {
     const files = JSON.stringify([
       { fileName: 'report', fileType: '', objectUrl: `${FILE_URL}-bare` },
