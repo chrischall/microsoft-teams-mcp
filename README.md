@@ -250,7 +250,7 @@ Everything is optional — by default the token is captured from your browser.
 | `TEAMS_SUBSTRATE_TOKEN_FILE` | Where the captured Substrate search token is cached. Defaults to `~/.microsoft-teams-mcp/substrate-token.json`. `TEAMS_TOKEN_CACHE=false` keeps it in memory too. |
 | `TEAMS_SHAREPOINT_TOKEN_FILE` | Where the captured SharePoint token (one for every SharePoint host, used to download shared files) is cached. Defaults to `~/.microsoft-teams-mcp/sharepoint-tokens.json`. `TEAMS_TOKEN_CACHE=false` keeps them in memory too. |
 | `TEAMS_TIME_ZONE` | Default IANA time zone (e.g. `America/New_York`) for the `tz` argument of `teams_list_messages` and `teams_list_unread_messages`: each message then carries `time_local` (ISO 8601 with offset) next to its UTC `time`. Unset means no `time_local` unless `tz` is passed; a name `Intl` does not know is reported as an error. |
-| `TEAMS_OUTPUT_DIR` | Folder `teams_export_messages` (and `teams_get_transcript` with `save`, and `teams_get_attachment` with `save` or for a file over 10 MiB) writes into (each export gets its own timestamped subfolder). Defaults to `~/Downloads/microsoft-teams-mcp`. When set, a per-call `dest` must lie inside it; when unset, `dest` must be under `~/Downloads`, `~/Documents` or `~/Desktop`. |
+| `TEAMS_OUTPUT_DIR` | Folder `teams_export_messages` (and `teams_get_transcript` with `save`, and `teams_get_attachment` with `save`, for a file over 10 MiB, or for the original of a converted PDF, workbook or deck) writes into (each export gets its own timestamped subfolder). Defaults to `~/Downloads/microsoft-teams-mcp`. When set, a per-call `dest` must lie inside it; when unset, `dest` must be under `~/Downloads`, `~/Documents` or `~/Desktop`. |
 | `TEAMS_WS_PORT` | fetchproxy concentrator port. Defaults to `37149`, the fleet-wide shared port. |
 | `FETCHPROXY_WS_HOST` | Bind interface for the bridge (default `127.0.0.1`; a literal IP only, anything else is ignored). Keep on loopback — it exists for ONE topology: a hosted child in its own network namespace. |
 | `FETCHPROXY_IDENTITY_DIR` | Where to store the long-term fetchproxy identity keypair (default `~/.fetchproxy/identity/`; an absolute path only, anything else is ignored). Exists for a host that runs a separate child per caller, so they can share one identity. |
@@ -551,12 +551,16 @@ Everything is optional — by default the token is captured from your browser.
   the `parts` returned and any `notes` (what was cut or skipped — text is capped
   at 200 KiB and images at 8 MiB, never silently). The original is still handed
   over — a download link when hosted, a saved file (`path`) on a local install —
-  but never inlined beside its conversion. A file that will not convert (corrupt,
-  say) is handed over as before, with the reason in `conversion_error`. `save:
-  true` skips conversion: it asks for the file itself. Page images need the
-  native `@napi-rs/canvas` package, installed with the npm package; where it is
-  missing (the `.mcpb` bundle ships no `node_modules`) a PDF comes back as text
-  with a note saying page images are unavailable.
+  but never inlined beside its conversion. On a local install every converted
+  read saves a fresh copy of the original to the download folder
+  (`TEAMS_OUTPUT_DIR`, else `~/Downloads/microsoft-teams-mcp`), never
+  overwriting, so reading the same file twice leaves two copies. A file that
+  will not convert (corrupt, say) is handed over as before, with the reason in
+  `conversion_error`. `save: true` skips conversion: it asks for the file
+  itself. Page images need the native `@napi-rs/canvas` package, installed with
+  the npm package; where it is missing (the `.mcpb` bundle ships no
+  `node_modules`) a PDF comes back as text with a note saying page images are
+  unavailable.
 - `teams_list_activity` — the Activity feed (the bell icon), newest first:
   mentions (including @team / @everyone), reactions, replies, meeting
   notices and missed calls across every chat and channel. Each row has its
