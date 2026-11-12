@@ -45,7 +45,7 @@
     "typecheck": "tsc -p tsconfig.check.json"
   },
   "dependencies": {
-    "@chrischall/mcp-utils": "^3.8.0",
+    "@chrischall/mcp-utils": "^3.9.0",
     "@fetchproxy/server": "^3.8.0",
     "@modelcontextprotocol/server": "^2.4.0",
     "@napi-rs/canvas": "^1.1.1",
