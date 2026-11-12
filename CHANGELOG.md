@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.1](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.13.0...v0.13.1) (2026-11-12)
+
+
+### Bug Fixes
+
+* **messages:** say what a sent message quotes, and warn when reply_to is set ([#130](https://github.com/chrischall/microsoft-teams-mcp/issues/130)) ([a1639d3](https://github.com/chrischall/microsoft-teams-mcp/commit/a1639d33925a6259d549accd845ff274e8d1a44f))
+
 ## [0.13.0](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.12.0...v0.13.0) (2026-11-12)
 
 
