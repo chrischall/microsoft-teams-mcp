@@ -124,7 +124,7 @@ export function registerAttachmentTools(
         'one macOS puts before AM/PM matches a plain one) and, for a file, with or without its extension. ' +
         'An inline image is returned as the image itself. A shared file is downloaded from SharePoint and ' +
         'returned as its contents: an image as the image, anything else as an embedded resource carrying the ' +
-        'bytes. Over 10 MiB it comes back instead as a signed, expiring download link (downloadUrl) on a hosted ' +
+        'bytes. Anything over 10 MiB comes back instead as a signed, expiring download link (downloadUrl) on a hosted ' +
         `install, or saved to a fresh file (path) under ${EXPORT_OUTPUT_ENV}, else ` +
         `~/Downloads/${EXPORT_SERVER_NAME}, on a local one; the caption's via says which. save: true does the same ` +
         'for any size — use it when the user wants the file itself rather than its contents read here. ' +

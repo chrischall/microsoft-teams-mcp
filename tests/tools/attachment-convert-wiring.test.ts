@@ -70,6 +70,11 @@ describe('teams_get_attachment hands the conversion its limits and cancellation'
       limits: CONVERT_LIMITS,
       signal: controller.signal,
     });
+    // The caps the README documents, pinned by value so they cannot drift.
+    expect(CONVERT_LIMITS).toEqual({ maxTextBytes: 200 * 1024, maxImageBytes: 8 * 1024 * 1024 });
+    expect(convertAttachment.mock.calls[0][0]).toMatchObject({
+      limits: { maxTextBytes: 204800, maxImageBytes: 8388608 },
+    });
   });
 
   it('passes no signal when the call has none', async () => {
