@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.13.0](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.12.0...v0.13.0) (2026-11-12)
+
+
+### Features
+
+* **attachments:** read PDF, Excel and PowerPoint files as Markdown, CSV and images ([#129](https://github.com/chrischall/microsoft-teams-mcp/issues/129)) ([f35b05e](https://github.com/chrischall/microsoft-teams-mcp/commit/f35b05e0a38831cc16a99e258146187f4b7ef78e))
+
+
+### Bug Fixes
+
+* **attachments:** download a shared file whose name has a Unicode space ([#127](https://github.com/chrischall/microsoft-teams-mcp/issues/127)) ([894e77f](https://github.com/chrischall/microsoft-teams-mcp/commit/894e77f905c2bf9311586400786d9bf464e27894))
+
 ## [0.12.0](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.11.0...v0.12.0) (2026-11-11)
 
 
