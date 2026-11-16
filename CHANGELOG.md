@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.2](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.13.1...v0.13.2) (2026-11-16)
+
+
+### Bug Fixes
+
+* **deps:** bump fast-xml-parser from 5.12.0 to 5.12.1 in the production-dependencies group ([#133](https://github.com/chrischall/microsoft-teams-mcp/issues/133)) ([3308f19](https://github.com/chrischall/microsoft-teams-mcp/commit/3308f19df0111fc27acfed7b4bd5b9f5910b815f))
+
 ## [0.13.1](https://github.com/chrischall/microsoft-teams-mcp/compare/v0.13.0...v0.13.1) (2026-11-12)
 
 
